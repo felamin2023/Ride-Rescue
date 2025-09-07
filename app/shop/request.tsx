@@ -12,7 +12,6 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -22,9 +21,9 @@ const COLORS = {
   text: "#0F172A",
   sub: "#475569",
   muted: "#94A3B8",
-  primary: "#2563EB", // reference blue (old Open Location)
-  success: "#16A34A",
-  danger: "#DC2626",
+  primary: "#2563EB",       // professional blue (View Details)
+  danger: "#DC2626",        // professional red (Decline)
+  success: "#16A34A",       // professional green (Accept)
 };
 
 const shadow = Platform.select({
@@ -40,28 +39,24 @@ const shadow = Platform.select({
 /* ---------------------------------- Types ---------------------------------- */
 type RequestItem = {
   id: string;
-  name: string;            // Requestor name
-  email?: string;          // Added for pop-up details (from your screenshot)
-  vehicle: string;         // e.g., "Sedan", "Motorcycle"
-  plate: string;           // e.g., "ABC 1234"
-  service: string;         // e.g., "Tire replacement"
-  time: string;            // human string or ISO
-  landmark?: string;       // e.g., "Near City Mall"
+  name: string;
+  vehicle: string;
+  plate: string;
+  service: string;
+  time: string;
+  landmark?: string;
   lat?: number;
   lng?: number;
   status: "pending" | "accepted" | "completed" | "canceled";
-  avatar?: string;         // optional image
-  distanceKm?: number;     // optional if you compute user distance
-  breakdownCause?: string; // Added for pop-up details
-  imageUrl?: string;       // Added for "View image"
+  avatar?: string;
+  distanceKm?: number;
 };
 
 /* --------------------------------- Mock data -------------------------------- */
-const REQUESTS: RequestItem[] = [
+const INITIAL: RequestItem[] = [
   {
     id: "rq1",
     name: "Stayve Alreach Fedillaga",
-    email: "avillamora38@gmail.com",
     vehicle: "Sedan",
     plate: "ABC 1234",
     service: "Tire replacement",
@@ -72,13 +67,10 @@ const REQUESTS: RequestItem[] = [
     status: "completed",
     avatar: "https://i.pravatar.cc/100?img=12",
     distanceKm: 1.2,
-    breakdownCause: "Flat tire on the way",
-    imageUrl: "https://picsum.photos/seed/rq1/800/600",
   },
   {
     id: "rq2",
     name: "Michael Saragena",
-    email: "michael@example.com",
     vehicle: "Pickup Truck",
     plate: "DEF 5678",
     service: "Battery jump start",
@@ -89,13 +81,10 @@ const REQUESTS: RequestItem[] = [
     status: "accepted",
     avatar: "https://i.pravatar.cc/100?img=31",
     distanceKm: 0.7,
-    breakdownCause: "Engine won’t start",
-    imageUrl: "https://picsum.photos/seed/rq2/800/600",
   },
   {
     id: "rq3",
     name: "Sarah Lopez",
-    email: "sarah@example.com",
     vehicle: "Motorcycle",
     plate: "GHI 9012",
     service: "Vulcanizing",
@@ -106,24 +95,22 @@ const REQUESTS: RequestItem[] = [
     status: "pending",
     avatar: "https://i.pravatar.cc/100?img=27",
     distanceKm: 2.4,
-    breakdownCause: "just in : Nabunturan",
-    imageUrl: "https://picsum.photos/seed/rq3/800/600",
   },
 ];
 
 /* ------------------------------- Small UI bits ------------------------------ */
 function StatusPill({ status }: { status: RequestItem["status"] }) {
   const map: Record<RequestItem["status"], { bg: string; text: string; label: string }> = {
-    pending:   { bg: "#FEF3C7", text: "#92400E", label: "Waiting" }, // show WAITING label
+    pending:   { bg: "#FEF3C7", text: "#92400E", label: "Pending" },
     accepted:  { bg: "#DBEAFE", text: "#1E40AF", label: "Accepted" },
     completed: { bg: "#DCFCE7", text: "#065F46", label: "Completed" },
-    canceled:  { bg: "#FEE2E2", text: "#991B1B", label: "Canceled"  },
+    canceled:  { bg: "#FEE2E2", text: "#991B1B", label: "Canceled" },
   };
   const s = map[status];
   return (
     <View style={{ backgroundColor: s.bg }} className="rounded-full px-2 py-[2px]">
       <Text style={{ color: s.text }} className="text-[11px] font-semibold">
-        {s.label.toUpperCase()}
+        {s.label}
       </Text>
     </View>
   );
@@ -138,53 +125,27 @@ function Meta({ icon, children }: { icon: any; children: React.ReactNode }) {
   );
 }
 
-type ButtonVariant = "primary" | "secondary" | "ghost";
-type ButtonTint = "default" | "success" | "danger";
-
-function PrimaryButton({
+function SolidButton({
   label,
+  color,
   onPress,
-  variant = "primary",
   icon,
-  tint = "default",
 }: {
   label: string;
+  color: string;
   onPress: () => void;
-  variant?: ButtonVariant;
   icon?: any;
-  tint?: ButtonTint;
 }) {
-  const tintColor =
-    tint === "success" ? COLORS.success : tint === "danger" ? COLORS.danger : COLORS.primary;
-
-  // base
-  const bg =
-    variant === "primary" ? tintColor : variant === "secondary" ? "#FFFFFF" : "transparent";
-  const border =
-    variant === "primary" ? "transparent" : tint !== "default" ? tintColor + "33" : COLORS.border;
-  const textColor =
-    variant === "primary"
-      ? "#FFFFFF"
-      : tint === "success"
-      ? COLORS.success
-      : tint === "danger"
-      ? COLORS.danger
-      : COLORS.text;
-
   return (
     <Pressable
       onPress={onPress}
-      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${
-        variant !== "primary" ? "border" : ""
-      }`}
-      style={[{ backgroundColor: bg, borderColor: border }, shadow]}
+      className="flex-1 h-11 rounded-full items-center justify-center"
+      style={[{ backgroundColor: color }, shadow]}
     >
-      {icon ? (
-        <Ionicons name={icon} size={16} color={textColor} style={{ marginRight: 6 }} />
-      ) : null}
-      <Text className="text-[13px] font-semibold" style={{ color: textColor }}>
-        {label}
-      </Text>
+      <View className="flex-row items-center">
+        {icon ? <Ionicons name={icon} size={16} color="#fff" style={{ marginRight: 6 }} /> : null}
+        <Text className="text-white text-[13px] font-semibold">{label}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -202,8 +163,6 @@ function DetailsModal({
   onOpenMaps: (it: RequestItem) => void;
 }) {
   if (!item) return null;
-  const statusText = item.status === "pending" ? "WAITING" : item.status.toUpperCase();
-
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <Pressable
@@ -250,101 +209,28 @@ function DetailsModal({
 
             <View className="mt-3 h-[1px] bg-slate-200" />
 
-            {/* Body — details from your screenshot */}
+            {/* Body */}
             <View className="mt-3 gap-2">
-              <Text className="text-[13px] text-slate-600">
-                <Text className="font-semibold text-slate-800">Name: </Text>
-                {item.email ?? "—"}
-              </Text>
-
-              <Text className="text-[13px] text-slate-600">
-                <Text className="font-semibold text-slate-800">Vehicle Type: </Text>
-                {item.vehicle}
-              </Text>
-
-              <Text className="text-[13px] text-slate-600">
-                <Text className="font-semibold text-slate-800">Breakdown Cause: </Text>
-                {item.breakdownCause ?? item.service}
-              </Text>
-
-              <Text className="text-[13px] text-slate-600">
-                <Text className="font-semibold text-slate-800">Location: </Text>
-                {item.lat && item.lng
-                  ? `(${item.lat.toFixed(4)}° N, ${item.lng.toFixed(4)}° E)`
-                  : item.landmark ?? "—"}
-              </Text>
-
-              {!!item.imageUrl && (
-                <Pressable
-                  onPress={() => Linking.openURL(item.imageUrl!).catch(() => {})}
-                  className="pt-1"
-                >
-                  <Text className="text-[13px]" style={{ color: COLORS.primary }}>
-                    View image
-                  </Text>
-                </Pressable>
-              )}
-
-              <Text className="text-[13px] text-slate-600">
-                <Text className="font-semibold text-slate-800">Date and Time: </Text>
-                {item.time}
-              </Text>
-
-              <Text className="text-[13px]">
-                <Text className="font-semibold" style={{ color: "#a16207" }}>
-                  Status:
-                </Text>{" "}
-                <Text className="font-semibold" style={{ color: "#a16207" }}>
-                  {statusText}
-                </Text>
-              </Text>
-
-              {/* Quick meta row (kept from earlier) */}
+              <Meta icon="car-outline">
+                {item.vehicle} — {item.plate}
+              </Meta>
+              <Meta icon="construct-outline">{item.service}</Meta>
               {item.landmark ? <Meta icon="location-outline">{item.landmark}</Meta> : null}
+              {item.lat && item.lng ? (
+                <Meta icon="pin-outline">
+                  ({item.lat.toFixed(5)}, {item.lng.toFixed(5)})
+                </Meta>
+              ) : null}
+              <Meta icon="time-outline">{item.time}</Meta>
             </View>
 
-            {/* Actions */}
-            <View className="mt-4 gap-2">
-              <PrimaryButton
-                label="Open in Maps"
+            {/* Keep Open in Maps in the modal only */}
+            <View className="mt-4">
+              <SolidButton
+                label="Open in Google Maps"
+                color={COLORS.primary}
                 icon="navigate-outline"
                 onPress={() => onOpenMaps(item)}
-                variant="primary"
-              />
-
-              {/* Accept / Decline / Message — white background buttons */}
-              <View className="flex-row items-center gap-2">
-                <View className="flex-1">
-                  <PrimaryButton
-                    label="Decline"
-                    icon="close-circle-outline"
-                    variant="secondary" // white bg
-                    tint="danger"       // red text + subtle red border
-                    onPress={() => {
-                      // TODO: handle decline
-                    }}
-                  />
-                </View>
-                <View className="flex-1">
-                  <PrimaryButton
-                    label="Accept"
-                    icon="checkmark-circle-outline"
-                    variant="secondary" // white bg
-                    tint="success"      // green text + subtle green border
-                    onPress={() => {
-                      // TODO: handle accept
-                    }}
-                  />
-                </View>
-              </View>
-
-              <PrimaryButton
-                label="Message"
-                icon="chatbubbles-outline"
-                variant="secondary" // white bg
-                onPress={() => {
-                  // TODO: open chat/message screen
-                }}
               />
             </View>
           </View>
@@ -358,13 +244,16 @@ function DetailsModal({
 function RequestCard({
   item,
   onView,
+  onAccept,
+  onDecline,
 }: {
   item: RequestItem;
   onView: (it: RequestItem) => void;
+  onAccept: (it: RequestItem) => void;
+  onDecline: (it: RequestItem) => void;
 }) {
   return (
-    <Pressable
-      onPress={() => onView(item)}
+    <View
       className="mx-4 my-2 rounded-2xl bg-white p-4"
       style={[{ borderColor: COLORS.border, borderWidth: 1 }, shadow]}
     >
@@ -392,7 +281,6 @@ function RequestCard({
             <StatusPill status={item.status} />
           </View>
 
-          {/* Meta row */}
           <View className="mt-1 flex-row flex-wrap items-center gap-x-3 gap-y-1">
             <Meta icon="car-outline">
               {item.vehicle} • {item.plate}
@@ -413,45 +301,41 @@ function RequestCard({
             </Text>
           ) : null}
 
-          {/* Actions — only View Details (same position/color as old Open Location) */}
-          <View className="mt-3 flex-row items-center gap-2">
-            <View className="flex-1" />
-            <View className="flex-1">
-              <PrimaryButton
-                label="View Details"
-                icon="information-circle-outline"
-                variant="primary" // same blue background
-                onPress={() => onView(item)}
-              />
-            </View>
+          {/* Actions: Decline (red), Accept (green), View Details (blue on the right) */}
+          <View className="mt-3 flex-row items-center gap-3">
+            <SolidButton
+              label="Decline"
+              color={COLORS.danger}
+              icon="close-outline"
+              onPress={() => onDecline(item)}
+            />
+            <SolidButton
+              label="Accept"
+              color={COLORS.success}
+              icon="checkmark-outline"
+              onPress={() => onAccept(item)}
+            />
+            {/* Replaced Open Location: View Details inherits the blue bg and right position */}
+            <SolidButton
+              label="View Details"
+              color={COLORS.primary}
+              icon="information-circle-outline"
+              onPress={() => onView(item)}
+            />
           </View>
         </View>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
 /* --------------------------------- Screen ---------------------------------- */
 export default function RequestScreen() {
-  const router = useRouter();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [query, setQuery] = useState(""); // reserved if you want a search later
+  const [rows, setRows] = useState<RequestItem[]>(INITIAL);
   const [selected, setSelected] = useState<RequestItem | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const data = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return REQUESTS.filter((r) => {
-      if (!q) return true;
-      return (
-        r.name.toLowerCase().includes(q) ||
-        r.service.toLowerCase().includes(q) ||
-        r.vehicle.toLowerCase().includes(q) ||
-        (r.landmark ?? "").toLowerCase().includes(q) ||
-        r.plate.toLowerCase().includes(q)
-      );
-    }).sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
-  }, [query]);
+  const data = useMemo(() => rows, [rows]);
 
   const openMaps = (it: RequestItem) => {
     if (it.lat && it.lng) {
@@ -465,6 +349,12 @@ export default function RequestScreen() {
     }
   };
 
+  const setStatus = (id: string, status: RequestItem["status"]) =>
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+
+  const handleAccept = (it: RequestItem) => setStatus(it.id, "accepted");
+  const handleDecline = (it: RequestItem) => setStatus(it.id, "canceled");
+
   const viewDetails = (it: RequestItem) => {
     setSelected(it);
     setDetailsOpen(true);
@@ -475,34 +365,32 @@ export default function RequestScreen() {
       {/* Header */}
       <View className="flex-row items-center justify-between px-6 py-3 bg-white">
         <Text className="text-[20px] font-extrabold text-[#1F2A44]">Request</Text>
-        <Pressable
-          className="p-2 rounded-xl active:opacity-80"
-          android_ripple={{ color: "rgba(0,0,0,0.08)", borderless: true }}
-          accessibilityLabel="Open menu"
-          onPress={() => setDrawerOpen(true)}
-        >
-          <Ionicons name="menu" size={24} color="#0F172A" />
-        </Pressable>
+        <View style={{ width: 24 }} />
       </View>
 
-      {/* Content surface */}
-      <View className="flex-1">
-        <FlatList
-          data={data}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ paddingVertical: 10, paddingBottom: 24 }}
-          renderItem={({ item }) => <RequestCard item={item} onView={viewDetails} />}
-          ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
-          ListEmptyComponent={
-            <View className="mt-16 items-center">
-              <Ionicons name="document-outline" size={28} color={COLORS.muted} />
-              <Text className="mt-2 text-slate-500">No requests found.</Text>
-            </View>
-          }
-        />
-      </View>
+      {/* List */}
+      <FlatList
+        data={data}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={{ paddingVertical: 10, paddingBottom: 24 }}
+        renderItem={({ item }) => (
+          <RequestCard
+            item={item}
+            onView={viewDetails}
+            onAccept={handleAccept}
+            onDecline={handleDecline}
+          />
+        )}
+        ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
+        ListEmptyComponent={
+          <View className="mt-16 items-center">
+            <Ionicons name="document-outline" size={28} color={COLORS.muted} />
+            <Text className="mt-2 text-slate-500">No requests found.</Text>
+          </View>
+        }
+      />
 
-      {/* Details modal */}
+      {/* Details modal (with Open in Maps inside) */}
       <DetailsModal
         visible={detailsOpen}
         item={selected}

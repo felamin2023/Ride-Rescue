@@ -1,5 +1,6 @@
 {
   "expo": {
+    "shemes":"rideRescue",
     "name": "rideRescue",
     "slug": "rideRescue",
     "version": "1.0.0",

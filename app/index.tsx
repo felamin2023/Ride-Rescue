@@ -2,5 +2,5 @@
 import { Redirect } from "expo-router";
 
 export default function Start() {
-  return <Redirect href="/driver/driverLandingpage" />;
+  return <Redirect href="/(auth)/login" />;
 }

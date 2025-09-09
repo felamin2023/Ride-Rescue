@@ -214,7 +214,6 @@ function OtherServicesModal({
                 <Item icon="medkit-outline" label="Hospital" href="/driver/hospital" />
               </View>
               <View className="w-1/2 px-2 mb-4">
-                <Item icon="ambulance-outline" label="Rescue/MDRRMO" href="/driver/rescue" />
               </View>
               <View className="w-1/2 px-2">
                 <Item icon="shield-outline" label="Police Station" href="/driver/police" />

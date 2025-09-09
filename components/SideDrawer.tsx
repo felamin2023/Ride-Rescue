@@ -30,12 +30,12 @@ export type SideDrawerProps = {
 };
 
 const DEFAULT_ITEMS: Item[] = [
-  { label: "Home", href: "/", icon: "home-outline" },
-  { label: "Profile", href: "/profile", icon: "person-circle-outline" },
-  { label: "Messages", href: "/messages", icon: "chatbubble-ellipses-outline" },
-  { label: "Reviews", href: "/reviews", icon: "star-outline" },
-  { label: "Notifications", href: "/notifications", icon: "notifications-outline" },
-  { label: "Request Status", href: "/request-status", icon: "document-text-outline" },
+  { label: "Home", href: "/driver/driverLandingpage", icon: "home-outline" },
+  { label: "Profile", href: "/driver/driverprofile", icon: "person-circle-outline" },
+  { label: "Messages", href: "/driver/message", icon: "chatbubble-ellipses-outline" },
+  { label: "Reviews", href: "/driver/reviews", icon: "star-outline" },
+  { label: "Inbox", href: "/driver/inbox", icon: "notifications-outline" },
+  { label: "Request Status", href: "/driver/requeststatus", icon: "document-text-outline" },
   { label: "Payments", href: "/payments", icon: "card-outline" },
 ];
 

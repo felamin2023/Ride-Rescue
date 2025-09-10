@@ -36,7 +36,8 @@ const DEFAULT_ITEMS: Item[] = [
   { label: "Reviews", href: "/driver/reviews", icon: "star-outline" },
   { label: "Inbox", href: "/driver/inbox", icon: "notifications-outline" },
   { label: "Request Status", href: "/driver/requeststatus", icon: "document-text-outline" },
-  { label: "Payments", href: "/payments", icon: "card-outline" },
+  // 🔁 Replaced "Payments" with "Transaction History"
+  { label: "Transaction History", href: "/driver/transactionhistory", icon: "receipt-outline" },
 ];
 
 export default function SideDrawer({
@@ -102,7 +103,7 @@ export default function SideDrawer({
               {logoSource ? (
                 <Image
                   source={logoSource}
-                  className="w-14 h-14" // smaller logo
+                  className="w-14 h-14"
                   resizeMode="contain"
                 />
               ) : (
@@ -124,8 +125,9 @@ export default function SideDrawer({
                 <Link key={it.href} href={it.href} asChild onPress={onClose}>
                   <Pressable
                     android_ripple={{ color: "rgba(15,37,71,0.08)" }}
-                    className={`flex-row items-center gap-4 px-6 py-4
-                      ${active ? "bg-slate-100" : "bg-transparent"}`}
+                    className={`flex-row items-center gap-4 px-6 py-4 ${
+                      active ? "bg-slate-100" : "bg-transparent"
+                    }`}
                   >
                     <Ionicons
                       name={it.icon}

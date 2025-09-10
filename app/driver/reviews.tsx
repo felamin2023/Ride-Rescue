@@ -57,6 +57,7 @@ type CompletedJob = {
   requestedAt: string;
   completedAt: string;
   canRate?: boolean;
+  avatarUrl?: string; // optional remote URL
 };
 
 /* ------------------------------ Helpers ----------------------------------- */
@@ -73,36 +74,96 @@ const methodIcon: Record<PaymentMethod, keyof typeof Ionicons.glyphMap> = {
   Card: "card-outline",
 };
 
-/* ------------------------------- Tag sets --------------------------------- */
-const LIKE_SERVICE_TAGS = [
-  "Fast response",
-  "Professional mechanic",
-  "Accurate diagnosis",
-  "Quality repair",
-  "Fair pricing",
-  "Transparent quote",
-  "Good communication",
-  "Friendly service",
-  "Clean workmanship",
-  "Had parts available",
-  "Towing handled well",
-  "Clear post-repair tips",
-];
+/* --------------------------- ONLINE AVATAR PICKER -------------------------- */
+const FALLBACKS = {
+  generic:
+    "https://images.unsplash.com/photo-1518442045246-1c953a37cb0f?w=160&h=160&fit=crop&auto=format&q=60",
+  vulcanize:
+    "https://images.unsplash.com/photo-1605719124118-9c541ef3a5d3?w=160&h=160&fit=crop&auto=format&q=60",
+  repair:
+    "https://images.unsplash.com/photo-1524666041070-9d87656c25bb?w=160&h=160&fit=crop&auto=format&q=60",
+  battery:
+    "https://images.unsplash.com/photo-1615271790416-5f1ac2f9cecf?w=160&h=160&fit=crop&auto=format&q=60",
+  mechanic:
+    "https://images.unsplash.com/photo-1517048676732-d65bc937f952?w=160&h=160&fit=crop&auto=format&q=60",
+};
 
-const DISLIKE_SERVICE_TAGS = [
-  "Slow response",
-  "Rude staff",
-  "Misdiagnosis",
-  "Issue came back",
-  "Overpriced",
-  "Hidden charges",
-  "Poor communication",
-  "Messy work",
-  "No parts available",
-  "Late arrival",
-  "Long waiting time",
-  "Unclear explanation",
-];
+function chooseAvatarUrl(item: CompletedJob) {
+  if (item.avatarUrl && /^https?:\/\//i.test(item.avatarUrl)) return item.avatarUrl;
+  const text = `${item.name} ${item.service}`.toLowerCase();
+  if (/(vulcaniz|tire|wheel)/.test(text)) return FALLBACKS.vulcanize;
+  if (/(battery|jumpstart)/.test(text)) return FALLBACKS.battery;
+  if (/(repair|garage|shop|service)/.test(text)) return FALLBACKS.repair;
+  return item.type === "mechanic" ? FALLBACKS.mechanic : FALLBACKS.generic;
+}
+
+/* ----------------------------- Avatar (shared) ----------------------------- */
+/** Matches the look/behavior in repairshop.tsx:
+ *  - circular, ring, shadow
+ *  - graceful fallback to initials if image fails
+ *  - supports remote URLs and default generic image
+ */
+function Avatar({
+  name,
+  uri,
+  size = 56,
+  ringColor = "#E5EDFF", // soft blue ring like in your cards
+}: {
+  name: string;
+  uri?: string;
+  size?: number;
+  ringColor?: string;
+}) {
+  const [err, setErr] = useState(false);
+  const initials = (name || "")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0]?.toUpperCase())
+    .join("");
+
+  const borderRadius = size / 2;
+
+  if (err || !uri) {
+    return (
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#E2E8F0",
+          borderWidth: 2,
+          borderColor: ringColor,
+        }}
+        className="overflow-hidden"
+      >
+        <Text className="text-[16px] font-semibold text-slate-700">{initials || "?"}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius,
+        borderWidth: 2,
+        borderColor: ringColor,
+        overflow: "hidden",
+      }}
+    >
+      <Image
+        source={{ uri }}
+        onError={() => setErr(true)}
+        resizeMode="cover"
+        style={{ width: size, height: size }}
+      />
+    </View>
+  );
+}
 
 /* ------------------------------ Mocked items ------------------------------- */
 const COMPLETED: CompletedJob[] = [
@@ -117,6 +178,7 @@ const COMPLETED: CompletedJob[] = [
     requestedAt: "2025-09-06 10:15 AM",
     completedAt: "2025-09-06 10:47 AM",
     canRate: true,
+    // avatarUrl: "https://your-cdn.example/tewe.png",
   },
   {
     id: "cmp_002",
@@ -179,22 +241,17 @@ export default function Reviews() {
   const { height: winH } = useWindowDimensions();
   const SHEET_MAX_HEIGHT = Math.floor(winH * 0.9);
 
-  /* ----------------------------- Modal state ------------------------------ */
   const [modalVisible, setModalVisible] = useState(false);
   const [activeItem, setActiveItem] = useState<CompletedJob | null>(null);
   const [rating, setRating] = useState<number>(0);
   const [message, setMessage] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [photos, setPhotos] = useState<string[]>([]); // ✨ multiple images
-
+  const [photos, setPhotos] = useState<string[]>([]);
   const [loadingVisible, setLoadingVisible] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState<string | undefined>(undefined);
   const [successVisible, setSuccessVisible] = useState(false);
 
-  /** Positive sentiment if 4–5 stars; negative if 1–2; 3 is neutral/negative by default */
   const isPositive = rating >= 4;
-  const currentTags = isPositive ? LIKE_SERVICE_TAGS : DISLIKE_SERVICE_TAGS;
-
   const prevIsPositiveRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (prevIsPositiveRef.current === null) {
@@ -246,20 +303,20 @@ export default function Reviews() {
     const ok = await requestMediaLibrary();
     if (!ok) return;
 
-    // allowsMultipleSelection works on iOS 14+/web; on Android it will return single.
     const res = await ImagePicker.launchImageLibraryAsync({
       quality: 0.8,
       allowsEditing: true,
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       exif: false,
-      allowsMultipleSelection: true as any, // safe: ignored where unsupported
-      selectionLimit: MAX_PHOTOS,           // iOS hint
+      // @ts-ignore iOS multi-select hint
+      allowsMultipleSelection: true,
+      // @ts-ignore iOS selection hint
+      selectionLimit: MAX_PHOTOS,
     });
 
     if (!res.canceled) {
-      const uris =
-        // @ts-ignore — assets may be many if multi-select
-        (res.assets || []).map((a: any) => a?.uri).filter(Boolean);
+      // @ts-ignore
+      const uris = (res.assets || []).map((a: any) => a?.uri).filter(Boolean);
       appendUris(uris as string[]);
     }
   };
@@ -299,9 +356,7 @@ export default function Reviews() {
     setLoadingMsg("Submitting your review…");
     setLoadingVisible(true);
 
-    // TODO: Replace this with your Supabase logic:
-    // 1) Upload each photo in `photos` to Storage, collect public URLs
-    // 2) Insert into `ratings` table: { job_id, rating, message, tags: selectedTags, photos: [urls] }
+    // TODO: Upload photos to Supabase and insert review
     await fakeDelay(900);
 
     setLoadingVisible(false);
@@ -310,76 +365,75 @@ export default function Reviews() {
   };
 
   /* ----------------------------- Render card ------------------------------ */
-  const renderItem = ({ item }: { item: CompletedJob }) => (
-    <View className="mx-4 mb-4 rounded-2xl bg-white p-4" style={cardShadow as any}>
-      {/* Title row */}
-      <View className="flex-row items-center">
-        <View className="mr-2 rounded-full bg-blue-50 p-2">
-          <Ionicons
-            name={item.type === "shop" ? "storefront" : "construct"}
-            size={18}
-            color={COLORS.primary}
-          />
-        </View>
-        <Text className="flex-1 text-[16px] font-semibold text-slate-900">{item.name}</Text>
-      </View>
-
-      {/* Location */}
-      <View className="mt-3 flex-row">
-        <Ionicons name="location-outline" size={16} color={COLORS.sub} />
-        <Text className="ml-2 flex-1 text-[13px] text-slate-600">{item.location}</Text>
-      </View>
-
-      {/* Service */}
-      <View className="mt-2 flex-row items-center">
-        <Ionicons name="pricetag-outline" size={16} color={COLORS.sub} />
-        <Text className="ml-2 text-[13px] text-slate-700">
-          <Text className="font-medium text-slate-900">Service: </Text>
-          {item.service}
-        </Text>
-      </View>
-
-      {/* Paid (subtle row) */}
-      <View className="mt-1.5 flex-row items-center">
-        <Ionicons
-          name={item.paymentMethod ? methodIcon[item.paymentMethod] : "cash-outline"}
-          size={16}
-          color={COLORS.muted}
-        />
-        <Text className="ml-2 text-[12px] text-slate-600">
-          Paid {formatCurrency(item.amountPaid)}
-          {item.paymentMethod ? ` • ${item.paymentMethod}` : ""}
-        </Text>
-      </View>
-
-      {/* Dates */}
-      <View className="mt-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
-        <View className="mb-1.5 flex-row items-center">
-          <Ionicons name="time-outline" size={16} color={COLORS.sub} />
-          <Text className="ml-2 text-[13px] text-slate-500">
-            <Text className="font-medium text-slate-700">Requested:</Text> {item.requestedAt}
-          </Text>
-        </View>
+  const renderItem = ({ item }: { item: CompletedJob }) => {
+    const avatarUri = chooseAvatarUrl(item);
+    return (
+      <View className="mx-4 mb-4 rounded-2xl bg-white p-4" style={cardShadow as any}>
+        {/* Title row with repairshop-style avatar */}
         <View className="flex-row items-center">
-          <Ionicons name="checkmark-done-outline" size={16} color={COLORS.success} />
-          <Text className="ml-2 text-[13px] text-slate-500">
-            <Text className="font-medium text-slate-700">Completed:</Text> {item.completedAt}
+          <View className="mr-3" style={cardShadow as any}>
+            <Avatar name={item.name} uri={avatarUri} size={56} />
+          </View>
+          <Text className="flex-1 text-[16px] font-semibold text-slate-900">{item.name}</Text>
+        </View>
+
+        {/* Location */}
+        <View className="mt-3 flex-row">
+          <Ionicons name="location-outline" size={16} color={COLORS.sub} />
+          <Text className="ml-2 flex-1 text-[13px] text-slate-600">{item.location}</Text>
+        </View>
+
+        {/* Service */}
+        <View className="mt-2 flex-row items-center">
+          <Ionicons name="pricetag-outline" size={16} color={COLORS.sub} />
+          <Text className="ml-2 text-[13px] text-slate-700">
+            <Text className="font-medium text-slate-900">Service: </Text>
+            {item.service}
           </Text>
         </View>
-      </View>
 
-      {/* CTA */}
-      {item.canRate && (
-        <Pressable
-          onPress={() => openRateModal(item)}
-          className="mt-4 flex-row items-center justify-center rounded-xl bg-blue-600 py-3 active:opacity-90"
-        >
-          <Ionicons name="star" size={18} color="white" />
-          <Text className="ml-2 text-[14px] font-semibold text-white">Rate this service</Text>
-        </Pressable>
-      )}
-    </View>
-  );
+        {/* Paid */}
+        <View className="mt-1.5 flex-row items-center">
+          <Ionicons
+            name={item.paymentMethod ? methodIcon[item.paymentMethod] : "cash-outline"}
+            size={16}
+            color={COLORS.muted}
+          />
+          <Text className="ml-2 text-[12px] text-slate-600">
+            Paid {formatCurrency(item.amountPaid)}
+            {item.paymentMethod ? ` • ${item.paymentMethod}` : ""}
+          </Text>
+        </View>
+
+        {/* Dates */}
+        <View className="mt-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+          <View className="mb-1.5 flex-row items-center">
+            <Ionicons name="time-outline" size={16} color={COLORS.sub} />
+            <Text className="ml-2 text-[13px] text-slate-500">
+              <Text className="font-medium text-slate-700">Requested:</Text> {item.requestedAt}
+            </Text>
+          </View>
+          <View className="flex-row items-center">
+            <Ionicons name="checkmark-done-outline" size={16} color={COLORS.success} />
+            <Text className="ml-2 text-[13px] text-slate-500">
+              <Text className="font-medium text-slate-700">Completed:</Text> {item.completedAt}
+            </Text>
+          </View>
+        </View>
+
+        {/* CTA */}
+        {item.canRate && (
+          <Pressable
+            onPress={() => openRateModal(item)}
+            className="mt-4 flex-row items-center justify-center rounded-xl bg-blue-600 py-3 active:opacity-90"
+          >
+            <Ionicons name="star" size={18} color="white" />
+            <Text className="ml-2 text-[14px] font-semibold text-white">Rate this service</Text>
+          </Pressable>
+        )}
+      </View>
+    );
+  };
 
   /* ------------------------------ Modal UI -------------------------------- */
   const StarRow = () => (
@@ -392,31 +446,64 @@ export default function Reviews() {
     </View>
   );
 
-  const TagChips = () => (
-    <View className="mt-2 flex-row flex-wrap gap-2">
-      {(isPositive ? LIKE_SERVICE_TAGS : DISLIKE_SERVICE_TAGS).map((t) => {
-        const active = selectedTags.includes(t);
-        const activeBg = isPositive ? "bg-green-50" : "bg-red-50";
-        const activeBorder = isPositive ? "border-green-300" : "border-red-300";
-        const activeText = isPositive ? "text-green-700" : "text-red-700";
-        return (
-          <Pressable
-            key={t}
-            onPress={() =>
-              setSelectedTags((prev) =>
-                prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
-              )
-            }
-            className={`rounded-xl border px-3 py-1 ${
-              active ? `${activeBg} ${activeBorder}` : "bg-white border-slate-300"
-            }`}
-          >
-            <Text className={`text-[12px] ${active ? activeText : "text-slate-600"}`}>{t}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+  const LIKE_SERVICE_TAGS = [
+    "Fast response",
+    "Professional mechanic",
+    "Accurate diagnosis",
+    "Quality repair",
+    "Fair pricing",
+    "Transparent quote",
+    "Good communication",
+    "Friendly service",
+    "Clean workmanship",
+    "Had parts available",
+    "Towing handled well",
+    "Clear post-repair tips",
+  ];
+
+  const DISLIKE_SERVICE_TAGS = [
+    "Slow response",
+    "Rude staff",
+    "Misdiagnosis",
+    "Issue came back",
+    "Overpriced",
+    "Hidden charges",
+    "Poor communication",
+    "Messy work",
+    "No parts available",
+    "Late arrival",
+    "Long waiting time",
+    "Unclear explanation",
+  ];
+
+  const TagChips = () => {
+    const tags = isPositive ? LIKE_SERVICE_TAGS : DISLIKE_SERVICE_TAGS;
+    return (
+      <View className="mt-2 flex-row flex-wrap gap-2">
+        {tags.map((t) => {
+          const active = selectedTags.includes(t);
+          const activeBg = isPositive ? "bg-green-50" : "bg-red-50";
+          const activeBorder = isPositive ? "border-green-300" : "border-red-300";
+          const activeText = isPositive ? "text-green-700" : "text-red-700";
+          return (
+            <Pressable
+              key={t}
+              onPress={() =>
+                setSelectedTags((prev) =>
+                  prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+                )
+              }
+              className={`rounded-xl border px-3 py-1 ${
+                active ? `${activeBg} ${activeBorder}` : "bg-white border-slate-300"
+              }`}
+            >
+              <Text className={`text-[12px] ${active ? activeText : "text-slate-600"}`}>{t}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  };
 
   const PhotosGrid = () => {
     if (!photos.length) return null;
@@ -607,12 +694,8 @@ export default function Reviews() {
         </View>
       </Modal>
 
-      {/* Loading overlay */}
-      <LoadingScreen
-        visible={loadingVisible}
-        message={loadingMsg}
-        variant="dots"
-      />
+      {/* Loading overlay — spinner */}
+      <LoadingScreen visible={loadingVisible} message={loadingMsg} variant="spinner" />
 
       {/* Pretty success popup */}
       <SuccessModal

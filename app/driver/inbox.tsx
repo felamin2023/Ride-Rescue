@@ -1,5 +1,5 @@
 // app/(driver)/inbox.tsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -7,17 +7,19 @@ import {
   Pressable,
   Image,
   Platform,
+  LayoutChangeEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
-/* ------------------------------ Mock Data ------------------------------ */
+/* ------------------------------ Types & Mock ------------------------------ */
 type Notification = {
   id: string;
   title: string;
   message: string;
   image?: string;
+  read: boolean;
 };
 
 const MOCK: Notification[] = [
@@ -26,17 +28,20 @@ const MOCK: Notification[] = [
     title: "New Emergency Request",
     message: "A driver nearby has posted a new emergency request.",
     image: "https://via.placeholder.com/60",
+    read: false,
   },
   {
     id: "2",
     title: "Booking Update",
     message: "Your recent request has been accepted by a mechanic.",
     image: "https://via.placeholder.com/60",
+    read: false,
   },
   {
     id: "3",
     title: "System Message",
     message: "RideRescue has updated its terms of service.",
+    read: true,
   },
 ];
 
@@ -54,49 +59,125 @@ const cardShadow = Platform.select({
 /* ------------------------------ Screen ------------------------------ */
 export default function Inbox() {
   const router = useRouter();
-  const [notifications] = useState(MOCK);
+  const [items, setItems] = useState<Notification[]>(MOCK);
+  const [filter, setFilter] = useState<"All" | "Unread" | "Read">("All");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [headerH, setHeaderH] = useState(56); // fallback height
+
+  const data = useMemo(() => {
+    if (filter === "All") return items;
+    if (filter === "Unread") return items.filter((n) => !n.read);
+    return items.filter((n) => n.read);
+  }, [items, filter]);
+
+  const toggleRead = (id: string) => {
+    setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: !n.read } : n)));
+  };
+
+  const onHeaderLayout = (e: LayoutChangeEvent) => {
+    setHeaderH(e.nativeEvent.layout.height);
+  };
 
   const renderItem = ({ item }: { item: Notification }) => (
-    <View
-      className="flex-row items-center bg-white rounded-2xl px-4 py-3 mb-3"
+    <Pressable
+      onPress={() => toggleRead(item.id)}
+      className="flex-row items-center rounded-2xl px-4 py-3 mb-3 bg-white"
       style={cardShadow}
+      android_ripple={{ color: "rgba(0,0,0,0.04)" }}
     >
-      {item.image && (
-        <Image
-          source={{ uri: item.image }}
-          className="w-12 h-12 rounded-full mr-4"
-        />
+      {item.image ? (
+        <Image source={{ uri: item.image }} className="w-12 h-12 rounded-full mr-4" />
+      ) : (
+        <View className="w-12 h-12 rounded-full mr-4 bg-slate-100 items-center justify-center">
+          <Ionicons name="notifications-outline" size={18} color="#64748B" />
+        </View>
       )}
+
       <View className="flex-1">
-        <Text className="text-base font-semibold text-gray-900">
-          {item.title}
+        <View className="flex-row items-center">
+          <Text
+            className={`flex-1 text-base ${
+              item.read ? "font-semibold text-gray-800" : "font-extrabold text-gray-900"
+            }`}
+            numberOfLines={1}
+          >
+            {item.title}
+          </Text>
+          {!item.read && <View className="ml-2 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: "#2563EB" }} />}
+        </View>
+
+        <Text className={`text-sm mt-0.5 ${item.read ? "text-gray-600" : "text-gray-700"}`} numberOfLines={2}>
+          {item.message}
         </Text>
-        <Text className="text-sm text-gray-600 mt-0.5">{item.message}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 
   return (
     <SafeAreaView className="flex-1 bg-[#F4F6F8]">
       {/* Header */}
-      <View className="flex-row items-center justify-between px-4 py-3">
-        <Pressable onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={26} color="#0F172A" />
-        </Pressable>
+      <View className="px-4 py-3" onLayout={onHeaderLayout}>
+        <View className="relative flex-row items-center justify-between">
+          <Pressable onPress={() => router.back()} hitSlop={10}>
+            <Ionicons name="arrow-back" size={26} color="#0F172A" />
+          </Pressable>
 
-        <Text className="text-xl font-bold text-[#0F172A]">Inbox</Text>
+          <Text className="text-xl font-bold text-[#0F172A]">Inbox</Text>
 
-        {/* Spacer to balance the layout */}
-        <View style={{ width: 26 }} />
+          {/* Kebab icon (like requeststatus.tsx) */}
+          <Pressable
+            onPress={() => setMenuOpen((v) => !v)}
+            hitSlop={10}
+            className="h-10 w-10 items-center justify-center"
+          >
+            <Ionicons name="ellipsis-vertical" size={20} color="#0F172A" />
+          </Pressable>
+        </View>
+
+        {/* Active filter chip */}
+        <View className="mt-2 self-start rounded-full border border-slate-300 bg-white px-3 py-1.5">
+          <Text className="text-[12px] text-slate-700">Filter: {filter}</Text>
+        </View>
       </View>
 
       {/* Notifications List */}
       <FlatList
-        data={notifications}
+        data={data}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={{ padding: 16 }}
+        contentContainerStyle={{ padding: 16, paddingTop: 8 }}
       />
+
+      {/* Dropdown (no modal, just a small anchored menu) */}
+      {menuOpen && (
+        <>
+          {/* tap-outside catcher without dimming */}
+          <Pressable className="absolute inset-0" onPress={() => setMenuOpen(false)} />
+
+          <View
+            className="absolute right-3 w-44 rounded-2xl bg-white p-1"
+            style={[{ top: headerH + 8 }, cardShadow as any]}
+          >
+            {(["All", "Unread", "Read"] as const).map((opt) => {
+              const active = filter === opt;
+              return (
+                <Pressable
+                  key={opt}
+                  onPress={() => {
+                    setFilter(opt);
+                    setMenuOpen(false);
+                  }}
+                  className={`px-3 py-2 rounded-2xl ${active ? "bg-slate-100" : ""}`}
+                >
+                  <Text className={`text-[14px] ${active ? "text-[#2563EB] font-semibold" : "text-slate-800"}`}>
+                    {opt}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </>
+      )}
     </SafeAreaView>
   );
 }

@@ -17,6 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import LoadingScreen from "../../components/LoadingScreen";
+import FilterChips, { type FilterItem } from "../../components/FilterChips";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -110,18 +111,18 @@ const MOCK: Station[] = [
   },
 ];
 
+/* --------------------------------- Filters --------------------------------- */
+const FILTERS: FilterItem[] = [
+  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },
+  { key: "hospital", icon: "medical-outline",   label: "Hospital" },
+  { key: "police",   icon: "shield-outline",    label: "Police" },
+  { key: "gas",      icon: "flash-outline",     label: "Gas" },
+  { key: "repair",   icon: "construct-outline", label: "Repair" },
+  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
+];
+
 /* --------------------------------- Small UI -------------------------------- */
-const FILTERS = [
-  { key: "police", icon: "shield-outline", label: "Police" },
-  { key: "hospital", icon: "medical-outline", label: "Hospital" },
-  { key: "gas", icon: "flash-outline", label: "Gas" },
-  { key: "repair", icon: "construct-outline", label: "Repair" },
-  // 👇 Keep the vulcanize pill
-  { key: "vulcanize", icon: "trail-sign-outline", label: "Vulcanize" },
-] as const;
-
-type FilterKey = (typeof FILTERS)[number]["key"];
-
 function Stars({ rating = 0 }: { rating?: number }) {
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
@@ -140,38 +141,6 @@ function Stars({ rating = 0 }: { rating?: number }) {
         );
       })}
     </View>
-  );
-}
-
-function Chip({
-  selected,
-  icon,
-  label,
-  onPress,
-}: {
-  selected: boolean;
-  icon: any;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-        selected ? "bg-[#EEF2FF] border-[#C7D2FE]" : "bg-white border-gray-200"
-      }`}
-      style={MICRO_SHADOW}
-    >
-      <Ionicons name={icon} size={16} color={selected ? COLORS.primary : COLORS.sub} />
-      <Text
-        className={`text-[13px] font-semibold ${
-          selected ? "text-[#1E3A8A]" : "text-slate-600"
-        }`}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
   );
 }
 
@@ -526,13 +495,13 @@ function StationCard({
 export default function PoliceScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<FilterKey[]>(["police"]);
+  const [filters, setFilters] = useState<string[]>(["police"]); // use string[] for FilterChips
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const toggleFilter = (k: FilterKey) =>
+  const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
   const data = useMemo(() => {
@@ -593,11 +562,12 @@ export default function PoliceScreen() {
           <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
             <Ionicons name="arrow-back" size={22} color={COLORS.text} />
           </Pressable>
-          <Text className="text-2xl font-extrabold text-slate-900">Police Stations</Text>
+        <Text className="text-2xl font-extrabold text-slate-900">Police Stations</Text>
           <View style={{ width: 36 }} />
         </View>
       </SafeAreaView>
 
+      {/* Search */}
       <View className="px-4">
         <View className="flex-row items-center rounded-2xl bg-white px-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, MICRO_SHADOW]}>
           <Ionicons name="search" size={18} color={COLORS.muted} />
@@ -618,25 +588,18 @@ export default function PoliceScreen() {
         </View>
       </View>
 
-      <View className="px-4 mt-3">
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={FILTERS as any}
-          keyExtractor={(i: any) => i.key}
-          ItemSeparatorComponent={() => <View className="w-3" />}
-          renderItem={({ item }) => (
-            <Chip
-              selected={filters.includes(item.key as FilterKey)}
-              icon={item.icon as any}
-              label={item.label}
-              onPress={() => toggleFilter(item.key as FilterKey)}
-            />
-          )}
-          contentContainerStyle={{ paddingVertical: 2 }}
-        />
-      </View>
+      {/* Reusable Filter Chips */}
+      <FilterChips
+        items={FILTERS}
+        selected={filters}
+        onToggle={toggleFilter}
+        containerStyle={{ paddingHorizontal: 16, marginTop: 12 }}
+        gap={12}
+        horizontal
+        accessibilityLabel="Station filters"
+      />
 
+      {/* List */}
       <FlatList
         data={data}
         keyExtractor={(item) => item.id}

@@ -17,6 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import LoadingScreen from "../../components/LoadingScreen";
+import FilterChips, { type FilterItem } from "../../components/FilterChips";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -109,18 +110,18 @@ const MOCK: Facility[] = [
   },
 ];
 
+/* --------------------------- Reusable filter items -------------------------- */
+const FILTERS: FilterItem[] = [
+  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },
+  { key: "hospital", icon: "medical-outline",   label: "Hospital" },
+  { key: "police",   icon: "shield-outline",    label: "Police" },
+  { key: "gas",      icon: "flash-outline",     label: "Gas" },
+  { key: "repair",   icon: "construct-outline", label: "Repair" },
+  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
+];
+
 /* --------------------------------- Small UI -------------------------------- */
-const FILTERS = [
-  { key: "mdrrmo", icon: "megaphone-outline", label: "MDRRMO" },
-  { key: "hospital", icon: "medical-outline", label: "Hospital" },
-  { key: "police", icon: "shield-outline", label: "Police" },
-  { key: "gas", icon: "flash-outline", label: "Gas" },
-  { key: "repair", icon: "construct-outline", label: "Repair" },
-  { key: "vulcanize", icon: "trail-sign-outline", label: "Vulcanize" },
-] as const;
-
-type FilterKey = (typeof FILTERS)[number]["key"];
-
 function Stars({ rating = 0 }: { rating?: number }) {
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
@@ -139,34 +140,6 @@ function Stars({ rating = 0 }: { rating?: number }) {
         );
       })}
     </View>
-  );
-}
-
-function Chip({
-  selected,
-  icon,
-  label,
-  onPress,
-}: {
-  selected: boolean;
-  icon: any;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-        selected ? "bg-[#EEF2FF] border-[#C7D2FE]" : "bg-white border-gray-200"
-      }`}
-      style={MICRO_SHADOW}
-    >
-      <Ionicons name={icon} size={16} color={selected ? COLORS.primary : COLORS.sub} />
-      <Text className={`text-[13px] font-semibold ${selected ? "text-[#1E3A8A]" : "text-slate-600"}`}>
-        {label}
-      </Text>
-    </TouchableOpacity>
   );
 }
 
@@ -191,9 +164,7 @@ function PrimaryButton({
       activeOpacity={0.9}
       className={`flex-row items-center justify-center rounded-full px-4 ${isPrimary ? "" : "border"}`}
       style={[
-        // Base height
         { minHeight: 48 },
-        // Give extra headroom for 2-line labels
         lines > 1 ? { minHeight: 56, paddingVertical: 8 } : null,
         isPrimary
           ? { backgroundColor: COLORS.primary }
@@ -423,7 +394,7 @@ function DetailsModal({
               ) : null}
             </View>
 
-            {/* Buttons: equal width and height for perfect alignment */}
+            {/* Buttons */}
             <View className="mt-4 flex-row items-stretch gap-2">
               <View className="flex-1">
                 <PrimaryButton label="Call" icon="call-outline" onPress={() => onCall(facility)} />
@@ -521,7 +492,6 @@ function FacilityCard({
             </Text>
           ) : null}
 
-          {/* Buttons: aligned; "Open" on first line, "Location" on second */}
           <View className="mt-3 flex-row items-stretch gap-2">
             <View className="flex-1">
               <PrimaryButton
@@ -551,13 +521,13 @@ function FacilityCard({
 export default function MDRRMOScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<FilterKey[]>(["mdrrmo"]);
+  const [filters, setFilters] = useState<string[]>(["mdrrmo"]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const toggleFilter = (k: FilterKey) =>
+  const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
   const data = useMemo(() => {
@@ -657,25 +627,16 @@ export default function MDRRMOScreen() {
         </View>
       </View>
 
-      {/* Filter chips */}
-      <View className="px-4 mt-3">
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={FILTERS as any}
-          keyExtractor={(i: any) => i.key}
-          ItemSeparatorComponent={() => <View className="w-3" />}
-          renderItem={({ item }) => (
-            <Chip
-              selected={filters.includes(item.key as FilterKey)}
-              icon={item.icon as any}
-              label={item.label}
-              onPress={() => toggleFilter(item.key as FilterKey)}
-            />
-          )}
-          contentContainerStyle={{ paddingVertical: 2 }}
-        />
-      </View>
+      {/* Filter chips (reusable component) */}
+      <FilterChips
+        items={FILTERS}
+        selected={filters}
+        onToggle={toggleFilter}
+        containerStyle={{ paddingHorizontal: 16, marginTop: 12 }}
+        gap={12}
+        horizontal
+        accessibilityLabel="Service filters"
+      />
 
       {/* List */}
       <FlatList
@@ -720,8 +681,8 @@ export default function MDRRMOScreen() {
         onMessage={messageFacility}
       />
 
-      {/* Loading overlay */}
-      {busy && <LoadingScreen />}
+      {/* Loading overlay (fixed: pass visible prop) */}
+      <LoadingScreen visible={busy} message="Please wait…" variant="dots" />
     </View>
   );
 }

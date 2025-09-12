@@ -16,6 +16,7 @@ import * as Clipboard from "expo-clipboard";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import FilterChips, { type FilterItem } from "../../components/FilterChips";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -94,28 +95,25 @@ const MOCK: Shop[] = [
   },
 ];
 
+/* --------------------------------- Filter chips (reusable) -------------------------------- */
+const FILTERS: FilterItem[] = [
+  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },
+  { key: "hospital", icon: "medical-outline",   label: "Hospital" },
+  { key: "police",   icon: "shield-outline",    label: "Police" },
+  { key: "gas",      icon: "flash-outline",     label: "Gas" },
+  { key: "repair",   icon: "construct-outline", label: "Repair" },
+  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
+];
+
 /* --------------------------------- Small UI -------------------------------- */
-const FILTERS = [
-  { key: "repair", icon: "construct-outline", label: "Repair" },
-  { key: "vulcanize", icon: "trail-sign-outline", label: "Vulcanize" },
-  { key: "gas", icon: "flash-outline", label: "Gas" },
-  { key: "hospital", icon: "medical-outline", label: "Hospital" },
-] as const;
-
-type FilterKey = (typeof FILTERS)[number]["key"];
-
 function Stars({ rating = 0 }: { rating?: number }) {
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
   return (
     <View className="flex-row items-center">
       {Array.from({ length: 5 }).map((_, i) => {
-        const name =
-          i < full
-            ? "star"
-            : i === full && half
-            ? "star-half"
-            : "star-outline";
+        const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
         return (
           <Ionicons
             key={i}
@@ -127,42 +125,6 @@ function Stars({ rating = 0 }: { rating?: number }) {
         );
       })}
     </View>
-  );
-}
-
-function Chip({
-  selected,
-  icon,
-  label,
-  onPress,
-}: {
-  selected: boolean;
-  icon: any;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-        selected ? "bg-[#EEF2FF] border-[#C7D2FE]" : "bg-white border-gray-200"
-      }`}
-      style={shadow}
-    >
-      <Ionicons
-        name={icon}
-        size={16}
-        color={selected ? COLORS.primary : COLORS.sub}
-      />
-      <Text
-        className={`text-[13px] font-semibold ${
-          selected ? "text-[#1E3A8A]" : "text-slate-600"
-        }`}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
   );
 }
 
@@ -182,9 +144,7 @@ function PrimaryButton({
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.9}
-      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${
-        isPrimary ? "" : "border"
-      }`}
+      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${isPrimary ? "" : "border"}`}
       style={[
         isPrimary
           ? { backgroundColor: COLORS.primary }
@@ -203,11 +163,7 @@ function PrimaryButton({
           style={{ marginRight: 6 }}
         />
       ) : null}
-      <Text
-        className={`text-[13px] font-semibold ${
-          isPrimary ? "text-white" : "text-slate-800"
-        }`}
-      >
+      <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -232,13 +188,7 @@ function QuickActions({
   if (!shop) return null;
 
   return (
-    <Modal
-      transparent
-      statusBarTranslucent
-      animationType="fade"
-      visible={visible}
-      onRequestClose={onClose}
-    >
+    <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
       {/* Dark overlay (full-screen) */}
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
         {/* Tap outside to close */}
@@ -265,27 +215,14 @@ function QuickActions({
         >
           {/* Handle */}
           <View className="items-center mb-3">
-            <View
-              style={{
-                width: 44,
-                height: 5,
-                borderRadius: 999,
-                backgroundColor: "#E2E8F0",
-              }}
-            />
+            <View style={{ width: 44, height: 5, borderRadius: 999, backgroundColor: "#E2E8F0" }} />
           </View>
 
           {/* Header row */}
           <View className="flex-row items-center gap-3 pb-3">
-            <View
-              className="overflow-hidden rounded-xl"
-              style={{ width: 44, height: 44, backgroundColor: "#F1F5F9" }}
-            >
+            <View className="overflow-hidden rounded-xl" style={{ width: 44, height: 44, backgroundColor: "#F1F5F9" }}>
               {shop.avatar ? (
-                <RNImage
-                  source={{ uri: shop.avatar }}
-                  style={{ width: "100%", height: "100%" }}
-                />
+                <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
               ) : (
                 <View className="h-full w-full items-center justify-center">
                   <Ionicons name="storefront-outline" size={20} color="#475569" />
@@ -300,12 +237,7 @@ function QuickActions({
                 {shop.address1}
               </Text>
             </View>
-            <Pressable
-              onPress={onClose}
-              hitSlop={10}
-              className="h-9 w-9 items-center justify-center rounded-xl"
-              accessibilityLabel="Close"
-            >
+            <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close">
               <Ionicons name="close" size={20} color={COLORS.text} />
             </Pressable>
           </View>
@@ -345,17 +277,7 @@ function QuickActions({
         </View>
 
         {/* Bottom cover to paint gesture area white */}
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: insets.bottom,
-            backgroundColor: "#FFFFFF",
-          }}
-        />
+        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }} />
       </View>
     </Modal>
   );
@@ -384,20 +306,11 @@ function DetailsModal({
         onPress={onClose}
       >
         <Pressable onPress={() => {}}>
-          <View
-            className="rounded-2xl bg-white p-4"
-            style={[{ borderWidth: 1, borderColor: COLORS.border }, shadow]}
-          >
+          <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, shadow]}>
             <View className="flex-row items-center gap-3">
-              <View
-                className="overflow-hidden rounded-xl"
-                style={{ width: 56, height: 56, backgroundColor: "#F1F5F9" }}
-              >
+              <View className="overflow-hidden rounded-xl" style={{ width: 56, height: 56, backgroundColor: "#F1F5F9" }}>
                 {shop.avatar ? (
-                  <RNImage
-                    source={{ uri: shop.avatar }}
-                    style={{ width: "100%", height: "100%" }}
-                  />
+                  <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
                 ) : (
                   <View className="h-full w-full items-center justify-center">
                     <Ionicons name="storefront-outline" size={22} color="#475569" />
@@ -410,21 +323,15 @@ function DetailsModal({
                 </Text>
                 <View className="mt-1 flex-row items-center gap-2">
                   <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
-                    <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">
-                      {shop.category}
-                    </Text>
+                    <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{shop.category}</Text>
                   </View>
                   <Text className="text-slate-300">•</Text>
                   <Stars rating={shop.rating ?? 0} />
-                  <Text className="text-[12px] text-slate-500">
-                    {(shop.rating ?? 0).toFixed(1)}
-                  </Text>
+                  <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
                   {typeof shop.distanceKm === "number" && (
                     <>
                       <Text className="text-slate-300">•</Text>
-                      <Text className="text-[12px] text-slate-500">
-                        {shop.distanceKm.toFixed(1)} km away
-                      </Text>
+                      <Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text>
                     </>
                   )}
                 </View>
@@ -435,9 +342,7 @@ function DetailsModal({
 
             <View className="mt-3 gap-1">
               <Text className="text-[13px] text-slate-700">{shop.address1}</Text>
-              {shop.address2 ? (
-                <Text className="text-[12px] text-slate-500">{shop.address2}</Text>
-              ) : null}
+              {shop.address2 ? <Text className="text-[12px] text-slate-500">{shop.address2}</Text> : null}
               {shop.plusCode ? (
                 <View className="flex-row items-center gap-2">
                   <Ionicons name="locate-outline" size={14} color={COLORS.sub} />
@@ -456,20 +361,11 @@ function DetailsModal({
 
             <View className="mt-4 flex-row items-center gap-2">
               <View className="flex-1">
-                <PrimaryButton
-                  label="Open in Maps"
-                  icon="navigate-outline"
-                  onPress={() => onOpenMaps(shop)}
-                />
+                <PrimaryButton label="Open in Maps" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
               </View>
               <View style={{ width: 10 }} />
               <View className="flex-1">
-                <PrimaryButton
-                  label="Message"
-                  icon="chatbubble-ellipses-outline"
-                  variant="secondary"
-                  onPress={() => onMessage(shop)}
-                />
+                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
               </View>
             </View>
 
@@ -510,16 +406,9 @@ function ShopCard({
       style={[{ borderColor: COLORS.border, borderWidth: 1 }, shadow]}
     >
       <View className="flex-row items-start gap-3">
-        <View
-          className="overflow-hidden rounded-xl"
-          style={{ width: 64, height: 64, backgroundColor: "#F1F5F9" }}
-        >
+        <View className="overflow-hidden rounded-xl" style={{ width: 64, height: 64, backgroundColor: "#F1F5F9" }}>
           {shop.avatar ? (
-            <RNImage
-              source={{ uri: shop.avatar }}
-              style={{ width: "100%", height: "100%" }}
-              resizeMode="cover"
-            />
+            <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
           ) : (
             <View className="h-full w-full items-center justify-center">
               <Ionicons name="storefront-outline" size={22} color="#475569" />
@@ -533,23 +422,17 @@ function ShopCard({
               {shop.name}
             </Text>
             <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-1">
-              <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">
-                {shop.category}
-              </Text>
+              <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{shop.category}</Text>
             </View>
           </View>
 
           <View className="mt-1 flex-row items-center gap-2">
             <Stars rating={shop.rating ?? 0} />
-            <Text className="text-[12px] text-slate-500">
-              {(shop.rating ?? 0).toFixed(1)}
-            </Text>
+            <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
             {typeof shop.distanceKm === "number" && (
               <>
                 <Text className="text-slate-300">•</Text>
-                <Text className="text-[12px] text-slate-500">
-                  {shop.distanceKm.toFixed(1)} km
-                </Text>
+                <Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text>
               </>
             )}
           </View>
@@ -565,21 +448,11 @@ function ShopCard({
 
           <View className="mt-3 flex-row items-center gap-2">
             <View className="flex-1">
-              <PrimaryButton
-                label="Open Location"
-                icon="navigate-outline"
-                variant="primary"
-                onPress={() => onLocation(shop)}
-              />
+              <PrimaryButton label="Open Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
             </View>
             <View style={{ width: 12 }} />
             <View className="flex-1">
-              <PrimaryButton
-                label="Message"
-                icon="chatbubble-ellipses-outline"
-                variant="secondary"
-                onPress={() => onMessage(shop)}
-              />
+              <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
             </View>
           </View>
         </View>
@@ -592,15 +465,13 @@ function ShopCard({
 export default function RepairShopScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<FilterKey[]>(["repair"]);
+  const [filters, setFilters] = useState<string[]>(["repair"]); // <-- string[] to work with FilterChips
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
 
-  const toggleFilter = (k: FilterKey) =>
-    setFilters((prev) =>
-      prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
-    );
+  const toggleFilter = (k: string) =>
+    setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -621,9 +492,7 @@ export default function RepairShopScreen() {
       const url = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
       Linking.openURL(url).catch(() => {});
     } else if (s.address1) {
-      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-        s.address1
-      )}`;
+      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`;
       Linking.openURL(url).catch(() => {});
     }
   };
@@ -636,14 +505,11 @@ export default function RepairShopScreen() {
     setSelectedShop(s);
     setSheetOpen(true);
   };
-
   const closeActions = () => setSheetOpen(false);
-
   const openDetails = (s: Shop) => {
     setSelectedShop(s);
     setDetailsOpen(true);
   };
-
   const closeDetails = () => setDetailsOpen(false);
 
   return (
@@ -651,27 +517,17 @@ export default function RepairShopScreen() {
       {/* Safe top with transparent back button and large title */}
       <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.bg }}>
         <View className="flex-row items-center justify-between px-4 py-3">
-          <Pressable
-            onPress={() => router.back()}
-            hitSlop={10}
-            className="h-9 w-9 items-center justify-center rounded-xl"
-            accessibilityLabel="Go back"
-          >
+          <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
             <Ionicons name="arrow-back" size={22} color={COLORS.text} />
           </Pressable>
-          <Text className="text-2xl font-extrabold text-slate-900">
-            Repair Shops
-          </Text>
+          <Text className="text-2xl font-extrabold text-slate-900">Repair Shops</Text>
           <View style={{ width: 36 }} />
         </View>
       </SafeAreaView>
 
       {/* Search */}
       <View className="px-4">
-        <View
-          className="flex-row items-center rounded-2xl bg-white px-3"
-          style={[{ borderColor: COLORS.border, borderWidth: 1 }, shadow]}
-        >
+        <View className="flex-row items-center rounded-2xl bg-white px-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, shadow]}>
           <Ionicons name="search" size={18} color={COLORS.muted} />
           <TextInput
             value={query}
@@ -690,25 +546,16 @@ export default function RepairShopScreen() {
         </View>
       </View>
 
-      {/* Filters */}
-      <View className="px-4 mt-3">
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={FILTERS as any}
-          keyExtractor={(i: any) => i.key}
-          ItemSeparatorComponent={() => <View className="w-3" />}
-          renderItem={({ item }) => (
-            <Chip
-              selected={filters.includes(item.key as FilterKey)}
-              icon={item.icon as any}
-              label={item.label}
-              onPress={() => toggleFilter(item.key as FilterKey)}
-            />
-          )}
-          contentContainerStyle={{ paddingVertical: 2 }}
-        />
-      </View>
+      {/* Reusable Filter Chips */}
+      <FilterChips
+        items={FILTERS}
+        selected={filters}
+        onToggle={toggleFilter}
+        containerStyle={{ paddingHorizontal: 16, marginTop: 12 }}
+        gap={12}
+        horizontal
+        accessibilityLabel="Service filters"
+      />
 
       {/* List */}
       <FlatList

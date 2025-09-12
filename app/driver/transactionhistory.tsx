@@ -352,6 +352,61 @@ function FiltersModal({
   );
 }
 
+/* ----------------------------- Quick Filter Menu ----------------------------- */
+/** Matches the anchored dropdown pattern used in requeststatus.tsx */
+function QuickFilterMenu({
+  visible,
+  onClose,
+  value,
+  onSelect,
+  onMore,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  value: PaymentMethod | "All";
+  onSelect: (v: PaymentMethod | "All") => void;
+  onMore: () => void; // open full FiltersModal
+}) {
+  const methodOptions: (PaymentMethod | "All")[] = ["All", "Cash", "GCash", "Card"];
+
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <Pressable className="flex-1" onPress={onClose} style={{ backgroundColor: "rgba(0,0,0,0.2)" }}>
+        <View className="absolute right-3 top-14 w-48 rounded-2xl bg-white p-1" style={cardShadow as any}>
+          {methodOptions.map((opt) => {
+            const active = value === opt;
+            return (
+              <Pressable
+                key={opt}
+                onPress={() => {
+                  onSelect(opt);
+                  onClose();
+                }}
+                className={`px-3 py-2 rounded-2xl ${active ? "bg-slate-100" : ""}`}
+              >
+                <Text className={`text-[14px] ${active ? "text-[#2563EB] font-semibold" : "text-slate-800"}`}>
+                  {opt === "All" ? "All methods" : opt}
+                </Text>
+              </Pressable>
+            );
+          })}
+          {/* Divider */}
+          <View className="my-1 h-px bg-slate-200" />
+          <Pressable
+            onPress={() => {
+              onClose();
+              onMore();
+            }}
+            className="px-3 py-2 rounded-2xl"
+          >
+            <Text className="text-[14px] text-slate-800">More filters…</Text>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
+
 /* ================================== Screen ================================= */
 export default function TransactionHistory() {
   const router = useRouter();
@@ -363,7 +418,9 @@ export default function TransactionHistory() {
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Menus
+  const [filtersOpen, setFiltersOpen] = useState(false); // full modal
+  const [quickOpen, setQuickOpen] = useState(false); // anchored dropdown like requeststatus.tsx
 
   // Data state
   const [items, setItems] = useState<Tx[]>([]);
@@ -435,56 +492,6 @@ export default function TransactionHistory() {
     const amt = filtered.reduce((sum, t) => (t.status === "completed" ? sum + t.amount : sum), 0);
     return { count: filtered.length, amount: amt };
   }, [filtered]);
-
-  /* ------------------------------ Toolbar UI ------------------------------- */
-  const FiltersToolbar = () => {
-    // Compact summary text for the single pill
-    const summary =
-      `${methodFilter === "All" ? "All methods" : methodFilter}` +
-      " • " +
-      (range === "All" ? "All time" : range === "7d" ? "Last 7d" : range === "30d" ? "Last 30d" : "This month") +
-      " • " +
-      `${sortKey === "date" ? "Date" : "Amount"} ${sortDir === "desc" ? "↓" : "↑"}`;
-
-    return (
-      <View className="px-4 pt-3 pb-2 bg-white">
-        {/* Totals bar */}
-        <View
-          className="mb-3 flex-row items-center justify-between rounded-2xl bg-slate-50 p-3"
-          style={cardShadow as any}
-        >
-          <View>
-            <Text className="text-[12px] text-slate-600">Transactions</Text>
-            <Text className="text-[16px] font-semibold text-slate-900">{totals.count}</Text>
-          </View>
-          <View className="items-end">
-            <Text className="text-[12px] text-slate-600">Total spent (completed)</Text>
-            <Text className="text-[16px] font-semibold text-slate-900">{peso(totals.amount)}</Text>
-          </View>
-        </View>
-
-        {/* Single Filters pill */}
-        <Pressable
-          onPress={() => setFiltersOpen(true)}
-          className="flex-row items-center justify-between rounded-xl border border-slate-300 bg-white px-3 py-2 active:opacity-90"
-          style={cardShadow as any}
-        >
-          <View className="flex-row items-center">
-            <View className="mr-2 rounded-full bg-blue-50 p-2">
-              <Ionicons name="filter" size={18} color={COLORS.primary} />
-            </View>
-            <View>
-              <Text className="text-[10px] leading-3 text-slate-500">Filters</Text>
-              <Text className="text-[13px] font-medium text-slate-800" numberOfLines={1}>
-                {summary}
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-down" size={16} color="#111827" />
-        </Pressable>
-      </View>
-    );
-  };
 
   /* --------------------------------- Item ---------------------------------- */
   const Item = ({ tx }: { tx: Tx }) => {
@@ -567,10 +574,29 @@ export default function TransactionHistory() {
         <View className="absolute inset-0 items-center justify-center">
           <Text className="text-lg font-semibold text-slate-900">Transaction history</Text>
         </View>
+
+        {/* Right: filter icon (opens anchored dropdown like requeststatus.tsx) */}
+        <Pressable onPress={() => setQuickOpen(true)} hitSlop={12} className="absolute right-4">
+          <Ionicons name="filter" size={22} color="#111827" />
+        </Pressable>
       </View>
 
-      {/* Filters & totals */}
-      <FiltersToolbar />
+      {/* Totals card (kept) */}
+      <View className="px-4 pt-3 pb-2 bg-white">
+        <View
+          className="mb-0.5 flex-row items-center justify-between rounded-2xl bg-slate-50 p-3"
+          style={cardShadow as any}
+        >
+          <View>
+            <Text className="text-[12px] text-slate-600">Transactions</Text>
+            <Text className="text-[16px] font-semibold text-slate-900">{totals.count}</Text>
+          </View>
+          <View className="items-end">
+            <Text className="text-[12px] text-slate-600">Total spent (completed)</Text>
+            <Text className="text-[16px] font-semibold text-slate-900">{peso(totals.amount)}</Text>
+          </View>
+        </View>
+      </View>
 
       {/* List */}
       <FlatList
@@ -587,7 +613,16 @@ export default function TransactionHistory() {
       {/* Loading overlay */}
       <LoadingOverlay visible={loading} message={loadingMsg} />
 
-      {/* Unified Filters Modal */}
+      {/* Quick method dropdown (like requeststatus.tsx) */}
+      <QuickFilterMenu
+        visible={quickOpen}
+        onClose={() => setQuickOpen(false)}
+        value={methodFilter}
+        onSelect={setMethodFilter}
+        onMore={() => setFiltersOpen(true)}
+      />
+
+      {/* Full filters modal */}
       <FiltersModal
         visible={filtersOpen}
         onClose={() => setFiltersOpen(false)}

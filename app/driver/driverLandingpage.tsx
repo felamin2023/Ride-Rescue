@@ -98,12 +98,11 @@ export default function DriverHome() {
   });
 
   return (
-    <SafeAreaView className="flex-1" style={{ backgroundColor: COLORS.bg }}>
-      {/* Fill the top safe-area so there’s no visible gap above the header */}
+    <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
+      {/* Keep status bar on brand color */}
       <StatusBar barStyle="light-content" backgroundColor={COLORS.brand} />
-      <View style={{ height: insets.top, backgroundColor: COLORS.brand }} />
 
-      {/* Drawer */}
+      {/* Drawer (overlay) */}
       <SideDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -112,25 +111,27 @@ export default function DriverHome() {
         onLogout={() => console.log("logout")}
       />
 
-      {/* Header */}
-      <View className="flex-row items-center justify-between px-6 py-3" style={{ backgroundColor: COLORS.brand }}>
-        <View className="flex-row items-center gap-3">
-          <Image
-            source={require("../../assets/images/logo2.png")}
-            className="w-12 h-12"
-            resizeMode="contain"
-          />
-          <Text className="text-white text-[20px] font-semibold">RideRescue</Text>
-        </View>
+      {/* Header wrapped in TOP-only SafeAreaView (no manual spacer) */}
+      <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.brand }}>
+        <View className="flex-row items-center justify-between px-6 py-3">
+          <View className="flex-row items-center gap-3">
+            <Image
+              source={require("../../assets/images/logo2.png")}
+              className="w-12 h-12"
+              resizeMode="contain"
+            />
+            <Text className="text-white text-[20px] font-semibold">RideRescue</Text>
+          </View>
 
-        <Pressable
-          className="p-2 rounded-lg active:opacity-80"
-          android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-          onPress={() => setDrawerOpen(true)}
-        >
-          <Ionicons name="menu" size={24} color="#fff" />
-        </Pressable>
-      </View>
+          <Pressable
+            className="p-2 rounded-lg active:opacity-80"
+            android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+            onPress={() => setDrawerOpen(true)}
+          >
+            <Ionicons name="menu" size={24} color="#fff" />
+          </Pressable>
+        </View>
+      </SafeAreaView>
 
       {/* ===== Scrollable content ===== */}
       <ScrollView
@@ -150,11 +151,10 @@ export default function DriverHome() {
             </View>
             <View className="flex-1">
               <Text className="text-[12px] text-slate-500">Current location</Text>
-              <Text className="text-[13px] font-semibold text-slate-900" numberOfLines={1}>
-                4th Mound road, California
-              </Text>
+              <Text className="text-[13px] font-semibold text-slate-900">
+              4th Mound Road, California
+            </Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
           </View>
         </View>
 
@@ -189,7 +189,7 @@ export default function DriverHome() {
                       ringStyle(ring3),
                     ]}
                   />
-                  <Link href="/driver/sos" asChild>
+                  <Link href="/driver/emergencyrequest" asChild>
                     <Pressable
                       android_ripple={{ color: "rgba(0,0,0,0.08)" }}
                       className="items-center justify-center rounded-full"
@@ -255,7 +255,7 @@ export default function DriverHome() {
 
       {/* Other Services Modal */}
       <OtherServicesModal visible={otherVisible} onClose={() => setOtherVisible(false)} />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -329,8 +329,7 @@ function OtherServicesModal({
     { icon: "medkit-outline", label: "Hospital", href: "/driver/hospital" },
     { icon: "shield-outline", label: "Police Station", href: "/driver/police" },
     { icon: "flame-outline", label: "Fire Station", href: "/driver/firestation" },
-    // If your file is named MDRRMO.tsx, expo-router path is /driver/MDRRMO
-    { icon: "megaphone-outline", label: "MDRRMO", href: "/driver/MDRRMO" },
+    { icon: "megaphone-outline", label: "MDRRMO", href: "/driver/mdrrmo" },
   ];
 
   const Item = ({

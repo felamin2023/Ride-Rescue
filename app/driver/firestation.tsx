@@ -5,18 +5,19 @@ import {
   Text,
   TextInput,
   FlatList,
-  TouchableOpacity,
   Pressable,
   Image as RNImage,
   Linking,
   Modal,
   Platform,
+  TouchableOpacity,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import LoadingScreen from "../../components/LoadingScreen";
+import FilterChips, { type FilterItem } from "../../components/FilterChips";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -32,23 +33,13 @@ const COLORS = {
 
 /** Softer, minimal shadow for cards & sheets */
 const SOFT_SHADOW = Platform.select({
-  ios: {
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-  },
+  ios: { shadowColor: "#0F172A", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
   android: { elevation: 1 },
 });
 
 /** Very light shadow for tiny UI bits */
 const MICRO_SHADOW = Platform.select({
-  ios: {
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-  },
+  ios: { shadowColor: "#0F172A", shadowOpacity: 0.03, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
   android: { elevation: 1 },
 });
 
@@ -109,19 +100,18 @@ const MOCK: Facility[] = [
   },
 ];
 
+/* --------------------------------- Filters --------------------------------- */
+const FILTERS: FilterItem[] = [
+  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },
+  { key: "hospital", icon: "medical-outline",   label: "Hospital" },
+  { key: "police",   icon: "shield-outline",    label: "Police" },
+  { key: "gas",      icon: "flash-outline",     label: "Gas" },
+  { key: "repair",   icon: "construct-outline", label: "Repair" },
+  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
+];
+
 /* --------------------------------- Small UI -------------------------------- */
-const FILTERS = [
-  { key: "fire", icon: "flame-outline", label: "Fire" },
-  { key: "hospital", icon: "medical-outline", label: "Hospital" },
-  { key: "police", icon: "shield-outline", label: "Police" },
-  { key: "gas", icon: "flash-outline", label: "Gas" },
-  { key: "repair", icon: "construct-outline", label: "Repair" },
-  // Keep the vulcanize pill 💅
-  { key: "vulcanize", icon: "trail-sign-outline", label: "Vulcanize" },
-] as const;
-
-type FilterKey = (typeof FILTERS)[number]["key"];
-
 function Stars({ rating = 0 }: { rating?: number }) {
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
@@ -130,44 +120,10 @@ function Stars({ rating = 0 }: { rating?: number }) {
       {Array.from({ length: 5 }).map((_, i) => {
         const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
         return (
-          <Ionicons
-            key={i}
-            name={name as any}
-            size={14}
-            color={"#F59E0B"}
-            style={{ marginRight: i === 4 ? 0 : 2 }}
-          />
+          <Ionicons key={i} name={name as any} size={14} color={"#F59E0B"} style={{ marginRight: i === 4 ? 0 : 2 }} />
         );
       })}
     </View>
-  );
-}
-
-function Chip({
-  selected,
-  icon,
-  label,
-  onPress,
-}: {
-  selected: boolean;
-  icon: any;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-        selected ? "bg-[#EEF2FF] border-[#C7D2FE]" : "bg-white border-gray-200"
-      }`}
-      style={MICRO_SHADOW}
-    >
-      <Ionicons name={icon} size={16} color={selected ? COLORS.primary : COLORS.sub} />
-      <Text className={`text-[13px] font-semibold ${selected ? "text-[#1E3A8A]" : "text-slate-600"}`}>
-        {label}
-      </Text>
-    </TouchableOpacity>
   );
 }
 
@@ -194,17 +150,10 @@ function PrimaryButton({
           : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
         MICRO_SHADOW,
       ]}
-      {...(Platform.OS === "android"
-        ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } }
-        : {})}
+      {...(Platform.OS === "android" ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } } : {})}
     >
       {icon ? (
-        <Ionicons
-          name={icon}
-          size={16}
-          color={isPrimary ? "#FFFFFF" : COLORS.text}
-          style={{ marginRight: 6 }}
-        />
+        <Ionicons name={icon} size={16} color={isPrimary ? "#FFFFFF" : COLORS.text} style={{ marginRight: 6 }} />
       ) : null}
       <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>{label}</Text>
     </TouchableOpacity>
@@ -333,11 +282,7 @@ function DetailsModal({
   if (!facility) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable
-        className="flex-1"
-        style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }}
-        onPress={onClose}
-      >
+      <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, SOFT_SHADOW]}>
             <View className="flex-row items-center gap-3">
@@ -404,12 +349,7 @@ function DetailsModal({
               </View>
               <View style={{ width: 10 }} />
               <View className="flex-1">
-                <PrimaryButton
-                  label="Open in Maps"
-                  icon="navigate-outline"
-                  variant="secondary"
-                  onPress={() => onOpenMaps(facility)}
-                />
+                <PrimaryButton label="Open in Maps" icon="navigate-outline" variant="secondary" onPress={() => onOpenMaps(facility)} />
               </View>
             </View>
 
@@ -444,11 +384,7 @@ function FacilityCard({
   onPressCard: (s: Facility) => void;
 }) {
   return (
-    <Pressable
-      onPress={() => onPressCard(facility)}
-      className="mx-4 my-2 rounded-2xl bg-white p-4"
-      style={[{ borderColor: COLORS.border, borderWidth: 1 }, SOFT_SHADOW]}
-    >
+    <Pressable onPress={() => onPressCard(facility)} className="mx-4 my-2 rounded-2xl bg-white p-4" style={[{ borderColor: COLORS.border, borderWidth: 1 }, SOFT_SHADOW]}>
       <View className="flex-row items-start gap-3">
         <View className="overflow-hidden rounded-xl" style={{ width: 64, height: 64, backgroundColor: "#F1F5F9" }}>
           {facility.avatar ? (
@@ -481,14 +417,8 @@ function FacilityCard({
             )}
           </View>
 
-          <Text className="mt-2 text-[13px] text-slate-700" numberOfLines={2}>
-            {facility.address1}
-          </Text>
-          {facility.address2 ? (
-            <Text className="text-[12px] text-slate-500" numberOfLines={1}>
-              {facility.address2}
-            </Text>
-          ) : null}
+          <Text className="mt-2 text-[13px] text-slate-700" numberOfLines={2}>{facility.address1}</Text>
+          {facility.address2 ? <Text className="text-[12px] text-slate-500" numberOfLines={1}>{facility.address2}</Text> : null}
 
           <View className="mt-3 flex-row items-center gap-2">
             <View className="flex-1">
@@ -509,16 +439,16 @@ function FacilityCard({
 export default function FireStationScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<FilterKey[]>(["fire"]);
+  const [filters, setFilters] = useState<string[]>(["fire"]); // use string[] for FilterChips
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
 
-  // Loading overlay (proper LoadingScreen usage)
+  // Optional loading overlay message
   const [busy, setBusy] = useState(false);
   const [busyMsg, setBusyMsg] = useState<string | undefined>(undefined);
 
-  const toggleFilter = (k: FilterKey) =>
+  const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
   const data = useMemo(() => {
@@ -609,25 +539,16 @@ export default function FireStationScreen() {
         </View>
       </View>
 
-      {/* Filter chips (keeps Vulcanize chip, soft tones) */}
-      <View className="px-4 mt-3">
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={FILTERS as any}
-          keyExtractor={(i: any) => i.key}
-          ItemSeparatorComponent={() => <View className="w-3" />}
-          renderItem={({ item }) => (
-            <Chip
-              selected={filters.includes(item.key as FilterKey)}
-              icon={item.icon as any}
-              label={item.label}
-              onPress={() => toggleFilter(item.key as FilterKey)}
-            />
-          )}
-          contentContainerStyle={{ paddingVertical: 2 }}
-        />
-      </View>
+      {/* Reusable Filter Chips */}
+      <FilterChips
+        items={FILTERS}
+        selected={filters}
+        onToggle={toggleFilter}
+        containerStyle={{ paddingHorizontal: 16, marginTop: 12 }}
+        gap={12}
+        horizontal
+        accessibilityLabel="Facility filters"
+      />
 
       {/* List */}
       <FlatList
@@ -649,10 +570,10 @@ export default function FireStationScreen() {
       {/* Bottom sheet actions */}
       <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} onCall={callFacility} />
 
-      {/* Optional details modal (tap card to open if you prefer) */}
+      {/* Optional details modal */}
       <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callFacility} />
 
-      {/* Loading overlay */}
+      {/* Loading overlay (kept as-is to match your LoadingScreen API) */}
       <LoadingScreen visible={busy} message={busyMsg} />
     </View>
   );

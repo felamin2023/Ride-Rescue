@@ -1,12 +1,6 @@
 // app/(driver)/message.tsx
 import React from "react";
-import {
-  View,
-  Text,
-  FlatList,
-  Image,
-  Pressable,
-} from "react-native";
+import { View, Text, FlatList, Image, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -53,7 +47,12 @@ export default function MessageList() {
   const renderItem = ({ item }: { item: Chat }) => (
     <Pressable
       className="flex-row items-center px-5 py-4 active:opacity-70"
-      onPress={() => router.push(`/chat/${item.id}`)}
+      onPress={() =>
+        router.push({
+          pathname: "/driver/chat/[threadId]",
+          params: { threadId: item.id, name: item.name, avatar: item.avatar },
+        })
+      }
     >
       <View className="relative">
         <Image source={{ uri: item.avatar }} className="h-12 w-12 rounded-full" />
@@ -68,12 +67,7 @@ export default function MessageList() {
             {item.name}
           </Text>
           {item.verified ? (
-            <Ionicons
-              name="checkmark-circle"
-              size={16}
-              color="#2563EB"
-              style={{ marginLeft: 6 }}
-            />
+            <Ionicons name="checkmark-circle" size={16} color="#2563EB" style={{ marginLeft: 6 }} />
           ) : null}
           <Text className="ml-auto text-[12px] text-slate-400">{item.time}</Text>
         </View>
@@ -88,16 +82,9 @@ export default function MessageList() {
     <SafeAreaView className="flex-1 bg-white">
       {/* Header — back button left, title centered */}
       <View className="relative h-14 flex-row items-center border-b border-slate-100 bg-white">
-        {/* Back Button */}
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          className="absolute left-4"
-        >
+        <Pressable onPress={() => router.back()} hitSlop={12} className="absolute left-4">
           <Ionicons name="arrow-back" size={24} color="#111827" />
         </Pressable>
-
-        {/* Centered Title */}
         <View className="absolute inset-0 items-center justify-center">
           <Text className="text-lg font-semibold text-slate-900">Messages</Text>
         </View>

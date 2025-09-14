@@ -519,7 +519,7 @@ export default function RequestScreen() {
           setDrawerOpen(false);
           // If you need to sign out from Supabase, do it here first:
           // await supabase.auth.signOut();
-          router.replace("/driverLandingpage"); // ← route to Driver Landing (group folders are hidden)
+          router.replace("/(auth)/login"); // ← route to Driver Landing (group folders are hidden)
         }}
       />
 
@@ -584,7 +584,7 @@ export default function RequestScreen() {
       <CenterConfirm
         visible={!!confirmDecline}
         title="Decline this request?"
-        message="The request will be marked as Canceled."
+        message="This request will not be shown in your requests list."
         onCancel={() => setConfirmDecline(null)}
         onConfirm={doDecline}
         confirmLabel="Decline Request"

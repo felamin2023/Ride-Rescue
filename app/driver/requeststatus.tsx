@@ -606,7 +606,12 @@ export default function RequestStatus() {
   };
 
   const renderItem = ({ item }: { item: RequestItem }) => {
-    const showPay = item.status === "TO_PAY" || (item.status === "COMPLETED" && (item.amountDue ?? 0) > 0);
+    const showPay =
+      item.status === "TO_PAY" ||
+      (item.status === "COMPLETED" && (item.amountDue ?? 0) > 0);
+
+    // ✅ Only WAITING and ACCEPTED can cancel
+    const canCancel = item.status === "WAITING" || item.status === "ACCEPTED";
 
     return (
       <View className="bg-white rounded-2xl p-4 mb-4 border border-slate-200 relative" style={cardShadow}>
@@ -672,26 +677,30 @@ export default function RequestStatus() {
           <Text className="text-[12px] text-slate-400">Sent {item.sentWhen}</Text>
         </View>
 
-        {/* CTA row — soft red for cancel, blue for pay */}
-        <View className="mt-4 flex-row gap-3">
-          <Pressable
-            onPress={() => openCancelConfirm(item)}
-            className="flex-1 rounded-2xl py-2.5 items-center"
-            style={{ backgroundColor: "#FEE2E2" }} // soft red
-          >
-            <Text className="text-[14px] text-[#7F1D1D]">Cancel Request</Text>
-          </Pressable>
+        {/* CTA row — show only when there's something to do */}
+        {(canCancel || showPay) && (
+          <View className="mt-4 flex-row gap-3">
+            {canCancel && (
+              <Pressable
+                onPress={() => openCancelConfirm(item)}
+                className="flex-1 rounded-2xl py-2.5 items-center"
+                style={{ backgroundColor: "#FEE2E2" }} // soft red
+              >
+                <Text className="text-[14px] text-[#7F1D1D]">Cancel Request</Text>
+              </Pressable>
+            )}
 
-          {showPay && (
-            <Pressable
-              onPress={() => openPaySheet(item)}
-              className="flex-1 rounded-2xl py-2.5 items-center"
-              style={{ backgroundColor: "#2563EB" }} // blue
-            >
-              <Text className="text-[14px] text-white font-semibold">Complete & Pay</Text>
-            </Pressable>
-          )}
-        </View>
+            {showPay && (
+              <Pressable
+                onPress={() => openPaySheet(item)}
+                className="flex-1 rounded-2xl py-2.5 items-center"
+                style={{ backgroundColor: "#2563EB" }} // blue
+              >
+                <Text className="text-[14px] text-white font-semibold">Complete & Pay</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
       </View>
     );
   };
@@ -759,7 +768,7 @@ export default function RequestStatus() {
         onConfirm={doCancel}
       />
 
-      {/* Final payment confirmation (bottom-style kept the same for payment flow) */}
+      {/* Final payment confirmation (bottom) */}
       <Modal visible={finalConfirmVisible} transparent animationType="fade" onRequestClose={() => setFinalConfirmVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} className="flex-1">
           <Pressable className="flex-1 bg-black/30" onPress={() => setFinalConfirmVisible(false)} />

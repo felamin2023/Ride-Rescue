@@ -118,7 +118,7 @@ const FILTERS: FilterItem[] = [
   { key: "police",   icon: "shield-outline",    label: "Police" },
   { key: "gas",      icon: "flash-outline",     label: "Gas" },
   { key: "repair",   icon: "construct-outline", label: "Repair" },
-  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
   { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
 ];
 
@@ -344,15 +344,7 @@ function DetailsModal({
                       {station.category}
                     </Text>
                   </View>
-                  <Text className="text-slate-300">•</Text>
-                  <Stars rating={station.rating ?? 0} />
-                  <Text className="text-[12px] text-slate-500">{(station.rating ?? 0).toFixed(1)}</Text>
-                  {typeof station.distanceKm === "number" && (
-                    <>
-                      <Text className="text-slate-300">•</Text>
-                      <Text className="text-[12px] text-slate-500">{station.distanceKm.toFixed(1)} km away</Text>
-                    </>
-                  )}
+                  {/* rating, distance */}
                 </View>
               </View>
             </View>
@@ -456,17 +448,6 @@ function StationCard({
             </View>
           </View>
 
-          <View className="mt-1 flex-row items-center gap-2">
-            <Stars rating={station.rating ?? 0} />
-            <Text className="text-[12px] text-slate-500">{(station.rating ?? 0).toFixed(1)}</Text>
-            {typeof station.distanceKm === "number" && (
-              <>
-                <Text className="text-slate-300">•</Text>
-                <Text className="text-[12px] text-slate-500">{station.distanceKm.toFixed(1)} km</Text>
-              </>
-            )}
-          </View>
-
           <Text className="mt-2 text-[13px] text-slate-700" numberOfLines={2}>
             {station.address1}
           </Text>
@@ -495,11 +476,14 @@ function StationCard({
 export default function PoliceScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<string[]>(["police"]); // use string[] for FilterChips
+  const [filters, setFilters] = useState<string[]>(["police"]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
+
+  // Busy overlay + message (FIX for LoadingScreen required prop)
   const [busy, setBusy] = useState(false);
+  const [busyMsg, setBusyMsg] = useState<string | undefined>(undefined);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
@@ -519,6 +503,7 @@ export default function PoliceScreen() {
   }, [filters, query]);
 
   const openMaps = async (s: Station) => {
+    setBusyMsg("Opening Google Maps…");
     setBusy(true);
     try {
       if (s.lat && s.lng) {
@@ -530,17 +515,20 @@ export default function PoliceScreen() {
       }
     } finally {
       setBusy(false);
+      setBusyMsg(undefined);
     }
   };
 
   const callStation = async (s: Station) => {
     if (!s.phone) return;
     const telUrl = `tel:${s.phone}`;
+    setBusyMsg("Calling station…");
     setBusy(true);
     try {
       await Linking.openURL(telUrl);
     } finally {
       setBusy(false);
+      setBusyMsg(undefined);
     }
   };
 
@@ -562,7 +550,7 @@ export default function PoliceScreen() {
           <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
             <Ionicons name="arrow-back" size={22} color={COLORS.text} />
           </Pressable>
-        <Text className="text-2xl font-extrabold text-slate-900">Police Stations</Text>
+          <Text className="text-2xl font-extrabold text-slate-900">Police Stations</Text>
           <View style={{ width: 36 }} />
         </View>
       </SafeAreaView>
@@ -622,8 +610,8 @@ export default function PoliceScreen() {
       {/* Optional details modal */}
       <DetailsModal visible={detailsOpen} station={selectedStation} onClose={closeDetails} onOpenMaps={openMaps} onCall={callStation} />
 
-      {/* Loading overlay */}
-      {busy && <LoadingScreen />}
+      {/* Loading overlay — FIX: pass required `visible` prop */}
+      <LoadingScreen visible={busy} message={busyMsg} variant="spinner" />
     </View>
   );
 }

@@ -117,7 +117,7 @@ const FILTERS: FilterItem[] = [
   { key: "police",   icon: "shield-outline",    label: "Police" },
   { key: "gas",      icon: "flash-outline",     label: "Gas" },
   { key: "repair",   icon: "construct-outline", label: "Repair" },
-  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
   { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
 ];
 
@@ -315,7 +315,7 @@ function DetailsModal({
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, SOFT_SHADOW]}>
             <View className="flex-row items-center gap-3">
-              <View className="overflow-hidden rounded-xl" style={{ width: 56, height: 56, backgroundColor: "#F1F5F9" }}>
+              <View className="overflow-hidden rounded-xl" style={{ width: 56, height: 56, backgroundColor: "#F1F5N9".replace("N","9") }}>
                 {facility.avatar ? (
                   <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
                 ) : (
@@ -485,11 +485,14 @@ function FacilityCard({
 export default function HospitalScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<string[]>(["hospital"]); // string[] to work with FilterChips
+  const [filters, setFilters] = useState<string[]>(["hospital"]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
+
+  // Busy overlay + message (fix: LoadingScreen requires `visible`)
   const [busy, setBusy] = useState(false);
+  const [busyMsg, setBusyMsg] = useState<string | undefined>(undefined);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
@@ -509,6 +512,7 @@ export default function HospitalScreen() {
   }, [filters, query]);
 
   const openMaps = async (s: Facility) => {
+    setBusyMsg("Opening Google Maps…");
     setBusy(true);
     try {
       if (s.lat && s.lng) {
@@ -520,17 +524,20 @@ export default function HospitalScreen() {
       }
     } finally {
       setBusy(false);
+      setBusyMsg(undefined);
     }
   };
 
   const callFacility = async (s: Facility) => {
     if (!s.phone) return;
     const telUrl = `tel:${s.phone}`;
+    setBusyMsg("Calling hospital…");
     setBusy(true);
     try {
       await Linking.openURL(telUrl);
     } finally {
       setBusy(false);
+      setBusyMsg(undefined);
     }
   };
 
@@ -611,8 +618,8 @@ export default function HospitalScreen() {
       {/* Optional details modal */}
       <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callFacility} />
 
-      {/* Loading overlay */}
-      {busy && <LoadingScreen />}
+      {/* Loading overlay — FIX: pass required `visible` prop */}
+      <LoadingScreen visible={busy} message={busyMsg} variant="spinner" />
     </View>
   );
 }

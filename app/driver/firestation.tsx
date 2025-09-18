@@ -1,5 +1,5 @@
 // app/(driver)/firestation.tsx
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Modal,
   Platform,
   TouchableOpacity,
+  Animated,
+  Easing,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -107,7 +109,7 @@ const FILTERS: FilterItem[] = [
   { key: "police",   icon: "shield-outline",    label: "Police" },
   { key: "gas",      icon: "flash-outline",     label: "Gas" },
   { key: "repair",   icon: "construct-outline", label: "Repair" },
-  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
   { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
 ];
 
@@ -127,24 +129,33 @@ function Stars({ rating = 0 }: { rating?: number }) {
   );
 }
 
+// Added size prop to match compact bottom sheets used elsewhere
 function PrimaryButton({
   label,
   onPress,
   variant = "primary",
   icon,
+  size = "md", // "sm" | "md"
 }: {
   label: string;
   onPress: () => void;
   variant?: "primary" | "secondary";
   icon?: any;
+  size?: "sm" | "md";
 }) {
   const isPrimary = variant === "primary";
+  const sizeStyles =
+    size === "sm"
+      ? { minHeight: 40, paddingVertical: Platform.OS === "ios" ? 8 : 6 }
+      : { minHeight: 48 };
+
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.9}
-      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${isPrimary ? "" : "border"}`}
+      className={`flex-row items-center justify-center rounded-full px-4 ${isPrimary ? "" : "border"}`}
       style={[
+        sizeStyles,
         isPrimary
           ? { backgroundColor: COLORS.primary }
           : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
@@ -160,7 +171,7 @@ function PrimaryButton({
   );
 }
 
-/* ----------------------- Bottom Sheet (flush to bottom) ---------------------- */
+/* ----------------------- Bottom Sheet (animated pop-up) ---------------------- */
 function QuickActions({
   visible,
   onClose,
@@ -175,19 +186,77 @@ function QuickActions({
   onCall: (s: Facility) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const mounted = useRef(false);
+  const [portalOpen, setPortalOpen] = useState(false);
+
+  // Anim values
+  const slide = useRef(new Animated.Value(1)).current;     // 1 = hidden, 0 = shown
+  const backdrop = useRef(new Animated.Value(0)).current;  // 0 = transparent, 1 = visible
+
+  // Handle mount / unmount with animation
+  useEffect(() => {
+    if (visible) {
+      setPortalOpen(true);
+      mounted.current = true;
+      Animated.parallel([
+        Animated.timing(backdrop, { toValue: 1, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.spring(slide, { toValue: 0, damping: 16, stiffness: 180, mass: 0.9, useNativeDriver: true }),
+      ]).start();
+    } else if (mounted.current) {
+      Animated.parallel([
+        Animated.timing(backdrop, { toValue: 0, duration: 180, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(slide, { toValue: 1, duration: 220, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]).start(({ finished }) => {
+        if (finished) setPortalOpen(false);
+      });
+    }
+  }, [visible]);
+
+  // Close triggered by user (tap backdrop / X / action)
+  const requestClose = () => {
+    Animated.parallel([
+      Animated.timing(backdrop, { toValue: 0, duration: 180, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(slide, { toValue: 1, duration: 220, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setPortalOpen(false);
+        onClose(); // tell parent to flip `visible` false
+      }
+    });
+  };
+
   if (!facility) return null;
 
+  const translateY = slide.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 360 + insets.bottom], // slides up from off-screen
+  });
+  const backdropOpacity = backdrop.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] });
+
   return (
-    <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
-        <Pressable style={{ flex: 1 }} onPress={onClose} />
+    <Modal transparent statusBarTranslucent animationType="none" visible={portalOpen} onRequestClose={requestClose}>
+      {/* Backdrop */}
+      <Animated.View
+        style={{ flex: 1, backgroundColor: "black", opacity: backdropOpacity }}
+      >
+        <Pressable style={{ flex: 1 }} onPress={requestClose} />
+      </Animated.View>
+
+      {/* Sheet */}
+      <Animated.View
+        style={[
+          {
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            transform: [{ translateY }],
+          },
+        ]}
+      >
         <View
           style={[
             {
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
               backgroundColor: "#FFFFFF",
               borderTopLeftRadius: 24,
               borderTopRightRadius: 24,
@@ -221,46 +290,51 @@ function QuickActions({
                 {facility.address1}
               </Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close">
+            <Pressable onPress={requestClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close">
               <Ionicons name="close" size={20} color={COLORS.text} />
             </Pressable>
           </View>
 
           <View className="h-[1px] bg-slate-200" />
 
+          {/* Compact actions for consistency */}
           <View className="mt-3 gap-3">
             <PrimaryButton
               label="Call Fire Station"
               icon="call-outline"
+              size="sm"
               onPress={() => {
                 onCall(facility);
-                onClose();
+                requestClose();
               }}
             />
             <PrimaryButton
               label="Open in Google Maps"
               variant="secondary"
               icon="navigate-outline"
+              size="sm"
               onPress={() => {
                 onOpenMaps(facility);
-                onClose();
+                requestClose();
               }}
             />
             <PrimaryButton
               label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
+              size="sm"
               onPress={() => {
                 const text = facility.plusCode || facility.address1 || facility.name;
                 Clipboard.setStringAsync(text);
-                onClose();
+                requestClose();
               }}
             />
           </View>
         </View>
 
-        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }} />
-      </View>
+        {/* Safe-area filler to keep sheet flush */}
+        <View pointerEvents="none" style={{ height: insets.bottom, backgroundColor: "#FFFFFF" }} />
+      </Animated.View>
     </Modal>
   );
 }
@@ -439,7 +513,7 @@ function FacilityCard({
 export default function FireStationScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<string[]>(["fire"]); // use string[] for FilterChips
+  const [filters, setFilters] = useState<string[]>(["fire"]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
@@ -567,13 +641,13 @@ export default function FireStationScreen() {
         }
       />
 
-      {/* Bottom sheet actions */}
+      {/* Bottom sheet actions (animated) */}
       <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} onCall={callFacility} />
 
       {/* Optional details modal */}
       <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callFacility} />
 
-      {/* Loading overlay (kept as-is to match your LoadingScreen API) */}
+      {/* Loading overlay */}
       <LoadingScreen visible={busy} message={busyMsg} />
     </View>
   );

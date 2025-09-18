@@ -117,7 +117,7 @@ const FILTERS: FilterItem[] = [
   { key: "police",   icon: "shield-outline",    label: "Police" },
   { key: "gas",      icon: "flash-outline",     label: "Gas" },
   { key: "repair",   icon: "construct-outline", label: "Repair" },
-  { key: "fire",      icon: "flame-outline",        label: "Fire Station" },
+  { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
   { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
 ];
 
@@ -143,29 +143,41 @@ function Stars({ rating = 0 }: { rating?: number }) {
   );
 }
 
-/** Button supports single- or multi-line labels via `lines` */
+/** Button supports single-/multi-line labels and size variants via `lines` & `size` */
 function PrimaryButton({
   label,
   onPress,
   variant = "primary",
   icon,
   lines = 1,
+  size = "md", // NEW: "sm" | "md"
 }: {
   label: string;
   onPress: () => void;
   variant?: "primary" | "secondary";
   icon?: any;
   lines?: 1 | 2;
+  size?: "sm" | "md";
 }) {
   const isPrimary = variant === "primary";
+
+  // sizes:
+  // sm → tighter like Vulcanize bottom sheet
+  // md → current default
+  const sizeStyles =
+    size === "sm"
+      ? { minHeight: 40, paddingVertical: Platform.OS === "ios" ? 8 : 6 }
+      : lines > 1
+      ? { minHeight: 56, paddingVertical: 8 }
+      : { minHeight: 48 };
+
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.9}
       className={`flex-row items-center justify-center rounded-full px-4 ${isPrimary ? "" : "border"}`}
       style={[
-        { minHeight: 48 },
-        lines > 1 ? { minHeight: 56, paddingVertical: 8 } : null,
+        sizeStyles,
         isPrimary
           ? { backgroundColor: COLORS.primary }
           : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
@@ -265,10 +277,12 @@ function QuickActions({
 
           <View className="h-[1px] bg-slate-200" />
 
+          {/* compact actions like Vulcanize */}
           <View className="mt-3 gap-3">
             <PrimaryButton
               label="Call MDRRMO"
               icon="call-outline"
+              size="sm" // compact
               onPress={() => {
                 onCall(facility);
                 onClose();
@@ -277,6 +291,7 @@ function QuickActions({
             <PrimaryButton
               label="Send SMS"
               icon="chatbubble-ellipses-outline"
+              size="sm" // compact
               onPress={() => {
                 onMessage(facility);
                 onClose();
@@ -286,6 +301,7 @@ function QuickActions({
               label="Open in Google Maps"
               variant="secondary"
               icon="navigate-outline"
+              size="sm" // compact
               onPress={() => {
                 onOpenMaps(facility);
                 onClose();
@@ -295,6 +311,7 @@ function QuickActions({
               label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
+              size="sm" // compact
               onPress={() => {
                 const text = facility.plusCode || facility.address1 || facility.name;
                 Clipboard.setStringAsync(text);
@@ -681,7 +698,7 @@ export default function MDRRMOScreen() {
         onMessage={messageFacility}
       />
 
-      {/* Loading overlay (fixed: pass visible prop) */}
+      {/* Loading overlay */}
       <LoadingScreen visible={busy} message="Please wait…" variant="dots" />
     </View>
   );

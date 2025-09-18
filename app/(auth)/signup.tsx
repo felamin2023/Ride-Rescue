@@ -1,6 +1,8 @@
 // app/(auth)/signup.tsx
+import { router } from "expo-router";
+import * as Crypto from "expo-crypto";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   Modal,
   Pressable,
@@ -21,6 +23,10 @@ import CheckboxRow from "../../components/CheckboxRow";
 import DayCheck from "../../components/DayCheck";
 import Section from "../../components/Section";
 import LoadingScreen from "../../components/LoadingScreen";
+import { supabase } from "../../utils/supabase";
+import NetInfo from "@react-native-community/netinfo";
+
+// internet
 
 /* ----------------------------- Data sources ----------------------------- */
 const SHOP_TYPE_OPTIONS = [
@@ -78,6 +84,7 @@ function Select({
   options,
   onSelect,
   error,
+  disabled, // NEW
 }: {
   label: string;
   value: string | null;
@@ -87,6 +94,7 @@ function Select({
     | ReadonlyArray<{ label: string; value: string }>;
   onSelect: (val: string) => void;
   error?: string;
+  disabled?: boolean; // NEW
 }) {
   const [open, setOpen] = useState(false);
   const normalized = options.map((o) =>
@@ -98,10 +106,11 @@ function Select({
   const borderCls = error ? "border-red-400" : "border-gray-300";
 
   return (
-    <View className="gap-1.5">
+    <View className="gap-1.5" style={disabled ? { opacity: 0.5 } : undefined}>
       <Text className="ml-1 text-xs text-gray-600">{label}</Text>
 
       <Pressable
+        disabled={disabled}
         onPress={() => setOpen(true)}
         android_ripple={{ color: "#e5e7eb" }}
         className={`flex-row items-center justify-between rounded-xl ${borderCls} bg-[#F7F8FA] px-3 py-3 border`}
@@ -114,7 +123,9 @@ function Select({
         </Text>
         <Ionicons name="chevron-down" size={18} />
       </Pressable>
-      {error ? <Text className="text-xs text-red-500 ml-1">{error}</Text> : null}
+      {error ? (
+        <Text className="text-xs text-red-500 ml-1">{error}</Text>
+      ) : null}
 
       <Modal visible={open} transparent animationType="fade">
         <Pressable
@@ -192,6 +203,19 @@ function RoleRadio({
   );
 }
 
+// Build a readable address from reverse geocode data
+function buildAddressFromPlace(p: Location.LocationGeocodedAddress) {
+  const parts = [
+    p.name, // house / place name
+    p.street, // street
+    p.subregion || p.city, // city/municipality
+    p.region, // province/state
+    p.postalCode,
+    p.country,
+  ];
+  return parts.filter(Boolean).join(", ");
+}
+
 function FieldRow({
   icon,
   placeholder,
@@ -199,8 +223,10 @@ function FieldRow({
   onChangeText,
   keyboardType,
   secureTextEntry,
-  toggleableSecure, // NEW: enable eye/eye-off toggle
+  toggleableSecure,
   error,
+  editable = true,
+  onBlur,
 }: {
   icon: any;
   placeholder: string;
@@ -210,14 +236,21 @@ function FieldRow({
   secureTextEntry?: boolean;
   toggleableSecure?: boolean;
   error?: string;
+  editable?: boolean;
+  onBlur?: () => void;
 }) {
   const [show, setShow] = React.useState(false);
   const borderCls = error ? "border-red-400" : "border-gray-300";
-  const isSecure = toggleableSecure ? !show && !!secureTextEntry : !!secureTextEntry;
+  const isSecure = toggleableSecure
+    ? !show && !!secureTextEntry
+    : !!secureTextEntry;
 
   return (
     <View className="mb-3">
-      <View className={`flex-row items-center rounded-xl border ${borderCls} bg-white px-3`}>
+      <View
+        className={`flex-row items-center rounded-xl border ${borderCls} bg-white px-3`}
+        style={editable === false ? { opacity: 0.5 } : undefined}
+      >
         <Ionicons name={icon} size={18} style={{ marginRight: 8 }} />
         <TextInput
           value={value}
@@ -228,6 +261,8 @@ function FieldRow({
           keyboardType={keyboardType}
           secureTextEntry={isSecure}
           autoCapitalize="none"
+          editable={editable}
+          onBlur={onBlur}
         />
         {toggleableSecure ? (
           <Pressable
@@ -236,11 +271,16 @@ function FieldRow({
             accessibilityLabel={show ? "Hide password" : "Show password"}
             className="pl-2 py-2"
           >
-            <Ionicons name={show ? "eye-off-outline" : "eye-outline"} size={18} />
+            <Ionicons
+              name={show ? "eye-off-outline" : "eye-outline"}
+              size={18}
+            />
           </Pressable>
         ) : null}
       </View>
-      {error ? <Text className="mt-1 ml-1 text-xs text-red-500">{error}</Text> : null}
+      {error ? (
+        <Text className="mt-1 ml-1 text-xs text-red-500">{error}</Text>
+      ) : null}
     </View>
   );
 }
@@ -249,22 +289,25 @@ function FieldRow({
 function ActionsDropdown({
   label,
   onPick,
+  disabled, // NEW
 }: {
   label: string;
-  onPick: (action: "camera" | "gallery" | "file" | "request") => void;
+  onPick: (action: "camera" | "gallery" | "file") => void;
+  disabled?: boolean; // NEW
 }) {
   const [open, setOpen] = useState(false);
   const items = [
     { label: "Take Photo", value: "camera" },
     { label: "Pick from Gallery", value: "gallery" },
     { label: "Choose File (PDF/Doc/Image)", value: "file" },
-    { label: "Request a certificate", value: "request" },
+    // { label: "Request a certificate", value: "request" },
   ] as const;
 
   return (
-    <View className="gap-1.5">
+    <View className="gap-1.5" style={disabled ? { opacity: 0.5 } : undefined}>
       <Text className="ml-1 text-xs text-gray-600">{label}</Text>
       <Pressable
+        disabled={disabled}
         onPress={() => setOpen(true)}
         className="flex-row items-center justify-between rounded-xl border border-gray-300 bg-[#F7F8FA] px-3 py-3"
         android_ripple={{ color: "#e5e7eb" }}
@@ -302,6 +345,17 @@ function ActionsDropdown({
 
 /* --------------------------------- Screen --------------------------------- */
 export default function Signup() {
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      console.log("Network status:", state.isConnected);
+      if (!state.isConnected) {
+        Alert.alert("No Internet", "Please check your internet connection");
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const [loading, setLoading] = useState(false);
 
   // Role (default driver)
@@ -311,21 +365,52 @@ export default function Signup() {
   const [dFullname, setDFullname] = useState("");
   const [dEmail, setDEmail] = useState("");
   const [dPhone, setDPhone] = useState("");
+  const [dAddress, setDAddress] = useState("");
   const [dPw, setDPw] = useState("");
   const [dCpw, setDCpw] = useState("");
+
+  // Email verification state (driver)
+  const [driverEmailVerified, setDriverEmailVerified] = useState(false);
+  const [showDriverOtpModal, setShowDriverOtpModal] = useState(false);
+  const [driverOtp, setDriverOtp] = useState("");
+  const [driverOtpError, setDriverOtpError] = useState("");
+  const [driverEmailCheckLoading, setDriverEmailCheckLoading] = useState(false);
+  const [driverEmailCheckError, setDriverEmailCheckError] = useState("");
+  const [driverOtpResendLoading, setDriverOtpResendLoading] = useState(false);
+  const [driverOtpSendLoading, setDriverOtpSendLoading] = useState(false);
+
+  // Shop email verification state
+  const [shopEmailVerified, setShopEmailVerified] = useState(false);
+  const [showShopOtpModal, setShowShopOtpModal] = useState(false);
+  const [sOtp, setSOtp] = useState("");
+  const [sOtpError, setSOtpError] = useState("");
+  const [sEmailCheckLoading, setSEmailCheckLoading] = useState(false);
+  const [sEmailCheckError, setSEmailCheckError] = useState("");
+  const [sOtpResendLoading, setSOtpResendLoading] = useState(false);
+  const [sOtpSendLoading, setSOtpSendLoading] = useState(false);
 
   /* Shop fields */
   const [shopType, setShopType] = useState<string | null>(null);
   const [shopName, setShopName] = useState<string | null>(null);
   const [showNotListedModal, setShowNotListedModal] = useState(false);
 
+  const [shopOptions, setShopOptions] = useState<
+    Array<{ label: string; value: string }>
+  >([]);
+  const [shopListLoading, setShopListLoading] = useState(false);
+  const [shopListError, setShopListError] = useState<string | null>(null);
+  const [shopAddress, setShopAddress] = useState("");
+
   const [locationPromptShown, setLocationPromptShown] = useState(false);
   const [locationEnabled, setLocationEnabled] = useState(false);
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
 
   const [sFullname, setSFullname] = useState("");
   const [sEmail, setSEmail] = useState("");
   const [sPhone, setSPhone] = useState("");
+  const [sAddress, setSAddress] = useState("");
   const [services, setServices] = useState<string[]>([]);
   const [days, setDays] = useState<string[]>([]);
   const [openTime, setOpenTime] = useState("08:00");
@@ -351,6 +436,68 @@ export default function Signup() {
   const [errorsS, setErrorsS] = useState<{ [k: string]: string | undefined }>(
     {}
   );
+
+  // Track touched fields for driver and shop
+  const [touchedD, setTouchedD] = useState<{ [k: string]: boolean }>({});
+  const [touchedS, setTouchedS] = useState<{ [k: string]: boolean }>({});
+
+  // --- add this effect anywhere after imports; I suggest after the "Sync Shop email..." effect ---
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        setShopListLoading(true);
+        setShopListError(null);
+
+        // Fetch places where owner IS NULL (and also treat empty-string as null just in case)
+        const { data, error } = await supabase
+          .from("places")
+          .select("place_id, name, address")
+          .or("owner.is.null,owner.eq.") // shows rows with no owner
+          .order("name", { ascending: true });
+
+        if (error) throw error;
+
+        const opts = (data ?? [])
+          .filter((r: any) => (r?.name ?? "").trim().length > 0)
+          .map((r: any) => ({
+            label: r.address ? `${r.name} — ${r.address}` : r.name,
+            value: r.place_id, // keep ID as the value
+          }));
+
+        if (mounted) setShopOptions(opts);
+      } catch (e: any) {
+        if (mounted) setShopListError(e?.message ?? "Failed to load shops");
+      } finally {
+        if (mounted) setShopListLoading(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Helper to mark a driver field as touched
+  function markTouchedD(field: string) {
+    setTouchedD((prev) => ({ ...prev, [field]: true }));
+  }
+  // Helper to mark a shop field as touched
+  function markTouchedS(field: string) {
+    setTouchedS((prev) => ({ ...prev, [field]: true }));
+  }
+
+  async function emailExistsInAppUser(email: string) {
+    const normalized = email.trim().toLowerCase();
+    const { count, error } = await supabase
+      .from("app_user")
+      .select("user_id", { count: "exact", head: true })
+      .ilike("email", normalized);
+
+    if (error) throw error;
+    return (count ?? 0) > 0;
+  }
 
   /* ----------------------------- Helpers ----------------------------- */
   function toggleService(s: string) {
@@ -406,6 +553,7 @@ export default function Signup() {
       });
     }
   };
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
   const reallyPickDocument = async () => {
     const res = await DocumentPicker.getDocumentAsync({
@@ -416,16 +564,27 @@ export default function Signup() {
         "image/*",
       ],
       copyToCacheDirectory: true,
-      multiple: true, // allow multi-pick
+      multiple: true,
     });
+
     if (res.canceled) return;
+
     const files = res.assets ?? [];
+    const validFiles = files.filter((file) => {
+      if (file.size && file.size > MAX_FILE_SIZE) {
+        Alert.alert("File too large", `${file.name} is too large (max 10MB)`);
+        return false;
+      }
+      return true;
+    });
+
     setCerts((prev) => [
       ...prev,
-      ...files.map((f) => ({
+      ...validFiles.map((f) => ({
         uri: f.uri,
         name: f.name ?? "document",
         mime: f.mimeType ?? null,
+        size: f.size || 0,
       })),
     ]);
   };
@@ -451,9 +610,26 @@ export default function Signup() {
       return;
     }
     setLocationEnabled(true);
+
     const pos = await Location.getCurrentPositionAsync({});
-    setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+    const { latitude, longitude } = pos.coords;
+
+    setCoords({ lat: latitude, lng: longitude });
     setLocationPromptShown(true);
+
+    // Reverse geocode to fill the Address input
+    try {
+      const places = await Location.reverseGeocodeAsync({
+        latitude,
+        longitude,
+      });
+      if (places && places[0]) {
+        setShopAddress(buildAddressFromPlace(places[0]));
+        markTouchedS("shopAddress");
+      }
+    } catch {
+      // ignore reverse-geocode failures
+    }
   };
 
   /* ----------------------------- Validation rules ----------------------------- */
@@ -462,23 +638,36 @@ export default function Signup() {
     if (!hasMin(dFullname, 2)) e.dFullname = "Full name is required.";
     if (!isEmail(dEmail)) e.dEmail = "Enter a valid email.";
     if (!isPhone(dPhone)) e.dPhone = "Enter a valid phone (7–15 digits).";
+    if (!hasMin(dAddress, 2)) e.dAddress = "Address is required.";
     if (!hasMin(dPw, 6)) e.dPw = "Min 6 characters.";
     if (dCpw !== dPw) e.dCpw = "Passwords do not match.";
     setErrorsD(e);
     return Object.keys(e).length === 0;
-  }, [dFullname, dEmail, dPhone, dPw, dCpw]);
+  }, [dFullname, dEmail, dPhone, dAddress, dPw, dCpw]);
 
   const shopValid = useMemo(() => {
     const e: any = {};
-    if (!shopType) e.shopType = "Select a shop type.";
+
+    // Shop selection + conditional requirements
     if (!shopName) e.shopName = "Select your shop.";
-    if (shopName === "Shop not Listed" && !locationEnabled)
-      e.shopName = "Enable location to register 'Shop not Listed'.";
+    if (shopName === "Shop not Listed") {
+      if (!shopType) e.shopType = "Select a shop type.";
+      if (!locationEnabled)
+        e.shopName = "Enable location to register 'Shop not Listed'.";
+      if (!hasMin(shopAddress, 2)) e.shopAddress = "Shop address is required.";
+    }
+
+    // Contact person
     if (!hasMin(sFullname, 2)) e.sFullname = "Full name is required.";
     if (!isEmail(sEmail)) e.sEmail = "Enter a valid email.";
     if (!isPhone(sPhone)) e.sPhone = "Enter a valid phone (7–15 digits).";
+    if (!hasMin(sAddress, 2)) e.sAddress = "Address is required.";
+
+    // Security
     if (!hasMin(sPw, 6)) e.sPw = "Min 6 characters.";
     if (sCpw !== sPw) e.sCpw = "Passwords do not match.";
+
+    // Services / schedule
     if (services.length === 0) e.services = "Pick at least 1 service.";
     if (days.length === 0) e.days = "Pick at least 1 operating day.";
     if (!openTime.trim() || !isTime(openTime))
@@ -488,20 +677,24 @@ export default function Signup() {
     if (isTime(openTime) && isTime(closeTime)) {
       const [oh, om] = openTime.split(":").map(Number);
       const [ch, cm] = closeTime.split(":").map(Number);
-      if (oh * 60 + om >= ch * 60 + cm) {
+      if (oh * 60 + om >= ch * 60 + cm)
         e.closeTime = "Close time must be after open time.";
-      }
     }
-    if (certs.length === 0) e.certificate = "Upload at least one certificate/proof.";
+
+    // Files
+    if (certs.length === 0)
+      e.certificate = "Upload at least one certificate/proof.";
+
     setErrorsS(e);
     return Object.keys(e).length === 0;
   }, [
-    shopType,
     shopName,
+    shopType,
     locationEnabled,
     sFullname,
     sEmail,
     sPhone,
+    sAddress,
     sPw,
     sCpw,
     services,
@@ -509,10 +702,16 @@ export default function Signup() {
     openTime,
     closeTime,
     certs,
+    shopAddress,
   ]);
 
-  const canDriverSubmit = role === "driver" && driverValid;
-  const canShopSubmit = role === "shop" && shopValid;
+  const canDriverSubmit =
+    role === "driver" && driverValid && driverEmailVerified;
+  const canShopSubmit =
+    role === "shop" && shopValid && (driverEmailVerified || shopEmailVerified);
+
+  // Lock the entire Shop form until an email is verified (driver OR shop)
+  const shopLocked = !(driverEmailVerified || shopEmailVerified);
 
   /* ----------------------------- Submit handlers ----------------------------- */
   const afterSignupNotice = () =>
@@ -521,38 +720,365 @@ export default function Signup() {
       "Your account has been created and needs to be verified by the admins first. You'll be notified once approved."
     );
 
-  const submitDriver = () => {
+  // Sync Shop email/verification with Driver email if Driver is verified
+  useEffect(() => {
+    if (driverEmailVerified) {
+      const normalized = dEmail.trim().toLowerCase();
+      setSEmail(normalized);
+      setShopEmailVerified(true);
+      setSEmailCheckError("");
+      setSOtp("");
+      setSOtpError("");
+      setShowShopOtpModal(false);
+    } else {
+      setShopEmailVerified(false);
+    }
+  }, [driverEmailVerified, dEmail]);
+
+  // REPLACE the whole function:
+  const submitDriver = async () => {
     if (!driverValid) return;
+    if (!driverEmailVerified) {
+      Alert.alert("Verify your email", "Please verify your email first.");
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
+    try {
+      // 1) Ensure there is a live session
+      const { data: sessData, error: sessErr } =
+        await supabase.auth.getSession();
+      if (sessErr) throw sessErr;
+      if (!sessData?.session) {
+        setLoading(false);
+        Alert.alert(
+          "Not signed in",
+          "Your session expired. Please tap Verify Email again."
+        );
+        return;
+      }
+
+      // 2) Fetch current user and guard user.id
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr) throw userErr;
+      const user = userData?.user;
+      if (!user?.id) {
+        setLoading(false);
+        Alert.alert(
+          "Not signed in",
+          "We couldn’t find your account. Please re-verify your email."
+        );
+        return;
+      }
+      const authUserId: string = user.id;
+
+      // 3) Normalize and block duplicates in app_user
+      const normalizedEmail = dEmail.trim().toLowerCase();
+      if (await emailExistsInAppUser(normalizedEmail)) {
+        setErrorsD((prev) => ({ ...prev, dEmail: "Email already exist" }));
+        Alert.alert(
+          "Email already registered",
+          "Please use a different email."
+        );
+        setLoading(false);
+        return;
+      }
+
+      // 4) (Optional) set a password for the Auth account
+      if (dPw?.trim()) {
+        const { error: pwErr } = await supabase.auth.updateUser({
+          password: dPw,
+        });
+        if (pwErr) {
+          const msg = String(pwErr.message || "");
+          if (!msg.toLowerCase().includes("new password should be different")) {
+            throw pwErr;
+          }
+        }
+      }
+
+      // 5) Build photoUrl (Google/metadata → fallback to Gravatar)
+      let photoUrl: string | null =
+        (user.identities ?? []).find((i: any) => i.provider === "google")
+          ?.identity_data?.picture ??
+        (user.user_metadata as any)?.avatar_url ??
+        null;
+
+      if (!photoUrl) {
+        const md5 = await Crypto.digestStringAsync(
+          Crypto.CryptoDigestAlgorithm.MD5,
+          normalizedEmail
+        );
+        photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
+      }
+
+      // 6) Insert into app_user (password hashed by DB trigger)
+      const { error: insertErr } = await supabase.from("app_user").insert([
+        {
+          user_id: authUserId,
+          role: "Driver",
+          full_name: dFullname,
+          email: normalizedEmail,
+          phone: dPhone,
+          address: dAddress,
+          password: dPw,
+          photo_url: photoUrl,
+        },
+      ]);
+      if (insertErr) throw insertErr;
+
+      // 7) Go to driver landing page (already logged in via OTP)
+      router.replace("/driver/driverLandingpage");
+    } catch (err: any) {
+      Alert.alert("Sign up failed", err?.message ?? "Something went wrong.");
+    } finally {
       setLoading(false);
-      afterSignupNotice();
-    }, 900);
+    }
   };
 
-  const submitShop = () => {
+  const submitShop = async () => {
     if (!shopValid) return;
+
     setLoading(true);
-    setTimeout(() => {
+    try {
+      console.log("Starting shop submission process...");
+
+      // 0) Network guard
+      const networkState = await NetInfo.fetch();
+      if (!networkState.isConnected) {
+        throw new Error(
+          "No internet connection. Please check your network and try again."
+        );
+      }
+
+      // 1) Ensure there is a live session
+      const { data: sessData, error: sessErr } =
+        await supabase.auth.getSession();
+      if (sessErr) throw new Error(`Authentication error: ${sessErr.message}`);
+      if (!sessData?.session) {
+        setLoading(false);
+        Alert.alert(
+          "Session expired",
+          "Your session expired. Please verify email again."
+        );
+        return;
+      }
+
+      // 2) Fetch current user and guard user.id
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr)
+        throw new Error(`User authentication error: ${userErr.message}`);
+      const user = userData?.user;
+      if (!user?.id) {
+        setLoading(false);
+        Alert.alert(
+          "Not signed in",
+          "We couldn't find your account. Please re-verify your email."
+        );
+        return;
+      }
+      const authUserId: string = user.id;
+
+      // 3) Optional: set/update password
+      const normalizedEmail = sEmail.trim().toLowerCase();
+      if (!driverEmailVerified) {
+        const exists = await emailExistsInAppUser(normalizedEmail);
+        if (exists) {
+          setSEmailCheckError("Email already exist");
+          setTouchedS((prev) => ({ ...prev, sEmail: true })); // make sure it shows under the input
+          setLoading(false);
+          return;
+        }
+      }
+      if (sPw?.trim()) {
+        const { error: pwErr } = await supabase.auth.updateUser({
+          password: sPw,
+        });
+        if (pwErr) {
+          const msg = String(pwErr.message || "");
+          if (!msg.toLowerCase().includes("new password should be different")) {
+            throw pwErr;
+          }
+        }
+      }
+
+      // 4) Build photoUrl (Google/metadata → fallback to Gravatar)
+      let photoUrl: string | null =
+        (user.identities ?? []).find((i: any) => i.provider === "google")
+          ?.identity_data?.picture ??
+        (user.user_metadata as any)?.avatar_url ??
+        null;
+
+      if (!photoUrl) {
+        const md5 = await Crypto.digestStringAsync(
+          Crypto.CryptoDigestAlgorithm.MD5,
+          normalizedEmail
+        );
+        photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
+      }
+
+      // 5) Save contact to app_user with role = "Shop owner"
+      const appUserRow = {
+        user_id: authUserId,
+        role: "Shop owner" as const,
+        full_name: sFullname,
+        email: normalizedEmail,
+        phone: sPhone,
+        address: sAddress,
+        password: sPw,
+        photo_url: photoUrl,
+      };
+      const { error: upsertUserErr } = await supabase
+        .from("app_user")
+        .upsert([appUserRow], { onConflict: "user_id" });
+      if (upsertUserErr) throw upsertUserErr;
+
+      // 6) Upload certificates to storage bucket "certificates"
+      //    (make sure your uploadCertificatesAndGetUrls() now saves to: shop/<uid>/...)
+      const { urls: certificateUrls, paths: certificatePaths } =
+        await uploadCertificatesAndGetUrls(authUserId, certs);
+      // ^ you can use `certificateUrls` for immediate previews if you want
+
+      // 7) Insert/Upsert shop_details (STORE PATHS, not signed URLs)
+      const { data: upsertShop, error: upsertShopErr } = await supabase
+        .from("shop_details")
+        .upsert(
+          [
+            {
+              user_id: authUserId,
+              services: JSON.stringify(services),
+              certificate_url: JSON.stringify(certificatePaths), // store storage paths
+              time_open: openTime,
+              time_close: closeTime,
+              days: JSON.stringify(days),
+            },
+          ],
+          { onConflict: "user_id" }
+        )
+        .select("shop_id")
+        .single();
+      if (upsertShopErr) throw upsertShopErr;
+
+      const newShopId: string = upsertShop.shop_id;
+
+      // 8) Link or create place
+      if (shopName && shopName !== "Shop not Listed") {
+        const placeId = shopName as string;
+        const { error: updPlaceErr } = await supabase
+          .from("places")
+          .update({ owner: newShopId })
+          .eq("place_id", placeId);
+        if (updPlaceErr) throw updPlaceErr;
+      } else {
+        const lat = coords?.lat ?? null;
+        const lng = coords?.lng ?? null;
+
+        const newPlacePayload: any = {
+          name: null,
+          category: null,
+          address: shopAddress || null,
+          plus_code: null,
+          latitude: lat,
+          longitude: lng,
+          maps_link:
+            lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null,
+          owner: newShopId,
+        };
+
+        const { error: insPlaceErr } = await supabase
+          .from("places")
+          .insert([newPlacePayload]);
+        if (insPlaceErr) throw insPlaceErr;
+      }
+
+      // 9) Done
+      router.replace("/shop/mechanicLandingpage");
+    } catch (err: any) {
+      console.error("Shop submission error:", err);
+      if (
+        err.message?.includes("Network request failed") ||
+        err.message?.includes("Failed to fetch")
+      ) {
+        Alert.alert(
+          "Network Error",
+          "Please check your internet connection and try again."
+        );
+      } else if (err.message?.includes("No internet connection")) {
+        Alert.alert("No Internet", err.message);
+      } else {
+        Alert.alert(
+          "Submit failed",
+          err?.message ?? "Something went wrong. Please try again."
+        );
+      }
+    } finally {
       setLoading(false);
-      afterSignupNotice();
-    }, 900);
+    }
   };
+
+  const sanitizeFileName = (name: string) => name.replace(/[^\w.-]+/g, "_");
+
+  // REPLACE your whole uploadCertificatesAndGetUrls with this:
+  async function uploadCertificatesAndGetUrls(
+    userId: string,
+    files: Array<{ uri: string; name: string; mime: string | null }>
+  ) {
+    // returns both signed URLs (for immediate preview) and storage paths (for DB)
+    const urls: string[] = [];
+    const paths: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+
+      const ext = (
+        f.name?.split(".").pop() ||
+        (f.mime?.split("/")[1] ?? "bin")
+      ).toLowerCase();
+      const base = sanitizeFileName(f.name || `file_${i}.${ext}`);
+
+      // IMPORTANT: folder layout must match your RLS policy:
+      // certificates bucket → shop/<USER_ID>/<file>
+      const path = `shop/${userId}/${Date.now()}_${i}_${base}`;
+
+      const fileToUpload: any = {
+        uri: f.uri,
+        name: base,
+        type: f.mime ?? "application/octet-stream",
+      };
+
+      const { error: upErr } = await supabase.storage
+        .from("certificates")
+        .upload(path, fileToUpload, {
+          contentType: fileToUpload.type,
+          upsert: false,
+        });
+
+      if (upErr) {
+        console.log("Supabase upload error:", upErr);
+        throw new Error(`Failed to upload certificate: ${upErr.message}`);
+      }
+
+      // bucket is private → generate a signed URL for preview/use
+      const { data: signed, error: signErr } = await supabase.storage
+        .from("certificates")
+        .createSignedUrl(path, 60 * 60 * 24); // 24 hours
+
+      if (signErr) {
+        throw new Error(`Failed to sign URL: ${signErr.message}`);
+      }
+
+      urls.push(signed.signedUrl);
+      paths.push(path);
+    }
+
+    return { urls, paths };
+  }
 
   /* ----------------------------- Actions from dropdown ----------------------------- */
-  const handleCertAction = (action: "camera" | "gallery" | "file" | "request") => {
-    if (action === "camera") {
-      setAskCamera(true); // ask first
-    } else if (action === "gallery") {
-      setAskGallery(true); // ask first
-    } else if (action === "file") {
-      setAskFiles(true); // ask first
-    } else if (action === "request") {
-      Alert.alert(
-        "Request a certificate",
-        "Please contact your local office or upload an existing proof (business permit, DTI, BIR, etc.)."
-      );
-    }
+  const handleCertAction = (action: "camera" | "gallery" | "file") => {
+    if (action === "camera") setAskCamera(true);
+    else if (action === "gallery") setAskGallery(true);
+    else if (action === "file") setAskFiles(true);
   };
 
   return (
@@ -564,10 +1090,7 @@ export default function Signup() {
       >
         {/* Brand header (centered) */}
         <View className="items-center mb-2">
-          <RNImage
-            className="h-16 w-16 mb-2"
-            resizeMode="contain"
-          />
+          <RNImage className="h-16 w-16 mb-2" resizeMode="contain" />
           <Text className="text-3xl font-extrabold text-[#0F2547]">
             Create your account
           </Text>
@@ -590,47 +1113,282 @@ export default function Signup() {
                 </Text>
               </View>
 
-              <FieldRow
-                icon="person-outline"
-                placeholder="Full name"
-                value={dFullname}
-                onChangeText={setDFullname}
-                error={errorsD.dFullname}
-              />
+              {/* Email + verify button */}
               <FieldRow
                 icon="mail-outline"
                 placeholder="Email"
                 value={dEmail}
-                onChangeText={setDEmail}
+                onChangeText={(t) => {
+                  setDEmail(t);
+                  markTouchedD("dEmail");
+                }}
                 keyboardType="email-address"
-                error={errorsD.dEmail}
+                error={
+                  touchedD.dEmail
+                    ? errorsD.dEmail || driverEmailCheckError
+                    : undefined
+                }
+                editable={!driverEmailVerified && !driverEmailCheckLoading}
+                onBlur={() => markTouchedD("dEmail")}
+              />
+
+              {!driverEmailVerified && (
+                <Pressable
+                  onPress={async () => {
+                    setDriverEmailCheckError("");
+                    setDriverEmailCheckLoading(true);
+                    try {
+                      const normalized = dEmail.trim().toLowerCase();
+                      if (!isEmail(normalized)) {
+                        setDriverEmailCheckError("Enter a valid email.");
+                        return;
+                      }
+
+                      // Block OTP if email already exists in app_user
+                      const exists = await emailExistsInAppUser(normalized);
+                      if (exists) {
+                        setDriverEmailCheckError("Email already exist");
+                        setShowDriverOtpModal(false);
+                        setDriverEmailVerified(false);
+                        return;
+                      }
+
+                      // Send OTP
+                      const { error } = await supabase.auth.signInWithOtp({
+                        email: normalized,
+                        options: { shouldCreateUser: true },
+                      });
+                      if (error) throw error;
+
+                      setShowDriverOtpModal(true);
+                    } catch (err: any) {
+                      setDriverEmailCheckError(
+                        err?.message || "Failed to verify email."
+                      );
+                    } finally {
+                      setDriverEmailCheckLoading(false);
+                    }
+                  }}
+                  disabled={driverEmailCheckLoading || !isEmail(dEmail)}
+                  className={`mt-1 items-center rounded-2xl py-3 ${
+                    isEmail(dEmail) && !driverEmailCheckLoading
+                      ? "bg-[#2563EB]"
+                      : "bg-[#93C5FD]"
+                  }`}
+                >
+                  <Text className="text-[15px] font-extrabold text-white">
+                    {driverEmailCheckLoading ? "Checking..." : "Verify Email"}
+                  </Text>
+                </Pressable>
+              )}
+
+              {!driverEmailVerified && (
+                <Text className="mt-2 text-xs text-gray-500">
+                  Verify your email to enable the rest of the fields.
+                </Text>
+              )}
+
+              {/* DRIVER OTP Modal */}
+              <Modal
+                visible={showDriverOtpModal}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowDriverOtpModal(false)}
+              >
+                <View className="flex-1 items-center justify-center bg-black/35 p-4">
+                  <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
+                    <Text className="mb-2 text-base font-extrabold text-gray-900">
+                      Enter the code sent to your email
+                    </Text>
+                    <Text className="mb-4 text-gray-900">
+                      Please check your inbox (and spam folder) for a 6-digit
+                      code.
+                    </Text>
+
+                    <TextInput
+                      value={driverOtp}
+                      onChangeText={setDriverOtp}
+                      placeholder="Enter code"
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      className="mb-2 border border-gray-300 rounded-xl px-3 py-2 text-lg text-center"
+                      style={{ letterSpacing: 8 }}
+                    />
+
+                    {driverOtpError ? (
+                      <Text className="mb-2 text-xs text-red-500">
+                        {driverOtpError}
+                      </Text>
+                    ) : null}
+
+                    <View className="flex-row justify-between gap-2 mt-2">
+                      <Pressable
+                        onPress={async () => {
+                          setDriverOtpResendLoading(true);
+                          setDriverOtpError("");
+                          try {
+                            const { error } = await supabase.auth.signInWithOtp(
+                              {
+                                email: dEmail,
+                                options: { shouldCreateUser: true },
+                              }
+                            );
+                            if (error)
+                              setDriverOtpError(
+                                error.message || "Failed to resend OTP."
+                              );
+                          } catch (err: any) {
+                            setDriverOtpError(
+                              err.message || "Failed to resend OTP."
+                            );
+                          } finally {
+                            setDriverOtpResendLoading(false);
+                          }
+                        }}
+                        disabled={driverOtpResendLoading}
+                        className="flex-1 rounded-xl border border-gray-300 py-2 items-center"
+                      >
+                        <Text className="font-bold text-gray-900">
+                          {driverOtpResendLoading ? "Resending..." : "Resend"}
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        onPress={async () => {
+                          setDriverOtpSendLoading(true);
+                          setDriverOtpError("");
+                          try {
+                            const { error } = await supabase.auth.verifyOtp({
+                              email: dEmail,
+                              token: driverOtp,
+                              type: "email",
+                            });
+                            if (error) {
+                              setDriverOtpError(
+                                error.message || "Invalid code."
+                              );
+                              return;
+                            }
+                            setShowDriverOtpModal(false);
+                            setDriverEmailVerified(true);
+                            Alert.alert(
+                              "Email verified!",
+                              "You may now complete the form."
+                            );
+                          } catch (err: any) {
+                            setDriverOtpError(
+                              err.message || "Failed to verify code."
+                            );
+                          } finally {
+                            setDriverOtpSendLoading(false);
+                          }
+                        }}
+                        disabled={
+                          driverOtpSendLoading || driverOtp.length !== 6
+                        }
+                        className="flex-1 rounded-xl bg-[#2563EB] py-2 items-center"
+                      >
+                        <Text className="font-extrabold text-white">
+                          {driverOtpSendLoading ? "Verifying..." : "Verify"}
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    <Pressable
+                      onPress={() => setShowDriverOtpModal(false)}
+                      className="mt-4 items-center"
+                    >
+                      <Text className="text-xs text-gray-500 underline">
+                        Cancel
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </Modal>
+
+              {/* Driver rest of form (disabled until verified) */}
+              <FieldRow
+                icon="person-outline"
+                placeholder="Full name"
+                value={dFullname}
+                onChangeText={(t) => {
+                  setDFullname(t);
+                  markTouchedD("dFullname");
+                }}
+                editable={driverEmailVerified}
+                error={
+                  driverEmailVerified && touchedD.dFullname
+                    ? errorsD.dFullname
+                    : undefined
+                }
+                onBlur={() => markTouchedD("dFullname")}
               />
               <FieldRow
                 icon="call-outline"
                 placeholder="Phone Number"
                 value={dPhone}
-                onChangeText={setDPhone}
+                onChangeText={(t) => {
+                  setDPhone(t);
+                  markTouchedD("dPhone");
+                }}
                 keyboardType="phone-pad"
-                error={errorsD.dPhone}
+                editable={driverEmailVerified}
+                error={
+                  driverEmailVerified && touchedD.dPhone
+                    ? errorsD.dPhone
+                    : undefined
+                }
+                onBlur={() => markTouchedD("dPhone")}
               />
-              {/* Security under phone */}
+              <FieldRow
+                icon="location-outline"
+                placeholder="Address"
+                value={dAddress}
+                onChangeText={(t) => {
+                  setDAddress(t);
+                  markTouchedD("dAddress");
+                }}
+                editable={driverEmailVerified}
+                error={
+                  driverEmailVerified && touchedD.dAddress
+                    ? errorsD.dAddress
+                    : undefined
+                }
+                onBlur={() => markTouchedD("dAddress")}
+              />
               <FieldRow
                 icon="lock-closed-outline"
                 placeholder="Password (min 6)"
                 value={dPw}
-                onChangeText={setDPw}
+                onChangeText={(t) => {
+                  setDPw(t);
+                  markTouchedD("dPw");
+                }}
                 secureTextEntry
                 toggleableSecure
-                error={errorsD.dPw}
+                editable={driverEmailVerified}
+                error={
+                  driverEmailVerified && touchedD.dPw ? errorsD.dPw : undefined
+                }
+                onBlur={() => markTouchedD("dPw")}
               />
               <FieldRow
                 icon="lock-closed-outline"
                 placeholder="Confirm Password"
                 value={dCpw}
-                onChangeText={setDCpw}
+                onChangeText={(t) => {
+                  setDCpw(t);
+                  markTouchedD("dCpw");
+                }}
                 secureTextEntry
                 toggleableSecure
-                error={errorsD.dCpw}
+                editable={driverEmailVerified}
+                error={
+                  driverEmailVerified && touchedD.dCpw
+                    ? errorsD.dCpw
+                    : undefined
+                }
+                onBlur={() => markTouchedD("dCpw")}
               />
 
               <Pressable
@@ -656,33 +1414,70 @@ export default function Signup() {
                 </Text>
               </View>
 
-              <Select
-                label="Type of Shop"
-                value={shopType}
-                placeholder="Select type"
-                options={SHOP_TYPE_OPTIONS}
-                onSelect={setShopType}
-                error={errorsS.shopType}
-              />
-
-              <View className="mt-3" />
-
+              {/* Shop (dynamic: places with no owner) */}
               <Select
                 label="Shop"
                 value={shopName}
-                placeholder="Select your shop"
-                options={SHOP_LIST}
+                placeholder={
+                  shopListLoading ? "Loading shops…" : "Select your shop"
+                }
+                options={[
+                  ...shopOptions, // { label, value: place_id }
+                  { label: "Shop not Listed", value: "Shop not Listed" },
+                ]}
                 onSelect={(v) => {
-                  setShopName(v);
+                  if (shopLocked) return;
+                  setShopName(v); // v is either a place_id or the string "Shop not Listed"
+                  markTouchedS("shopName");
+
                   if (v === "Shop not Listed") {
-                    setAskLocation(true); // ask permission first
+                    setAskLocation(true);
+                  } else {
+                    setShopType(null);
+                    setLocationPromptShown(false);
+                    setLocationEnabled(false);
+                    setCoords(null);
+                    setShopAddress("");
                   }
                 }}
-                error={errorsS.shopName}
+                disabled={shopLocked || shopListLoading}
+                error={touchedS.shopName ? errorsS.shopName : undefined}
               />
 
+              {shopListError ? (
+                <Text className="text-xs text-red-500 ml-1">
+                  {shopListError}
+                </Text>
+              ) : null}
+
+              {!shopListLoading && shopOptions.length === 0 ? (
+                <Text className="text-xs text-gray-500 ml-1">
+                  No available listed shops yet. You can choose “Shop not
+                  Listed”.
+                </Text>
+              ) : null}
+
+              {/* Type of Shop */}
+              {shopName === "Shop not Listed" && (
+                <View className="mt-3">
+                  <Select
+                    label="Type of Shop"
+                    value={shopType}
+                    placeholder="Select type"
+                    options={SHOP_TYPE_OPTIONS}
+                    onSelect={(v) => {
+                      if (shopLocked) return;
+                      setShopType(v);
+                      markTouchedS("shopType");
+                    }}
+                    disabled={shopLocked}
+                    error={touchedS.shopType ? errorsS.shopType : undefined}
+                  />
+                </View>
+              )}
+
               {/* Location prompt (after permission) */}
-              {locationPromptShown && (
+              {locationPromptShown && !shopLocked && (
                 <View className="mt-3 flex-row items-center gap-3 rounded-xl border border-gray-300 bg-[#F8FAFF] p-3">
                   <Ionicons name="location-outline" size={18} />
                   <View className="flex-1">
@@ -691,7 +1486,9 @@ export default function Signup() {
                     </Text>
                     <Text className="text-xs text-gray-500">
                       {coords
-                        ? `Lat ${coords.lat.toFixed(5)}, Lng ${coords.lng.toFixed(5)}`
+                        ? `Lat ${coords.lat.toFixed(
+                            5
+                          )}, Lng ${coords.lng.toFixed(5)}`
                         : "Your shop will be registered at your current address."}
                     </Text>
                   </View>
@@ -701,6 +1498,7 @@ export default function Signup() {
                         setLocationEnabled(false);
                         setCoords(null);
                         setLocationPromptShown(false);
+                        setShopAddress("");
                       } else {
                         await requestLocation();
                       }
@@ -720,6 +1518,30 @@ export default function Signup() {
                 </View>
               )}
 
+              {shopName === "Shop not Listed" && locationEnabled && (
+                <View className="mt-3">
+                  <FieldRow
+                    icon="location-outline"
+                    placeholder="Shop address (auto from your location)"
+                    value={shopAddress}
+                    onChangeText={(t) => {
+                      setShopAddress(t); // allow user to tweak if needed
+                      markTouchedS("shopAddress");
+                    }}
+                    editable={!shopLocked}
+                    error={
+                      touchedS.shopAddress ? errorsS.shopAddress : undefined
+                    }
+                    onBlur={() => markTouchedS("shopAddress")}
+                  />
+                  <Text className="ml-1 text-[11px] text-gray-500">
+                    Based on Lat {coords?.lat.toFixed(5)}, Lng{" "}
+                    {coords?.lng.toFixed(5)}
+                  </Text>
+                </View>
+              )}
+
+              {/* Contact person */}
               <View className="mt-5 mb-2">
                 <Text className="text-sm font-semibold text-gray-900">
                   Contact person
@@ -730,28 +1552,376 @@ export default function Signup() {
                 icon="person-outline"
                 placeholder="Full name"
                 value={sFullname}
-                onChangeText={setSFullname}
-                error={errorsS.sFullname}
+                onChangeText={(t) => {
+                  setSFullname(t);
+                  markTouchedS("sFullname");
+                }}
+                editable={!shopLocked}
+                error={touchedS.sFullname ? errorsS.sFullname : undefined}
+                onBlur={() => markTouchedS("sFullname")}
               />
+
+              {/* Shop email */}
               <FieldRow
                 icon="mail-outline"
                 placeholder="Email"
                 value={sEmail}
-                onChangeText={setSEmail}
+                onChangeText={(t) => {
+                  setSEmail(t);
+                  markTouchedS("sEmail");
+                }}
                 keyboardType="email-address"
-                error={errorsS.sEmail}
+                editable={
+                  !driverEmailVerified &&
+                  !sEmailCheckLoading &&
+                  !shopEmailVerified
+                }
+                error={
+                  touchedS.sEmail
+                    ? errorsS.sEmail || sEmailCheckError
+                    : undefined
+                }
+                onBlur={() => markTouchedS("sEmail")}
               />
+
+              {/* If driver email is verified, reusing it — no OTP for shop */}
+              {driverEmailVerified ? (
+                <Text className="mt-1 ml-1 text-xs text-green-600">
+                  Using your verified driver email ✓
+                </Text>
+              ) : null}
+
+              {/* Shop Verify Email button (only when driver not verified AND shop not verified) */}
+              {!driverEmailVerified && !shopEmailVerified && (
+                <Pressable
+                  onPress={async () => {
+                    setSEmailCheckError("");
+                    setSEmailCheckLoading(true);
+                    try {
+                      const normalized = sEmail.trim().toLowerCase();
+                      // make sure the error shows under the input
+                      markTouchedS("sEmail");
+
+                      if (!isEmail(normalized)) {
+                        setSEmailCheckError("Enter a valid email.");
+                        return;
+                      }
+
+                      // NEW: block if email already exists in app_user (same as driver)
+                      const exists = await emailExistsInAppUser(normalized);
+                      if (exists) {
+                        setSEmailCheckError("Email already exist");
+                        setShowShopOtpModal(false);
+                        setShopEmailVerified(false);
+                        return;
+                      }
+
+                      // proceed with OTP
+                      const { error } = await supabase.auth.signInWithOtp({
+                        email: normalized,
+                        options: { shouldCreateUser: true },
+                      });
+                      if (error) throw error;
+
+                      setShowShopOtpModal(true);
+                    } catch (err: any) {
+                      setSEmailCheckError(
+                        err?.message || "Failed to verify email."
+                      );
+                    } finally {
+                      setSEmailCheckLoading(false);
+                    }
+                  }}
+                  disabled={sEmailCheckLoading || !isEmail(sEmail)}
+                  className={`mt-1 items-center rounded-2xl py-3 ${
+                    isEmail(sEmail) && !sEmailCheckLoading
+                      ? "bg-[#2563EB]"
+                      : "bg-[#93C5FD]"
+                  }`}
+                >
+                  <Text className="text-[15px] font-extrabold text-white">
+                    {sEmailCheckLoading ? "Checking..." : "Verify Email"}
+                  </Text>
+                </Pressable>
+              )}
+
+              {/* SHOP OTP Modal */}
+              <Modal
+                visible={showShopOtpModal}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowShopOtpModal(false)}
+              >
+                <View className="flex-1 items-center justify-center bg-black/35 p-4">
+                  <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
+                    <Text className="mb-2 text-base font-extrabold text-gray-900">
+                      Enter the code sent to your email
+                    </Text>
+                    <Text className="mb-4 text-gray-900">
+                      Please check your inbox (and spam folder) for a 6-digit
+                      code.
+                    </Text>
+
+                    <TextInput
+                      value={sOtp}
+                      onChangeText={setSOtp}
+                      placeholder="Enter code"
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      className="mb-2 border border-gray-300 rounded-xl px-3 py-2 text-lg text-center"
+                      style={{ letterSpacing: 8 }}
+                    />
+
+                    {sOtpError ? (
+                      <Text className="mb-2 text-xs text-red-500">
+                        {sOtpError}
+                      </Text>
+                    ) : null}
+
+                    <View className="flex-row justify-between gap-2 mt-2">
+                      <Pressable
+                        onPress={async () => {
+                          setSOtpError("");
+                          setSOtpResendLoading(true);
+                          try {
+                            const { error } = await supabase.auth.signInWithOtp(
+                              {
+                                email: sEmail,
+                                options: { shouldCreateUser: true },
+                              }
+                            );
+                            if (error)
+                              setSOtpError(
+                                error.message || "Failed to resend OTP."
+                              );
+                          } catch (err: any) {
+                            setSOtpError(
+                              err.message || "Failed to resend OTP."
+                            );
+                          } finally {
+                            setSOtpResendLoading(false);
+                          }
+                        }}
+                        disabled={sOtpResendLoading}
+                        className="flex-1 rounded-xl border border-gray-300 py-2 items-center"
+                      >
+                        <Text className="font-bold text-gray-900">
+                          {sOtpResendLoading ? "Resending..." : "Resend"}
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        onPress={async () => {
+                          setSOtpError("");
+                          setSOtpSendLoading(true);
+                          try {
+                            const { error } = await supabase.auth.verifyOtp({
+                              email: sEmail,
+                              token: sOtp,
+                              type: "email",
+                            });
+                            if (error) {
+                              setSOtpError(error.message || "Invalid code.");
+                              return;
+                            }
+                            setShowShopOtpModal(false);
+                            setShopEmailVerified(true);
+                            Alert.alert(
+                              "Email verified!",
+                              "You may now complete the form."
+                            );
+                          } catch (err: any) {
+                            setSOtpError(err.message || "Failed to verify.");
+                          } finally {
+                            setSOtpSendLoading(false);
+                          }
+                        }}
+                        disabled={sOtpSendLoading || sOtp.length !== 6}
+                        className="flex-1 rounded-xl bg-[#2563EB] py-2 items-center"
+                      >
+                        <Text className="font-extrabold text-white">
+                          {sOtpSendLoading ? "Verifying..." : "Verify"}
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    <Pressable
+                      onPress={() => setShowShopOtpModal(false)}
+                      className="mt-4 items-center"
+                    >
+                      <Text className="text-xs text-gray-500 underline">
+                        Cancel
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </Modal>
+
+              {/* Phone & Address */}
               <FieldRow
                 icon="call-outline"
                 placeholder="Phone Number"
                 value={sPhone}
-                onChangeText={setSPhone}
+                onChangeText={(t) => {
+                  setSPhone(t);
+                  markTouchedS("sPhone");
+                }}
                 keyboardType="phone-pad"
-                error={errorsS.sPhone}
+                editable={!shopLocked}
+                error={touchedS.sPhone ? errorsS.sPhone : undefined}
+                onBlur={() => markTouchedS("sPhone")}
               />
 
-              {/* ⬇️ Security directly below phone */}
-              <View className="mt-2 mb-2">
+              <FieldRow
+                icon="location-outline"
+                placeholder="Contact address"
+                value={sAddress}
+                onChangeText={(t) => {
+                  setSAddress(t);
+                  markTouchedS("sAddress");
+                }}
+                editable={!shopLocked}
+                error={touchedS.sAddress ? errorsS.sAddress : undefined}
+                onBlur={() => markTouchedS("sAddress")}
+              />
+
+              {/* Services */}
+              <View className="mt-4 mb-2">
+                <Text className="text-sm font-semibold text-gray-900">
+                  Services offered
+                </Text>
+                {errorsS.services ? (
+                  <Text className="text-xs text-red-500 mt-1">
+                    {errorsS.services}
+                  </Text>
+                ) : null}
+              </View>
+              <View className="flex-row flex-wrap gap-2">
+                {SERVICES.map((s) => {
+                  const on = services.includes(s);
+                  return (
+                    <Pressable
+                      key={s}
+                      onPress={() => !shopLocked && toggleService(s)}
+                      className={`rounded-2xl border px-3 py-1.5 ${
+                        on
+                          ? "border-[#2563EB] bg-[#E6F0FF]"
+                          : "border-gray-300 bg-white"
+                      }`}
+                      style={shopLocked ? { opacity: 0.5 } : undefined}
+                    >
+                      <Text
+                        className={`text-xs ${
+                          on ? "text-[#0F2547]" : "text-gray-800"
+                        }`}
+                      >
+                        {s}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Operating days */}
+              <View className="mt-5 mb-2">
+                <Text className="text-sm font-semibold text-gray-900">
+                  Operating days
+                </Text>
+                {errorsS.days ? (
+                  <Text className="text-xs text-red-500 mt-1">
+                    {errorsS.days}
+                  </Text>
+                ) : null}
+              </View>
+              <View
+                className="flex-row items-center gap-2"
+                style={shopLocked ? { opacity: 0.5 } : undefined}
+              >
+                {DAY_LABELS.map((lbl, i) => {
+                  const key = DAY_KEYS[i];
+                  const on = days.includes(key);
+                  return (
+                    <Pressable
+                      key={key}
+                      onPress={() => !shopLocked && toggleDay(key)}
+                      className={`h-9 w-9 items-center justify-center rounded-full border ${
+                        on
+                          ? "border-[#2563EB] bg-[#E6F0FF]"
+                          : "border-gray-300 bg-white"
+                      }`}
+                    >
+                      <Text
+                        className={`text-xs font-bold ${
+                          on ? "text-[#0F2547]" : "text-gray-800"
+                        }`}
+                      >
+                        {lbl}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Operating hours */}
+              <View className="mt-5 mb-2">
+                <Text className="text-sm font-semibold text-gray-900">
+                  Operating hours
+                </Text>
+              </View>
+              <View className="flex-row gap-3">
+                <View className="flex-1">
+                  <Text className="ml-1 text-xs text-gray-600">Opens</Text>
+                  <View
+                    className={`mt-1 rounded-xl border ${
+                      errorsS.openTime ? "border-red-400" : "border-gray-300"
+                    } bg-white px-3`}
+                    style={shopLocked ? { opacity: 0.5 } : undefined}
+                  >
+                    <TextInput
+                      value={openTime}
+                      onChangeText={(t) => setOpenTime(t)}
+                      placeholder="HH:MM (24h)"
+                      placeholderTextColor="#808080"
+                      className="py-3 text-sm text-black"
+                      editable={!shopLocked}
+                      keyboardType="numbers-and-punctuation"
+                    />
+                  </View>
+                  {errorsS.openTime ? (
+                    <Text className="mt-1 ml-1 text-xs text-red-500">
+                      {errorsS.openTime}
+                    </Text>
+                  ) : null}
+                </View>
+
+                <View className="flex-1">
+                  <Text className="ml-1 text-xs text-gray-600">Closes</Text>
+                  <View
+                    className={`mt-1 rounded-xl border ${
+                      errorsS.closeTime ? "border-red-400" : "border-gray-300"
+                    } bg-white px-3`}
+                    style={shopLocked ? { opacity: 0.5 } : undefined}
+                  >
+                    <TextInput
+                      value={closeTime}
+                      onChangeText={(t) => setCloseTime(t)}
+                      placeholder="HH:MM (24h)"
+                      placeholderTextColor="#808080"
+                      className="py-3 text-sm text-black"
+                      editable={!shopLocked}
+                      keyboardType="numbers-and-punctuation"
+                    />
+                  </View>
+                  {errorsS.closeTime ? (
+                    <Text className="mt-1 ml-1 text-xs text-red-500">
+                      {errorsS.closeTime}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+
+              {/* Passwords */}
+              <View className="mt-5 mb-2">
                 <Text className="text-sm font-semibold text-gray-900">
                   Security
                 </Text>
@@ -760,398 +1930,336 @@ export default function Signup() {
                 icon="lock-closed-outline"
                 placeholder="Password (min 6)"
                 value={sPw}
-                onChangeText={setSPw}
+                onChangeText={(t) => {
+                  setSPw(t);
+                  markTouchedS("sPw");
+                }}
                 secureTextEntry
                 toggleableSecure
-                error={errorsS.sPw}
+                editable={!shopLocked}
+                error={touchedS.sPw ? errorsS.sPw : undefined}
+                onBlur={() => markTouchedS("sPw")}
               />
               <FieldRow
                 icon="lock-closed-outline"
                 placeholder="Confirm Password"
                 value={sCpw}
-                onChangeText={setSCpw}
+                onChangeText={(t) => {
+                  setSCpw(t);
+                  markTouchedS("sCpw");
+                }}
                 secureTextEntry
                 toggleableSecure
-                error={errorsS.sCpw}
+                editable={!shopLocked}
+                error={touchedS.sCpw ? errorsS.sCpw : undefined}
+                onBlur={() => markTouchedS("sCpw")}
               />
 
-              {/* Certificates → dropdown */}
-              <Section title="Upload Certificates / Proof of Business">
+              {/* Certificates */}
+              <View className="mt-5 mb-2">
+                <Text className="text-sm font-semibold text-gray-900">
+                  Business proof / certificates
+                </Text>
+                <Text className="text-xs text-gray-500">
+                  Upload at least one (DTI/BIR/Mayor’s permit, etc.).
+                </Text>
                 {errorsS.certificate ? (
-                  <Text className="mb-2 ml-1 text-xs text-red-500">
+                  <Text className="text-xs text-red-500 mt-1">
                     {errorsS.certificate}
                   </Text>
                 ) : null}
+              </View>
 
-                <ActionsDropdown
-                  label="Choose how to upload"
-                  onPick={handleCertAction}
-                />
+              <ActionsDropdown
+                label="Upload options"
+                onPick={handleCertAction}
+                disabled={shopLocked}
+              />
 
-                {/* MULTI-FILE list */}
-                {certs.length > 0 && (
-                  <View className="mt-3 gap-2">
-                    {certs.map((f, idx) => (
+              {/* Thumbnails / list */}
+              <View className="mt-3 flex-row flex-wrap gap-3">
+                {certs.map((f, idx) => {
+                  const isImg =
+                    (f.mime ?? "").startsWith("image/") ||
+                    /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name);
+                  return (
+                    <View
+                      key={`${f.uri}-${idx}`}
+                      className="relative h-24 w-24 overflow-hidden rounded-xl border border-gray-300 bg-white"
+                    >
                       <Pressable
-                        key={`${f.uri}-${idx}`}
-                        onPress={() => setPreviewIndex(idx)}
-                        className="flex-row items-center justify-between rounded-xl border border-gray-200 bg-[#FAFAFF] px-3 py-2"
+                        className="absolute right-1 top-1 z-10 h-6 w-6 items-center justify-center rounded-full bg-black/60"
+                        onPress={() =>
+                          setCerts((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        hitSlop={10}
                       >
-                        <View className="flex-row items-center gap-2 flex-1">
-                          <Ionicons name="document-attach-outline" size={18} />
-                          <Text
-                            numberOfLines={1}
-                            className="flex-1 text-ellipsis font-medium italic text-[#0F2547]"
-                          >
-                            {f.name}
-                          </Text>
-                          <Text className="text-[11px] text-gray-500">
-                            {f.mime ?? "file"}
-                          </Text>
-                        </View>
-                        <TouchableOpacity
-                          onPress={() =>
-                            setCerts((prev) => prev.filter((_, i) => i !== idx))
-                          }
-                          className="ml-3 rounded-md px-2 py-1 active:opacity-80"
-                          accessibilityLabel="Remove file"
-                        >
-                          <Ionicons name="trash-outline" size={18} />
-                        </TouchableOpacity>
+                        <Ionicons name="close" size={14} color="#fff" />
                       </Pressable>
-                    ))}
-                    <Text className="text-[11px] text-gray-500">
-                      Tip: Tap a file to preview. You can add more files again via the menu above.
-                    </Text>
-                  </View>
-                )}
-              </Section>
 
-              {/* Services (inner scroll) */}
-              <Section title="Services Offered">
-                {errorsS.services ? (
-                  <Text className="mb-2 ml-1 text-xs text-red-500">
-                    {errorsS.services}
-                  </Text>
-                ) : null}
-                <ScrollView
-                  style={{ height: 260 }}
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled"
-                >
-                  <View className="gap-2 pb-2">
-                    {SERVICES.map((s) => (
-                      <CheckboxRow
-                        key={s}
-                        label={s}
-                        checked={services.includes(s)}
-                        onToggle={() => toggleService(s)}
-                      />
-                    ))}
-                  </View>
-                </ScrollView>
-              </Section>
-
-              {/* Schedule (fix cropped hours text on Android) */}
-              <Section title="Shop Schedule">
-                {errorsS.days ? (
-                  <Text className="mb-2 ml-1 text-xs text-red-500">
-                    {errorsS.days}
-                  </Text>
-                ) : null}
-
-                <Text className="mb-2 font-bold text-gray-900">Days</Text>
-                <View className="mb-3 flex-row flex-wrap gap-3">
-                  {DAY_LABELS.map((label, i) => (
-                    <DayCheck
-                      key={label}
-                      label={label}
-                      checked={days.includes(DAY_KEYS[i])}
-                      onToggle={() => toggleDay(DAY_KEYS[i])}
-                    />
-                  ))}
-                </View>
-
-                <View className="flex-row items-center gap-3">
-                  <Text className="text-gray-900">Hours:</Text>
-
-                  {/* Open */}
-                  <View
-                    className={`rounded-xl border ${
-                      errorsS.openTime ? "border-red-400" : "border-gray-300"
-                    } w-24 h-10 justify-center`}
-                  >
-                    <TextInput
-                      value={openTime}
-                      onChangeText={setOpenTime}
-                      placeholder="08:00"
-                      placeholderTextColor="#808080"
-                      className="h-10 px-2 text-center text-base text-black"
-                      maxLength={5}
-                      style={{
-                        textAlignVertical: "center" as const,
-                        paddingVertical: 0,
-                      }}
-                    />
-                  </View>
-
-                  <Text className="text-gray-900">to</Text>
-
-                  {/* Close */}
-                  <View
-                    className={`rounded-xl border ${
-                      errorsS.closeTime ? "border-red-400" : "border-gray-300"
-                    } w-24 h-10 justify-center`}
-                  >
-                    <TextInput
-                      value={closeTime}
-                      onChangeText={setCloseTime}
-                      placeholder="22:00"
-                      placeholderTextColor="#808080"
-                      className="h-10 px-2 text-center text-base text-black"
-                      maxLength={5}
-                      style={{
-                        textAlignVertical: "center" as const,
-                        paddingVertical: 0,
-                      }}
-                    />
-                  </View>
-                </View>
-
-                {(errorsS.openTime || errorsS.closeTime) && (
-                  <Text className="mt-1 ml-1 text-xs text-red-500">
-                    {errorsS.openTime || errorsS.closeTime}
-                  </Text>
-                )}
-              </Section>
+                      <Pressable
+                        className="flex-1"
+                        onPress={() => setPreviewIndex(idx)}
+                      >
+                        {isImg ? (
+                          <RNImage
+                            source={{ uri: f.uri }}
+                            className="h-full w-full"
+                          />
+                        ) : (
+                          <View className="h-full w-full items-center justify-center">
+                            <Ionicons name="document-text-outline" size={28} />
+                            <Text
+                              numberOfLines={2}
+                              className="px-1 text-center text-[10px]"
+                            >
+                              {f.name}
+                            </Text>
+                          </View>
+                        )}
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
 
               <Pressable
                 onPress={submitShop}
                 disabled={!canShopSubmit}
-                className={`mt-1 items-center rounded-2xl py-3 ${
+                className={`mt-5 items-center rounded-2xl py-3 ${
                   canShopSubmit ? "bg-[#2563EB]" : "bg-[#93C5FD]"
                 }`}
               >
                 <Text className="text-[15px] font-extrabold text-white">
-                  Continue
+                  Submit shop
                 </Text>
               </Pressable>
+
+              {!shopEmailVerified && !driverEmailVerified ? (
+                <Text className="mt-2 text-xs text-gray-500">
+                  Verify your email first to enable the form.
+                </Text>
+              ) : null}
             </>
           )}
         </View>
+        <View className="mt-4 items-center">
+          <Text className="text-sm text-gray-700">
+            Already have an account?{" "}
+            <Text
+              className="text-[#2563EB]"
+              onPress={() => router.push("/login")}
+            >
+              Sign in
+            </Text>
+          </Text>
+        </View>
       </ScrollView>
 
-      {/* Ask-first: Shop not Listed → OS location permission */}
-      <Modal visible={askLocation} transparent animationType="fade">
-        <View className="flex-1 items-center justify-center bg-black/35 p-4">
-          <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
-            <Text className="mb-2 text-base font-extrabold text-gray-900">
-              Allow location access?
-            </Text>
-            <Text className="mb-4 text-gray-900">
-              We’ll use your device location to register your shop at your
-              current address.
-            </Text>
-            <View className="flex-row justify-end gap-3">
+      {/* ---------- PREVIEW MODAL (certs) ---------- */}
+      <Modal
+        visible={previewIndex !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewIndex(null)}
+      >
+        <View className="flex-1 items-center justify-center bg-black/60 p-4">
+          <View className="w-full max-w-xl rounded-2xl bg-white p-3">
+            {(() => {
+              const file = previewIndex !== null ? certs[previewIndex] : null;
+              if (!file) return null;
+              const isImg =
+                (file.mime ?? "").startsWith("image/") ||
+                /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
+              return isImg ? (
+                <RNImage
+                  source={{ uri: file.uri }}
+                  style={{ width: "100%", height: 360, borderRadius: 12 }}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View className="items-center p-6">
+                  <Ionicons name="document-text-outline" size={48} />
+                  <Text className="mt-2 text-sm font-semibold text-gray-900">
+                    {file.name}
+                  </Text>
+                </View>
+              );
+            })()}
+            <View className="mt-3 flex-row justify-end gap-2">
               <Pressable
                 onPress={() => {
-                  setAskLocation(false);
-                  setLocationPromptShown(false);
-                  setLocationEnabled(false);
+                  openFileExternally(previewIndex);
                 }}
-                className="rounded-md bg-gray-100 px-3 py-2.5"
+                className="rounded-xl border border-gray-300 px-4 py-2"
               >
-                <Text className="font-bold text-gray-900">Not now</Text>
+                <Text className="font-bold text-gray-900">Open</Text>
               </Pressable>
               <Pressable
-                onPress={async () => {
-                  setAskLocation(false);
-                  await requestLocation();
-                  setShowNotListedModal(true); // keep your original reminder
-                }}
-                className="rounded-md bg-[#0F2547] px-3 py-2.5"
+                onPress={() => setPreviewIndex(null)}
+                className="rounded-xl bg-[#2563EB] px-4 py-2"
               >
-                <Text className="font-extrabold text-white">Allow</Text>
+                <Text className="font-extrabold text-white">Close</Text>
               </Pressable>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Your original reminder (kept) */}
-      <Modal visible={showNotListedModal} transparent animationType="fade">
-        <View className="flex-1 items-center justify-center bg-black/35 p-4">
+      {/* ---------- ASK-FIRST MODALS ---------- */}
+      {/* Ask: Camera */}
+      <Modal
+        visible={askCamera}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAskCamera(false)}
+      >
+        <Pressable
+          onPress={() => setAskCamera(false)}
+          className="flex-1 items-center justify-center bg-black/35 p-4"
+        >
           <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
             <Text className="mb-2 text-base font-extrabold text-gray-900">
-              Reminder
+              Use camera?
             </Text>
-            <Text className="mb-4 text-gray-900">
-              Make sure you are in your Shop&apos;s Location to be able to
-              register your shop.
+            <Text className="text-gray-900">
+              We’ll open your camera to capture a certificate photo.
             </Text>
-            <View className="flex-row justify-end gap-3">
-              <Pressable
-                onPress={() => {
-                  setShowNotListedModal(false);
-                }}
-                className="rounded-md bg-gray-100 px-3 py-2.5"
-              >
-                <Text className="font-bold text-gray-900">Close</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Ask-first: Camera */}
-      <Modal visible={askCamera} transparent animationType="fade">
-        <View className="flex-1 items-center justify-center bg-black/35 p-4">
-          <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
-            <Text className="mb-2 text-base font-extrabold text-gray-900">
-              Use your camera?
-            </Text>
-            <Text className="mb-4 text-gray-900">
-              RideRescue needs your permission to take a photo of your
-              certificate.
-            </Text>
-            <View className="flex-row justify-end gap-3">
+            <View className="mt-3 flex-row justify-end gap-2">
               <Pressable
                 onPress={() => setAskCamera(false)}
-                className="rounded-md bg-gray-100 px-3 py-2.5"
+                className="rounded-xl border border-gray-300 px-4 py-2"
               >
-                <Text className="font-bold text-gray-900">Not now</Text>
+                <Text className="font-bold text-gray-900">Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={async () => {
                   setAskCamera(false);
                   await reallyOpenCamera();
                 }}
-                className="rounded-md bg-[#0F2547] px-3 py-2.5"
+                className="rounded-xl bg-[#2563EB] px-4 py-2"
               >
-                <Text className="font-extrabold text-white">Allow</Text>
+                <Text className="font-extrabold text-white">Continue</Text>
               </Pressable>
             </View>
           </View>
-        </View>
+        </Pressable>
       </Modal>
 
-      {/* Ask-first: Gallery */}
-      <Modal visible={askGallery} transparent animationType="fade">
-        <View className="flex-1 items-center justify-center bg-black/35 p-4">
+      {/* Ask: Gallery */}
+      <Modal
+        visible={askGallery}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAskGallery(false)}
+      >
+        <Pressable
+          onPress={() => setAskGallery(false)}
+          className="flex-1 items-center justify-center bg-black/35 p-4"
+        >
           <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
             <Text className="mb-2 text-base font-extrabold text-gray-900">
-              Access your photos?
+              Pick from gallery?
             </Text>
-            <Text className="mb-4 text-gray-900">
-              RideRescue needs your permission to choose a certificate from your
-              gallery.
+            <Text className="text-gray-900">
+              Choose existing images of your certificates.
             </Text>
-            <View className="flex-row justify-end gap-3">
+            <View className="mt-3 flex-row justify-end gap-2">
               <Pressable
                 onPress={() => setAskGallery(false)}
-                className="rounded-md bg-gray-100 px-3 py-2.5"
+                className="rounded-xl border border-gray-300 px-4 py-2"
               >
-                <Text className="font-bold text-gray-900">Not now</Text>
+                <Text className="font-bold text-gray-900">Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={async () => {
                   setAskGallery(false);
                   await reallyPickImage();
                 }}
-                className="rounded-md bg-[#0F2547] px-3 py-2.5"
+                className="rounded-xl bg-[#2563EB] px-4 py-2"
               >
-                <Text className="font-extrabold text-white">Allow</Text>
+                <Text className="font-extrabold text-white">Continue</Text>
               </Pressable>
             </View>
           </View>
-        </View>
+        </Pressable>
       </Modal>
 
-      {/* Ask-first: Files */}
-      <Modal visible={askFiles} transparent animationType="fade">
-        <View className="flex-1 items-center justify-center bg-black/35 p-4">
+      {/* Ask: Files */}
+      <Modal
+        visible={askFiles}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAskFiles(false)}
+      >
+        <Pressable
+          onPress={() => setAskFiles(false)}
+          className="flex-1 items-center justify-center bg-black/35 p-4"
+        >
           <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
             <Text className="mb-2 text-base font-extrabold text-gray-900">
-              Allow file access?
+              Pick documents?
             </Text>
-            <Text className="mb-4 text-gray-900">
-              We’ll open your file picker so you can select PDFs, Word docs, or images.
+            <Text className="text-gray-900">
+              Choose PDFs, Word docs, or images as proof.
             </Text>
-            <View className="flex-row justify-end gap-3">
+            <View className="mt-3 flex-row justify-end gap-2">
               <Pressable
                 onPress={() => setAskFiles(false)}
-                className="rounded-md bg-gray-100 px-3 py-2.5"
+                className="rounded-xl border border-gray-300 px-4 py-2"
               >
-                <Text className="font-bold text-gray-900">Not now</Text>
+                <Text className="font-bold text-gray-900">Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={async () => {
                   setAskFiles(false);
                   await reallyPickDocument();
                 }}
-                className="rounded-md bg-[#0F2547] px-3 py-2.5"
+                className="rounded-xl bg-[#2563EB] px-4 py-2"
               >
                 <Text className="font-extrabold text-white">Continue</Text>
               </Pressable>
             </View>
           </View>
-        </View>
+        </Pressable>
       </Modal>
 
-      {/* Modal: File preview (multi) */}
-      <Modal visible={previewIndex !== null} transparent animationType="fade">
+      {/* Ask: Location for "Shop not Listed" */}
+      <Modal
+        visible={askLocation}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAskLocation(false)}
+      >
         <Pressable
-          onPress={() => setPreviewIndex(null)}
-          className="flex-1 justify-center bg-black/50 p-4"
+          onPress={() => setAskLocation(false)}
+          className="flex-1 items-center justify-center bg-black/35 p-4"
         >
-          <View className="rounded-2xl border border-gray-200 bg-white p-4">
-            <View className="mb-3 flex-row items-center justify-between">
-              <Text className="text-base font-extrabold text-gray-900">
-                File Preview
-              </Text>
+          <View className="w-full rounded-2xl border border-gray-200 bg-white p-5">
+            <Text className="mb-2 text-base font-extrabold text-gray-900">
+              Enable location?
+            </Text>
+            <Text className="text-gray-900">
+              We need your current location to register a shop that is not yet
+              in the list.
+            </Text>
+            <View className="mt-3 flex-row justify-end gap-2">
               <Pressable
-                onPress={() => setPreviewIndex(null)}
-                className="rounded-md px-2 py-1"
+                onPress={() => setAskLocation(false)}
+                className="rounded-xl border border-gray-300 px-4 py-2"
               >
-                <Ionicons name="close" size={20} />
+                <Text className="font-bold text-gray-900">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={async () => {
+                  await requestLocation();
+                  setAskLocation(false);
+                }}
+                className="rounded-xl bg-[#2563EB] px-4 py-2"
+              >
+                <Text className="font-extrabold text-white">Enable</Text>
               </Pressable>
             </View>
-
-            {(() => {
-              const idx = previewIndex ?? -1;
-              const file = certs[idx];
-              if (!file) return null;
-              const looksImage =
-                file.mime?.startsWith("image/") ||
-                /\.(jpg|jpeg|png|gif)$/i.test(file.uri);
-
-              return looksImage ? (
-                <RNImage
-                  source={{ uri: file.uri }}
-                  style={{ width: "100%", height: 300, borderRadius: 12 }}
-                  resizeMode="contain"
-                />
-              ) : (
-                <View className="items-center justify-center p-4">
-                  <Ionicons name="document-text-outline" size={48} />
-                  <Text className="mt-2 text-center font-semibold text-gray-800">
-                    {file.name}
-                  </Text>
-                  <Text className="text-xs text-gray-500">
-                    {file.mime ?? "Unknown type"}
-                  </Text>
-                  <Pressable
-                    onPress={() => openFileExternally(idx)}
-                    className="mt-3 rounded-md bg-[#0F2547] px-3 py-2"
-                  >
-                    <Text className="font-extrabold text-white">Open file</Text>
-                  </Pressable>
-                  <Text className="mt-2 text-center text-[11px] text-gray-500">
-                    Note: Opening local files depends on your device&apos;s installed apps.
-                  </Text>
-                </View>
-              );
-            })()}
           </View>
         </Pressable>
       </Modal>

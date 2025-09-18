@@ -15,10 +15,11 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   useWindowDimensions,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router"; // ← added
+import { useRouter } from "expo-router";
 import SideDrawer from "../../components/SideDrawer";
 import LoadingScreen from "../../components/LoadingScreen";
 
@@ -30,7 +31,7 @@ const COLORS = {
   text: "#0F172A",
   sub: "#475569",
   muted: "#94A3B8",
-  primary: "#2563EB", // Accept
+  primary: "#2563EB", // Accept / Open Location
   danger: "#DC2626",
   success: "#16A34A",
   brand: "#0F2547",
@@ -66,6 +67,7 @@ type RequestItem = {
   /** NEW: multiple images */
   images?: string[];
   brief?: string; // brief message about breakdown/cause
+  phone?: string; // optional if you later want SMS
 };
 
 /* --------------------------------- Mock data -------------------------------- */
@@ -88,6 +90,7 @@ const INITIAL: RequestItem[] = [
       "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=1200&auto=format&q=60",
     ],
     brief: "Rear-right tire punctured—small nail stuck, car is on the shoulder.",
+    phone: "+639171234567",
   },
   {
     id: "rq2",
@@ -106,6 +109,7 @@ const INITIAL: RequestItem[] = [
       "https://images.unsplash.com/photo-1587314168485-3236d6710814?w=1200&auto=format&q=60",
     ],
     brief: "Left the lights on. Engine won’t crank.",
+    phone: "+639221112223",
   },
   {
     id: "rq3",
@@ -122,6 +126,7 @@ const INITIAL: RequestItem[] = [
     distanceKm: 2.4,
     // no images on purpose -> will show "No image attached"
     brief: "Rear tire slowly losing air. No spare.",
+    phone: "+639561234987",
   },
 ];
 
@@ -275,14 +280,18 @@ function DetailSheet({
   item,
   onClose,
   onAccept,
+  onMessage,        // ← updated
   onOpenLocation,
+  onViewReceipt,
   onOpenViewer,
 }: {
   visible: boolean;
   item: RequestItem | null;
   onClose: () => void;
   onAccept: (it: RequestItem) => void;
+  onMessage: (it: RequestItem) => void;    // ← updated
   onOpenLocation: (it: RequestItem) => void;
+  onViewReceipt: (it: RequestItem) => void;
   onOpenViewer: (images: string[], startIndex: number) => void;
 }) {
   const [imgW, setImgW] = useState(0);
@@ -306,6 +315,7 @@ function DetailSheet({
           <View className="h-1.5 w-10 bg-slate-200 rounded-full" />
         </View>
 
+        {/* Header row */}
         <View className="flex-row items-center">
           <RNImage source={{ uri: item.avatar }} className="w-12 h-12 rounded-xl" />
           <View className="ml-3 flex-1">
@@ -322,11 +332,15 @@ function DetailSheet({
           </Pressable>
         </View>
 
+        {/* Media */}
         <View className="mt-4">
           {images.length > 0 ? (
             <View onLayout={(e) => setImgW(e.nativeEvent.layout.width)} className="w-full">
               <View className="relative">
-                <View style={{ position: "absolute", top: 8, left: 8, zIndex: 10, backgroundColor: "rgba(0,0,0,0.6)" }} className="rounded-full px-2 py-0.5">
+                <View
+                  style={{ position: "absolute", top: 8, left: 8, zIndex: 10, backgroundColor: "rgba(0,0,0,0.6)" }}
+                  className="rounded-full px-2 py-0.5"
+                >
                   <Text className="text-white text-[12px] font-semibold">
                     {imgIndex + 1}/{images.length}
                   </Text>
@@ -367,13 +381,31 @@ function DetailSheet({
           </View>
         </View>
 
-        <View className="mt-5 flex-row gap-3">
-          <Pressable onPress={() => onAccept(item)} className="flex-1 rounded-2xl py-2.5 items-center" style={{ backgroundColor: COLORS.primary }}>
-            <Text className="text-[14px] text-white font-semibold">Accept</Text>
-          </Pressable>
-          <Pressable onPress={() => onOpenLocation(item)} className="flex-1 rounded-2xl py-2.5 items-center border" style={{ borderColor: COLORS.primary }}>
-            <Text className="text-[14px] font-semibold" style={{ color: COLORS.primary }}>Open Location</Text>
-          </Pressable>
+        {/* Actions — aligned neatly in two rows */}
+        <View className="mt-5 gap-3">
+          {/* Row 1: Message (neutral outline + icon) + Open Location (blue solid) */}
+          <View className="flex-row gap-3">
+            <Pressable
+              onPress={() => onMessage(item)}
+              className="flex-1 rounded-2xl py-2.5 items-center border border-slate-300"
+            >
+              <View className="flex-row items-center gap-1.5">
+                <Ionicons name="chatbubbles-outline" size={16} color="#0F172A" />
+                <Text className="text-[14px] font-semibold text-slate-900">Message</Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              onPress={() => onOpenLocation(item)}
+              className="flex-1 rounded-2xl py-2.5 items-center"
+              style={{ backgroundColor: COLORS.primary }}
+            >
+              <Text className="text-[14px] font-semibold text-white">Open Location</Text>
+            </Pressable>
+          </View>
+
+          {/* Row 2: Primary + optional View Receipt */}
+
         </View>
       </View>
     </Modal>
@@ -385,12 +417,10 @@ function RequestCard({
   item,
   onPressCard,
   onAccept,
-  onDecline,
 }: {
   item: RequestItem;
   onPressCard: (it: RequestItem) => void;
   onAccept: (it: RequestItem) => void;
-  onDecline: (it: RequestItem) => void;
 }) {
   return (
     <Pressable onPress={() => onPressCard(item)} className="bg-white rounded-2xl p-4 mb-4 border border-slate-200" style={cardShadow as any}>
@@ -418,21 +448,17 @@ function RequestCard({
 
       <View className="h-px bg-slate-200 my-4" />
 
-      <View className="flex-row items-center gap-3">
-        <Pressable onPress={() => onDecline(item)} className="flex-1 rounded-2xl py-2.5 items-center" style={{ backgroundColor: "#FEE2E2" }}>
-          <Text className="text-[14px] text-[#7F1D1D]">Decline</Text>
-        </Pressable>
-        <Pressable onPress={() => onAccept(item)} className="flex-1 rounded-2xl py-2.5 items-center" style={{ backgroundColor: COLORS.primary }}>
-          <Text className="text-[14px] text-white font-semibold">Accept</Text>
-        </Pressable>
-      </View>
+      {/* Decline removed — Accept is full width for tidy alignment */}
+      <Pressable onPress={() => onAccept(item)} className="rounded-2xl py-2.5 items-center" style={{ backgroundColor: COLORS.primary }}>
+        <Text className="text-[14px] text-white font-semibold">Accept</Text>
+      </Pressable>
     </Pressable>
   );
 }
 
 /* --------------------------------- Screen ---------------------------------- */
 export default function RequestScreen() {
-  const router = useRouter(); // ← added
+  const router = useRouter();
   const [rows, setRows] = useState<RequestItem[]>(INITIAL);
   const [selected, setSelected] = useState<RequestItem | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -449,12 +475,11 @@ export default function RequestScreen() {
     []
   );
 
-  // Loading overlay (requeststatus-style)
+  // Loading overlay
   const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
 
-  // Accept / Decline confirmations
+  // Accept confirmation
   const [confirmAccept, setConfirmAccept] = useState<RequestItem | null>(null);
-  const [confirmDecline, setConfirmDecline] = useState<RequestItem | null>(null);
 
   // Fullscreen image viewer
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -471,11 +496,20 @@ export default function RequestScreen() {
     }
   };
 
+  // New: message action routes to in-app chat for now
+  const messageDriver = (it: RequestItem) => {
+    // optional: pass params to pre-open a thread
+    try {
+      router.push({ pathname: "/shop/messages", params: { to: it.id } as any });
+    } catch {
+      router.push("/shop/messages");
+    }
+  };
+
   const setStatus = (id: string, status: RequestItem["status"]) =>
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
 
   const handleAccept = (it: RequestItem) => setConfirmAccept(it);
-  const handleDecline = (it: RequestItem) => setConfirmDecline(it);
 
   const doAccept = async () => {
     if (!confirmAccept) return;
@@ -488,21 +522,15 @@ export default function RequestScreen() {
     if (selected?.id === id) setSheetOpen(false);
   };
 
-  const doDecline = async () => {
-    if (!confirmDecline) return;
-    const id = confirmDecline.id;
-    setConfirmDecline(null);
-    setLoading({ visible: true, message: "Declining request…" });
-    await new Promise((r) => setTimeout(r, 900));
-    setStatus(id, "canceled");
-    setLoading({ visible: false });
-    if (selected?.id === id) setSheetOpen(false);
-  };
-
   const openViewer = (images: string[], startIndex: number) => {
     setViewerImages(images);
     setViewerIndex(startIndex);
     setViewerOpen(true);
+  };
+
+  const viewReceipt = (_it: RequestItem) => {
+    // Route can be replaced by a dedicated receipt screen later
+    router.push("/shop/completedrequest");
   };
 
   return (
@@ -517,9 +545,8 @@ export default function RequestScreen() {
         appName="RIDERESCUE"
         onLogout={() => {
           setDrawerOpen(false);
-          // If you need to sign out from Supabase, do it here first:
           // await supabase.auth.signOut();
-          router.replace("/(auth)/login"); // ← route to Driver Landing (group folders are hidden)
+          router.replace("/(auth)/login");
         }}
       />
 
@@ -552,7 +579,6 @@ export default function RequestScreen() {
               setSheetOpen(true);
             }}
             onAccept={handleAccept}
-            onDecline={handleDecline}
           />
         )}
         ListEmptyComponent={
@@ -567,7 +593,9 @@ export default function RequestScreen() {
         item={selected}
         onClose={() => setSheetOpen(false)}
         onAccept={(it) => setConfirmAccept(it)}
+        onMessage={messageDriver}          // ← updated
         onOpenLocation={openMaps}
+        onViewReceipt={viewReceipt}
         onOpenViewer={openViewer}
       />
 
@@ -580,16 +608,6 @@ export default function RequestScreen() {
         confirmLabel="Accept Request"
         cancelLabel="Keep Pending"
         confirmColor={COLORS.primary}
-      />
-      <CenterConfirm
-        visible={!!confirmDecline}
-        title="Decline this request?"
-        message="This request will not be shown in your requests list."
-        onCancel={() => setConfirmDecline(null)}
-        onConfirm={doDecline}
-        confirmLabel="Decline Request"
-        cancelLabel="Keep Request"
-        confirmColor={COLORS.danger}
       />
 
       <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />

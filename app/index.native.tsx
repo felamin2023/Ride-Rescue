@@ -1,9 +1,4 @@
-// app/index.tsx
-// import { Redirect } from "expo-router";
-// export default function Index() {
-//   return <Redirect href="/(auth)/login" />;
-// }
-// app/index.tsx
+// app/index.native.tsx
 import React from "react";
 import { Redirect } from "expo-router";
 import { supabase } from "../utils/supabase";
@@ -23,42 +18,31 @@ export default function Index() {
 
   React.useEffect(() => {
     let mounted = true;
-
     (async () => {
       try {
-        // 1) Get existing session from storage
         const { data } = await supabase.auth.getSession();
         const session = data?.session;
-
         if (!session?.user?.id) {
           if (mounted) setHref("/(auth)/login");
           return;
         }
-
-        // 2) Fetch the role for redirect
         const { data: profile } = await supabase
           .from("app_user")
           .select("role")
           .eq("user_id", session.user.id)
           .maybeSingle();
 
-        if (mounted) {
-          setHref(pathForRole(profile?.role ?? null));
-        }
+        if (mounted) setHref(pathForRole(profile?.role ?? null));
       } finally {
         if (mounted) setReady(true);
       }
     })();
 
-    // 3) Keep reacting to auth changes while app is alive
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      if (!s) {
-        setHref("/(auth)/login");
-      }
+      if (!s) setHref("/(auth)/login");
     });
 
     return () => {
-      mounted = false;
       sub.subscription.unsubscribe();
     };
   }, []);

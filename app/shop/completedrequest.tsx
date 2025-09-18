@@ -1,4 +1,4 @@
-// app/(driver)/requeststatus.tsx — Transaction history (clean spacing, no plate #, completed footer chip)
+// app/(driver)/requeststatus.tsx — Transaction history (clean spacing, no plate #, completed footer chip + ongoing with payment receipt)
 import React, { useMemo, useState } from "react";
 import {
   View,
@@ -15,6 +15,7 @@ import { useRouter } from "expo-router";
 
 /* ----------------------------- Types ----------------------------- */
 type RequestStatus = "ACCEPTED" | "WAITING" | "COMPLETED" | "CANCELED" | "TO_PAY" | "PAID";
+type PaymentMethod = "Cash" | "GCash" | "Card";
 
 type RequestItem = {
   id: string;
@@ -33,10 +34,33 @@ type RequestItem = {
   seen: boolean;
   sentWhen: string;
   amountDue?: number;         // treated as paid amount for display
+  paymentMethod?: PaymentMethod;
 };
 
 /* ----------------------------- Mock Data ----------------------------- */
 const INITIAL_DATA: RequestItem[] = [
+  // ✅ Ongoing card (mechanic assigned)
+  {
+    id: "ongoing_1",
+    name: "Tewe Vulcanizing Shop",
+    avatar: "https://i.pravatar.cc/100?img=17",
+    vehicleType: "Sedan",
+    serviceProvided: "Tire vulcanizing",
+    mechanicAssigned: "Jasper Teves",
+    assistanceTime: "2025-05-31 01:22 PM",
+    landmark: "Beside Barangay Hall",
+    location: "(9.87910, 123.59670)",
+    imageUrl: "https://via.placeholder.com/960",
+    dateTime: "May 31, 2025 - 01:10 PM",
+    status: "ACCEPTED", // in-progress
+    seen: true,
+    sentWhen: "Just now",
+    info: "Rear tire puncture",
+    amountDue: 450,
+    paymentMethod: "Cash",
+  },
+
+  // Completed samples
   {
     id: "1",
     name: "Stayve Alreach Fedillaga",
@@ -119,6 +143,16 @@ function CompletedChip() {
   );
 }
 
+/** In-progress pill for footer */
+function InProgressChip() {
+  return (
+    <View className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 flex-row items-center">
+      <Ionicons name="time" size={12} color="#D97706" />
+      <Text className="ml-1 text-[11px] font-semibold text-amber-700">In progress</Text>
+    </View>
+  );
+}
+
 /* ----------------------------- Image Preview ----------------------------- */
 function ImagePreview({
   visible,
@@ -148,21 +182,105 @@ function ImagePreview({
   );
 }
 
+/* ----------------------------- Receipt Modal ----------------------------- */
+function ReceiptModal({
+  visible,
+  item,
+  onClose,
+  onConfirmPaid,
+}: {
+  visible: boolean;
+  item: RequestItem | null;
+  onClose: () => void;
+  onConfirmPaid: (id: string) => void;
+}) {
+  if (!item) return null;
+  const amount = peso(item.amountDue);
+  const providerTitle = item.mechanicAssigned || item.name;
+  const when = item.assistanceTime ?? item.dateTime;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <View className="flex-1 items-center justify-center bg-black/45 px-4">
+        <View className="w-full max-w-md rounded-2xl bg-white p-5" style={cardShadow as any}>
+          {/* Header */}
+          <View className="flex-row items-center justify-between">
+            <Text className="text-[16px] font-extrabold text-slate-900">Payment Receipt</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Ionicons name="close" size={20} color="#111827" />
+            </Pressable>
+          </View>
+
+          <View className="mt-3 h-[1px] bg-slate-200" />
+
+          {/* Body */}
+          <View className="mt-3">
+            <Row label="Paid To" value={providerTitle} />
+            <Row label="Service" value={item.serviceProvided ?? item.info} />
+            <Row label="Vehicle" value={item.vehicleType} />
+            <Row label="Amount" value={amount} />
+            <Row label="Method" value={item.paymentMethod ?? "Cash"} />
+            <Row label="Date & Time" value={when} />
+            <Row label="Location" value={item.location} />
+          </View>
+
+          {/* Footer actions */}
+          <View className="mt-4 flex-row items-center justify-end gap-2">
+            <Pressable
+              onPress={onClose}
+              className="rounded-xl border border-slate-300 px-4 py-2 active:opacity-90"
+            >
+              <Text className="text-[13px] font-semibold text-slate-800">Close</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => onConfirmPaid(item.id)}
+              className="rounded-xl bg-blue-600 px-4 py-2 active:opacity-90"
+            >
+              <Text className="text-[13px] font-semibold text-white">Mark as Paid</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 /* ----------------------------- Screen ----------------------------- */
 export default function TransactionHistory() {
   const router = useRouter();
-  const [items] = useState<RequestItem[]>(INITIAL_DATA);
+  const [items, setItems] = useState<RequestItem[]>(INITIAL_DATA);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
 
+  // receipt modal state
+  const [receiptOpen, setReceiptOpen] = useState(false);
+  const [receiptItem, setReceiptItem] = useState<RequestItem | null>(null);
+
   const data = useMemo(() => items, [items]);
+
+  const openReceipt = (item: RequestItem) => {
+    setReceiptItem(item);
+    setReceiptOpen(true);
+  };
+
+  const markAsPaid = (id: string) => {
+    setItems((prev) =>
+      prev.map((it) => (it.id === id ? { ...it, status: "PAID" } : it))
+    );
+    setReceiptOpen(false);
+    setReceiptItem(null);
+  };
 
   const renderItem = ({ item }: { item: RequestItem }) => {
     const providerTitle = item.mechanicAssigned || item.name; // show shop/mechanic if available
     const subtitle = (item.serviceProvided ?? item.info) + (item.vehicleType ? ` • ${item.vehicleType}` : "");
     const when = item.assistanceTime ?? item.dateTime;
     const amount = peso(item.amountDue);
+
+    const isCompleted = item.status === "COMPLETED";
+    const isInProgress = item.status === "ACCEPTED" || item.status === "WAITING";
+    const isPaid = item.status === "PAID";
 
     return (
       <View className="bg-white rounded-3xl p-4 mb-4 border border-slate-200" style={cardShadow}>
@@ -209,15 +327,30 @@ export default function TransactionHistory() {
           ) : null}
         </View>
 
-        {/* Footer: date left, Completed chip right */}
+        {/* Footer: date left, status chip right */}
         <View className="h-px bg-slate-200 my-4" />
         <View className="flex-row items-center justify-between">
           <View className="flex-row items-center">
             <Ionicons name="calendar-outline" size={16} color="#334155" />
             <Text className="ml-2 text-[12px] text-slate-600">{when}</Text>
           </View>
-          <CompletedChip />
+          {isCompleted ? <CompletedChip /> : isInProgress ? <InProgressChip /> : isPaid ? (
+            <View className="px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 flex-row items-center">
+              <Ionicons name="card" size={12} color="#2563EB" />
+              <Text className="ml-1 text-[11px] font-semibold text-blue-700">Paid</Text>
+            </View>
+          ) : null}
         </View>
+
+        {/* ✅ For ongoing: show “Received Payment” button below the footer */}
+        {isInProgress && (
+          <Pressable
+            onPress={() => openReceipt(item)}
+            className="mt-3 w-full items-center justify-center rounded-xl bg-blue-600 py-3 active:opacity-90"
+          >
+            <Text className="text-[14px] font-semibold text-white">Received Payment</Text>
+          </Pressable>
+        )}
       </View>
     );
   };
@@ -229,7 +362,7 @@ export default function TransactionHistory() {
         <Pressable onPress={() => router.back()} hitSlop={8}>
           <Ionicons name="arrow-back" size={26} color="#0F172A" />
         </Pressable>
-        <Text className="text-xl font-bold text-[#0F172A]">Transaction history</Text>
+        <Text className="text-xl font-bold text-[#0F172A]">Transactions</Text>
         <View className="w-6 h-6 items-center justify-center">
           <Ionicons name="filter" size={22} color="#0F172A" />
         </View>
@@ -255,6 +388,17 @@ export default function TransactionHistory() {
           setPreviewOpen(false);
           setPreviewUrl(null);
         }}
+      />
+
+      {/* ✅ Receipt modal */}
+      <ReceiptModal
+        visible={receiptOpen}
+        item={receiptItem}
+        onClose={() => {
+          setReceiptOpen(false);
+          setReceiptItem(null);
+        }}
+        onConfirmPaid={markAsPaid}
       />
     </SafeAreaView>
   );

@@ -1,3 +1,4 @@
+// app/components/SideDrawer.tsx
 import React, { useEffect, useMemo, useRef } from "react";
 import {
   Animated,
@@ -6,10 +7,12 @@ import {
   View,
   Image,
   Text,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Link, usePathname } from "expo-router";
+import { Link, usePathname, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { supabase } from "../utils/supabase";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const DRAWER_WIDTH = Math.min(300, SCREEN_WIDTH * 0.78);
@@ -24,20 +27,36 @@ export type SideDrawerProps = {
   open: boolean;
   onClose: () => void;
   items?: Item[];
-  onLogout?: () => void;
+  onLogout?: () => void | Promise<void>;
+  postLogoutHref?: string;
   logoSource?: any;
   appName?: string;
 };
 
 const DEFAULT_ITEMS: Item[] = [
   { label: "Home", href: "/driver/driverLandingpage", icon: "home-outline" },
-  { label: "Profile", href: "/driver/driverprofile", icon: "person-circle-outline" },
-  { label: "Messages", href: "/driver/message", icon: "chatbubble-ellipses-outline" },
+  {
+    label: "Profile",
+    href: "/driver/driverprofile",
+    icon: "person-circle-outline",
+  },
+  {
+    label: "Messages",
+    href: "/driver/message",
+    icon: "chatbubble-ellipses-outline",
+  },
   { label: "Reviews", href: "/driver/reviews", icon: "star-outline" },
   { label: "Inbox", href: "/driver/inbox", icon: "notifications-outline" },
-  { label: "Request Status", href: "/driver/requeststatus", icon: "document-text-outline" },
-  // 🔁 Replaced "Payments" with "Transaction History"
-  { label: "Transaction History", href: "/driver/transactionhistory", icon: "receipt-outline" },
+  {
+    label: "Request Status",
+    href: "/driver/requeststatus",
+    icon: "document-text-outline",
+  },
+  {
+    label: "Transaction History",
+    href: "/driver/transactionhistory",
+    icon: "receipt-outline",
+  },
 ];
 
 export default function SideDrawer({
@@ -45,10 +64,13 @@ export default function SideDrawer({
   onClose,
   items,
   onLogout,
+  postLogoutHref = "/(auth)/login",
   logoSource,
   appName = "RIDERESCUE",
 }: SideDrawerProps) {
   const pathname = usePathname();
+  const router = useRouter();
+
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
@@ -57,16 +79,50 @@ export default function SideDrawer({
   useEffect(() => {
     if (open) {
       Animated.parallel([
-        Animated.timing(translateX, { toValue: 0, duration: 200, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+        Animated.timing(translateX, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(translateX, { toValue: -DRAWER_WIDTH, duration: 180, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(translateX, {
+          toValue: -DRAWER_WIDTH,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
       ]).start();
     }
-  }, [open]);
+  }, [open, opacity, translateX]);
+
+  const handleLogout = async () => {
+    try {
+      onClose(); // close drawer immediately
+
+      if (onLogout) {
+        await onLogout();
+      } else {
+        // Clear local session first (offline-safe), then revoke on server.
+        await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+        await supabase.auth.signOut().catch(() => {});
+      }
+
+      router.replace(postLogoutHref);
+    } catch (e: any) {
+      Alert.alert("Logout failed", e?.message ?? "Please try again.");
+    }
+  };
 
   return (
     <>
@@ -136,7 +192,9 @@ export default function SideDrawer({
                     />
                     <Text
                       className={`text-[16px] ${
-                        active ? "text-[#0F2547] font-semibold" : "text-[#111827]"
+                        active
+                          ? "text-[#0F2547] font-semibold"
+                          : "text-[#111827]"
                       }`}
                       numberOfLines={1}
                     >
@@ -151,12 +209,12 @@ export default function SideDrawer({
           {/* Logout */}
           <View className="px-5 pb-6 pt-2">
             <Pressable
-              onPress={() => {
-                onClose();
-                onLogout?.();
-              }}
+              onPress={handleLogout}
               className="w-full rounded-2xl bg-slate-100 px-5 py-3 active:opacity-90"
-              android_ripple={{ color: "rgba(15,37,71,0.12)", borderless: false }}
+              android_ripple={{
+                color: "rgba(15,37,71,0.12)",
+                borderless: false,
+              }}
               accessibilityRole="button"
               accessibilityLabel="Logout"
             >

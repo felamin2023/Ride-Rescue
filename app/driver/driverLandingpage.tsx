@@ -12,10 +12,14 @@ import {
   Modal,
   ScrollView,
 } from "react-native";
-import { Link } from "expo-router";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { Link, useRouter } from "expo-router";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import SideDrawer from "../../components/SideDrawer";
+import { supabase } from "../../utils/supabase";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -42,8 +46,11 @@ const cardShadow = Platform.select({
 
 /* ================================ Screen ================================== */
 export default function DriverHome() {
+  const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [otherVisible, setOtherVisible] = useState(false);
+  const [pendingVisible, setPendingVisible] = useState(false);
+  const [checkingSOS, setCheckingSOS] = useState(false);
   const insets = useSafeAreaInsets();
 
   /* ----------------------------- SOS animation ---------------------------- */
@@ -80,22 +87,76 @@ export default function DriverHome() {
             easing: Easing.out(Easing.quad),
             useNativeDriver: true,
           }),
-          Animated.timing(v, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.timing(v, {
+            toValue: 0,
+            duration: 0,
+            useNativeDriver: true,
+          }),
         ])
       );
 
     const a1 = makeRipple(ring1, 0);
     const a2 = makeRipple(ring2, 400);
     const a3 = makeRipple(ring3, 800);
-    a1.start(); a2.start(); a3.start();
-    return () => { a1.stop(); a2.stop(); a3.stop(); };
+    a1.start();
+    a2.start();
+    a3.start();
+    return () => {
+      a1.stop();
+      a2.stop();
+      a3.stop();
+    };
   }, [pulse, ring1, ring2, ring3]);
 
-  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
+  const scale = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.06],
+  });
   const ringStyle = (v: Animated.Value) => ({
-    transform: [{ scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.9] }) }],
+    transform: [
+      { scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.9] }) },
+    ],
     opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.28, 0] }),
   });
+
+  /* ------------------------- SOS Press: pending check ------------------------- */
+  const handleSOSPress = async () => {
+    if (checkingSOS) return;
+    setCheckingSOS(true);
+    try {
+      const { data: userResp } = await supabase.auth.getUser();
+      const userId = userResp?.user?.id;
+
+      if (!userId) {
+        router.push("/login");
+        return;
+      }
+
+      // Look for any latest 'waiting' or 'pending' emergency for this user
+      const { data, error } = await supabase
+        .from("emergency")
+        .select("id")
+        .eq("user_id", userId)
+        .in("emergency_status", ["waiting", "in_process"])
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (error) {
+        // If there's an error, fall back to normal navigation
+        router.push("/driver/emergencyrequest");
+        return;
+      }
+
+      const hasPending = !!data && data.length > 0;
+      if (hasPending) {
+        setPendingVisible(true);
+      } else {
+        router.push("/driver/emergencyrequest");
+      }
+    } finally {
+      setCheckingSOS(false);
+    }
+  };
 
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
@@ -120,12 +181,17 @@ export default function DriverHome() {
               className="w-12 h-12"
               resizeMode="contain"
             />
-            <Text className="text-white text-[20px] font-semibold">RideRescue</Text>
+            <Text className="text-white text-[20px] font-semibold">
+              RideRescue
+            </Text>
           </View>
 
           <Pressable
             className="p-2 rounded-lg active:opacity-80"
-            android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+            android_ripple={{
+              color: "rgba(255,255,255,0.18)",
+              borderless: true,
+            }}
             onPress={() => setDrawerOpen(true)}
           >
             <Ionicons name="menu" size={24} color="#fff" />
@@ -147,25 +213,37 @@ export default function DriverHome() {
             style={cardShadow as any}
           >
             <View className="h-9 w-9 items-center justify-center rounded-full bg-[#F1F5F9] mr-3">
-              <Ionicons name="navigate-outline" size={18} color={COLORS.brand} />
+              <Ionicons
+                name="navigate-outline"
+                size={18}
+                color={COLORS.brand}
+              />
             </View>
             <View className="flex-1">
-              <Text className="text-[12px] text-slate-500">Current location</Text>
+              <Text className="text-[12px] text-slate-500">
+                Current location
+              </Text>
               <Text className="text-[13px] font-semibold text-slate-900">
-              4th Mound Road, California
-            </Text>
+                4th Mound Road, California
+              </Text>
             </View>
           </View>
         </View>
 
         {/* Emergency card + SOS */}
         <View className="px-6 mt-5">
-          <View className="rounded-2xl bg-white p-5 border border-slate-200" style={cardShadow as any}>
+          <View
+            className="rounded-2xl bg-white p-5 border border-slate-200"
+            style={cardShadow as any}
+          >
             <View className="flex-row items-center">
               <View className="flex-1 pr-3">
-                <Text className="text-[20px] font-extrabold text-slate-900">Are you in an{"\n"}emergency?</Text>
+                <Text className="text-[20px] font-extrabold text-slate-900">
+                  Are you in an{"\n"}emergency?
+                </Text>
                 <Text className="mt-2 text-[12px] text-slate-600">
-                  Press the SOS button. Your live location will be shared with nearby services.
+                  Press the SOS button. Your live location will be shared with
+                  nearby services.
                 </Text>
               </View>
 
@@ -173,33 +251,60 @@ export default function DriverHome() {
                 <View className="w-36 h-36 items-center justify-center">
                   <Animated.View
                     style={[
-                      { position: "absolute", width: 144, height: 144, borderRadius: 999, backgroundColor: COLORS.danger },
+                      {
+                        position: "absolute",
+                        width: 144,
+                        height: 144,
+                        borderRadius: 999,
+                        backgroundColor: COLORS.danger,
+                      },
                       ringStyle(ring1),
                     ]}
                   />
                   <Animated.View
                     style={[
-                      { position: "absolute", width: 144, height: 144, borderRadius: 999, backgroundColor: COLORS.danger },
+                      {
+                        position: "absolute",
+                        width: 144,
+                        height: 144,
+                        borderRadius: 999,
+                        backgroundColor: COLORS.danger,
+                      },
                       ringStyle(ring2),
                     ]}
                   />
                   <Animated.View
                     style={[
-                      { position: "absolute", width: 144, height: 144, borderRadius: 999, backgroundColor: COLORS.danger },
+                      {
+                        position: "absolute",
+                        width: 144,
+                        height: 144,
+                        borderRadius: 999,
+                        backgroundColor: COLORS.danger,
+                      },
                       ringStyle(ring3),
                     ]}
                   />
-                  <Link href="/driver/emergencyrequest" asChild>
-                    <Pressable
-                      android_ripple={{ color: "rgba(0,0,0,0.08)" }}
-                      className="items-center justify-center rounded-full"
-                      style={{ width: 108, height: 108, backgroundColor: COLORS.danger }}
-                    >
-                      <Animated.View style={{ transform: [{ scale }] }}>
-                        <Text className="text-white text-[22px] font-extrabold tracking-wide text-center">SOS</Text>
-                      </Animated.View>
-                    </Pressable>
-                  </Link>
+
+                  {/* Replaced Link with controlled press to check pending first */}
+                  <Pressable
+                    disabled={checkingSOS}
+                    onPress={handleSOSPress}
+                    android_ripple={{ color: "rgba(0,0,0,0.08)" }}
+                    className="items-center justify-center rounded-full"
+                    style={{
+                      width: 108,
+                      height: 108,
+                      backgroundColor: COLORS.danger,
+                      opacity: checkingSOS ? 0.8 : 1,
+                    }}
+                  >
+                    <Animated.View style={{ transform: [{ scale }] }}>
+                      <Text className="text-white text-[22px] font-extrabold tracking-wide text-center">
+                        {checkingSOS ? "..." : "SOS"}
+                      </Text>
+                    </Animated.View>
+                  </Pressable>
                 </View>
               </View>
             </View>
@@ -208,9 +313,14 @@ export default function DriverHome() {
 
         {/* Services surface (like the first design) */}
         <View className="px-6">
-          <Text className="mt-6 text-[15px] font-semibold text-[#182231]">Nearby Services:</Text>
+          <Text className="mt-6 text-[15px] font-semibold text-[#182231]">
+            Nearby Services:
+          </Text>
 
-          <View className="mt-4 rounded-2xl bg-white p-5 border border-slate-200" style={cardShadow as any}>
+          <View
+            className="mt-4 rounded-2xl bg-white p-5 border border-slate-200"
+            style={cardShadow as any}
+          >
             <View className="flex-row flex-wrap -mx-2">
               <TileWrap>
                 <Tile
@@ -253,8 +363,20 @@ export default function DriverHome() {
         </View>
       </ScrollView>
 
-      {/* Other Services Modal */}
-      <OtherServicesModal visible={otherVisible} onClose={() => setOtherVisible(false)} />
+      {/* Modals */}
+      <OtherServicesModal
+        visible={otherVisible}
+        onClose={() => setOtherVisible(false)}
+      />
+
+      <PendingEmergencyModal
+        visible={pendingVisible}
+        onClose={() => setPendingVisible(false)}
+        onCheckStatus={() => {
+          setPendingVisible(false);
+          router.push("/driver/requeststatus");
+        }}
+      />
     </View>
   );
 }
@@ -295,7 +417,10 @@ function Tile({
         <Image source={iconSrc} resizeMode="contain" className="w-8 h-8" />
       </View>
 
-      <Text numberOfLines={2} className="w-full px-4 text-center text-[12px] leading-[16px] text-[#111827]">
+      <Text
+        numberOfLines={2}
+        className="w-full px-4 text-center text-[12px] leading-[16px] text-[#111827]"
+      >
         {labelTop}
         {"\n"}
         {labelBottom}
@@ -328,7 +453,11 @@ function OtherServicesModal({
   }> = [
     { icon: "medkit-outline", label: "Hospital", href: "/driver/hospital" },
     { icon: "shield-outline", label: "Police Station", href: "/driver/police" },
-    { icon: "flame-outline", label: "Fire Station", href: "/driver/firestation" },
+    {
+      icon: "flame-outline",
+      label: "Fire Station",
+      href: "/driver/firestation",
+    },
     { icon: "megaphone-outline", label: "MDRRMO", href: "/driver/mdrrmo" },
   ];
 
@@ -350,17 +479,27 @@ function OtherServicesModal({
         <View className="w-14 h-14 rounded-full items-center justify-center bg-[#F1F5F9]">
           <Ionicons name={icon} size={28} color={COLORS.brand} />
         </View>
-        <Text className="text-[13px] text-[#0F2547] mt-2 text-center">{label}</Text>
+        <Text className="text-[13px] text-[#0F2547] mt-2 text-center">
+          {label}
+        </Text>
       </Pressable>
     </Link>
   );
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
       {/* Backdrop */}
       <Pressable className="flex-1 bg-black/40" onPress={onClose}>
         {/* Centered sheet */}
-        <Pressable className="flex-1 items-center justify-center px-6" onPress={() => {}}>
+        <Pressable
+          className="flex-1 items-center justify-center px-6"
+          onPress={() => {}}
+        >
           <View className="w-full max-w-md rounded-2xl p-6 bg-white">
             <Text className="text-center text-[18px] font-semibold text-[#0F2547] mb-5">
               Other Services
@@ -385,6 +524,66 @@ function OtherServicesModal({
           </View>
         </Pressable>
       </Pressable>
+    </Modal>
+  );
+}
+
+/* -------------------- Pending Emergency Modal -------------------- */
+function PendingEmergencyModal({
+  visible,
+  onClose,
+  onCheckStatus,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onCheckStatus: () => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View className="flex-1 bg-black/40 items-center justify-center px-6">
+        <View className="w-full max-w-md rounded-2xl p-6 bg-white border border-slate-200">
+          {/* Close (X) */}
+          <Pressable
+            onPress={onClose}
+            className="absolute right-3 top-3 p-2 rounded-full"
+            android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: true }}
+          >
+            <Ionicons name="close" size={20} color="#0F2547" />
+          </Pressable>
+
+          <Text className="text-[18px] font-semibold text-[#0F2547] mb-2">
+            Pending Emergency Found
+          </Text>
+          <Text className="text-[13px] text-slate-600 mb-5">
+            You still have a pending emergency post. You can check its status or
+            close this message.
+          </Text>
+
+          <View className="flex-row justify-end gap-3">
+            <Pressable
+              onPress={onClose}
+              className="px-4 py-2 rounded-xl bg-white border border-slate-200"
+              android_ripple={{ color: "rgba(0,0,0,0.06)" }}
+            >
+              <Text className="text-[#0F2547] font-medium">Close</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={onCheckStatus}
+              className="px-4 py-2 rounded-xl"
+              style={{ backgroundColor: COLORS.primary }}
+              android_ripple={{ color: "rgba(255,255,255,0.2)" }}
+            >
+              <Text className="text-white font-semibold">Check status</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
     </Modal>
   );
 }

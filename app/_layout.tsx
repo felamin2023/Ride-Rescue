@@ -1,56 +1,43 @@
+// app/(auth)/_layout.tsx
 import "../global.css";
 import "../global";
-// import { Stack } from "expo-router";
-
-// export default function RootLayout() {
-//   return <Stack screenOptions={{ headerShown: false }} />;
-// }
-// app/(auth)/_layout.tsx
 import React from "react";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, usePathname } from "expo-router";
 import { supabase } from "../utils/supabase";
-
-function pathForRole(role?: string | null) {
-  const r = (role || "").toLowerCase();
-  if (r.includes("driver")) return "/driver/driverLandingpage";
-  if (r.includes("shop")) return "/shop/mechanicLandingpage";
-  if (r.includes("admin")) return "/(admin)/admindashboard";
-  return "/driver/driverLandingpage";
-}
 
 export default function AuthLayout() {
   const router = useRouter();
+  const pathname = usePathname();
 
   React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      const session = data?.session;
-      if (!session?.user?.id) return;
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      const userId = session?.user?.id;
 
-      const { data: profile } = await supabase
-        .from("app_user")
-        .select("role")
-        .eq("user_id", session.user.id)
-        .maybeSingle();
-
-      if (mounted) {
-        router.replace(pathForRole(profile?.role ?? null));
+      if (event === "SIGNED_OUT") {
+        // Explicit sign-out → go to login
+        router.replace("/(auth)/login");
+        return;
       }
-    })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      if (s?.user?.id) {
-        // When login happens while on an auth screen, jump out
-        router.replace("/"); // index will re-route by role
+      // ⛔️ Do NOT redirect away on SIGNED_IN while in the auth flow (e.g., during OTP on signup).
+      // If you still want to bounce *just from the login screen* when already signed in,
+      // keep it scoped to that route only:
+      if (
+        (event === "SIGNED_IN" ||
+          event === "TOKEN_REFRESHED" ||
+          event === "INITIAL_SESSION") &&
+        userId &&
+        pathname === "/(auth)/login" // only bounce if they’re literally on the login page
+      ) {
+        router.replace("/");
       }
     });
 
     return () => {
-      mounted = false;
       sub.subscription.unsubscribe();
     };
-  }, [router]);
+  }, [router, pathname]);
 
+  // No bootstrap redirect here — let the individual screens decide.
   return <Stack screenOptions={{ headerShown: false }} />;
 }

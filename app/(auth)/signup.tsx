@@ -26,8 +26,6 @@ import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
 import NetInfo from "@react-native-community/netinfo";
 
-// internet
-
 /* ----------------------------- Data sources ----------------------------- */
 const SHOP_TYPE_OPTIONS = [
   "Repair and Vulcanizing",
@@ -76,6 +74,17 @@ const isPhone = (v: string) => /^[0-9+\-\s]{7,15}$/.test(v);
 const hasMin = (v: string, n: number) => v.trim().length >= n;
 const isTime = (v: string) => /^([01]\d|2[0-3]):([0-5]\d)$/.test(v);
 
+/* -------------------- Session helper (CRITICAL) -------------------- */
+async function waitForSession(maxMs = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const { data } = await supabase.auth.getSession();
+    if (data?.session) return data.session;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return null;
+}
+
 /* ------------------------- Reusable tiny components ------------------------- */
 function Select({
   label,
@@ -84,7 +93,7 @@ function Select({
   options,
   onSelect,
   error,
-  disabled, // NEW
+  disabled,
 }: {
   label: string;
   value: string | null;
@@ -94,7 +103,7 @@ function Select({
     | ReadonlyArray<{ label: string; value: string }>;
   onSelect: (val: string) => void;
   error?: string;
-  disabled?: boolean; // NEW
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const normalized = options.map((o) =>
@@ -102,7 +111,6 @@ function Select({
   );
   const selectedLabel =
     normalized.find((o) => o.value === value)?.label ?? value ?? "";
-
   const borderCls = error ? "border-red-400" : "border-gray-300";
 
   return (
@@ -203,13 +211,12 @@ function RoleRadio({
   );
 }
 
-// Build a readable address from reverse geocode data
 function buildAddressFromPlace(p: Location.LocationGeocodedAddress) {
   const parts = [
-    p.name, // house / place name
-    p.street, // street
-    p.subregion || p.city, // city/municipality
-    p.region, // province/state
+    p.name,
+    p.street,
+    p.subregion || p.city,
+    p.region,
     p.postalCode,
     p.country,
   ];
@@ -268,7 +275,6 @@ function FieldRow({
           <Pressable
             onPress={() => setShow((s) => !s)}
             hitSlop={8}
-            accessibilityLabel={show ? "Hide password" : "Show password"}
             className="pl-2 py-2"
           >
             <Ionicons
@@ -285,22 +291,20 @@ function FieldRow({
   );
 }
 
-/* ------------------------- Small dropdown menu (actions) ------------------------- */
 function ActionsDropdown({
   label,
   onPick,
-  disabled, // NEW
+  disabled,
 }: {
   label: string;
   onPick: (action: "camera" | "gallery" | "file") => void;
-  disabled?: boolean; // NEW
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const items = [
     { label: "Take Photo", value: "camera" },
     { label: "Pick from Gallery", value: "gallery" },
     { label: "Choose File (PDF/Doc/Image)", value: "file" },
-    // { label: "Request a certificate", value: "request" },
   ] as const;
 
   return (
@@ -347,12 +351,10 @@ function ActionsDropdown({
 export default function Signup() {
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
-      console.log("Network status:", state.isConnected);
       if (!state.isConnected) {
         Alert.alert("No Internet", "Please check your internet connection");
       }
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -418,52 +420,42 @@ export default function Signup() {
   const [sPw, setSPw] = useState("");
   const [sCpw, setSCpw] = useState("");
 
-  // Certificates / files (MULTI)
   type CertFile = { uri: string; name: string; mime: string | null };
   const [certs, setCerts] = useState<CertFile[]>([]);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
-  // Ask-first modals
   const [askCamera, setAskCamera] = useState(false);
   const [askGallery, setAskGallery] = useState(false);
   const [askFiles, setAskFiles] = useState(false);
   const [askLocation, setAskLocation] = useState(false);
 
-  /* ----------------------------- Validation state ----------------------------- */
   const [errorsD, setErrorsD] = useState<{ [k: string]: string | undefined }>(
     {}
   );
   const [errorsS, setErrorsS] = useState<{ [k: string]: string | undefined }>(
     {}
   );
-
-  // Track touched fields for driver and shop
   const [touchedD, setTouchedD] = useState<{ [k: string]: boolean }>({});
   const [touchedS, setTouchedS] = useState<{ [k: string]: boolean }>({});
 
-  // --- add this effect anywhere after imports; I suggest after the "Sync Shop email..." effect ---
   useEffect(() => {
     let mounted = true;
-
     (async () => {
       try {
         setShopListLoading(true);
         setShopListError(null);
-
-        // Fetch places where owner IS NULL (and also treat empty-string as null just in case)
         const { data, error } = await supabase
           .from("places")
           .select("place_id, name, address")
-          .or("owner.is.null,owner.eq.") // shows rows with no owner
+          .or("owner.is.null,owner.eq.")
           .order("name", { ascending: true });
-
         if (error) throw error;
 
         const opts = (data ?? [])
           .filter((r: any) => (r?.name ?? "").trim().length > 0)
           .map((r: any) => ({
             label: r.address ? `${r.name} — ${r.address}` : r.name,
-            value: r.place_id, // keep ID as the value
+            value: r.place_id,
           }));
 
         if (mounted) setShopOptions(opts);
@@ -473,17 +465,14 @@ export default function Signup() {
         if (mounted) setShopListLoading(false);
       }
     })();
-
     return () => {
       mounted = false;
     };
   }, []);
 
-  // Helper to mark a driver field as touched
   function markTouchedD(field: string) {
     setTouchedD((prev) => ({ ...prev, [field]: true }));
   }
-  // Helper to mark a shop field as touched
   function markTouchedS(field: string) {
     setTouchedS((prev) => ({ ...prev, [field]: true }));
   }
@@ -494,12 +483,10 @@ export default function Signup() {
       .from("app_user")
       .select("user_id", { count: "exact", head: true })
       .ilike("email", normalized);
-
     if (error) throw error;
     return (count ?? 0) > 0;
   }
 
-  /* ----------------------------- Helpers ----------------------------- */
   function toggleService(s: string) {
     setServices((prev) =>
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
@@ -511,7 +498,6 @@ export default function Signup() {
     );
   }
 
-  /* ----------------------------- File pickers (with ask-first) ----------------------------- */
   const addCert = (file: CertFile) => setCerts((prev) => [...prev, file]);
 
   const reallyOpenCamera = async () => {
@@ -553,8 +539,8 @@ export default function Signup() {
       });
     }
   };
-  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
   const reallyPickDocument = async () => {
     const res = await DocumentPicker.getDocumentAsync({
       type: [
@@ -566,7 +552,6 @@ export default function Signup() {
       copyToCacheDirectory: true,
       multiple: true,
     });
-
     if (res.canceled) return;
 
     const files = res.assets ?? [];
@@ -595,12 +580,9 @@ export default function Signup() {
     if (!file) return;
     try {
       await Linking.openURL(file.uri);
-    } catch {
-      // no-op
-    }
+    } catch {}
   };
 
-  /* ----------------------------- Location permission ----------------------------- */
   const requestLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
@@ -617,7 +599,6 @@ export default function Signup() {
     setCoords({ lat: latitude, lng: longitude });
     setLocationPromptShown(true);
 
-    // Reverse geocode to fill the Address input
     try {
       const places = await Location.reverseGeocodeAsync({
         latitude,
@@ -627,12 +608,9 @@ export default function Signup() {
         setShopAddress(buildAddressFromPlace(places[0]));
         markTouchedS("shopAddress");
       }
-    } catch {
-      // ignore reverse-geocode failures
-    }
+    } catch {}
   };
 
-  /* ----------------------------- Validation rules ----------------------------- */
   const driverValid = useMemo(() => {
     const e: any = {};
     if (!hasMin(dFullname, 2)) e.dFullname = "Full name is required.";
@@ -647,8 +625,6 @@ export default function Signup() {
 
   const shopValid = useMemo(() => {
     const e: any = {};
-
-    // Shop selection + conditional requirements
     if (!shopName) e.shopName = "Select your shop.";
     if (shopName === "Shop not Listed") {
       if (!shopType) e.shopType = "Select a shop type.";
@@ -656,18 +632,12 @@ export default function Signup() {
         e.shopName = "Enable location to register 'Shop not Listed'.";
       if (!hasMin(shopAddress, 2)) e.shopAddress = "Shop address is required.";
     }
-
-    // Contact person
     if (!hasMin(sFullname, 2)) e.sFullname = "Full name is required.";
     if (!isEmail(sEmail)) e.sEmail = "Enter a valid email.";
     if (!isPhone(sPhone)) e.sPhone = "Enter a valid phone (7–15 digits).";
     if (!hasMin(sAddress, 2)) e.sAddress = "Address is required.";
-
-    // Security
     if (!hasMin(sPw, 6)) e.sPw = "Min 6 characters.";
     if (sCpw !== sPw) e.sCpw = "Passwords do not match.";
-
-    // Services / schedule
     if (services.length === 0) e.services = "Pick at least 1 service.";
     if (days.length === 0) e.days = "Pick at least 1 operating day.";
     if (!openTime.trim() || !isTime(openTime))
@@ -680,11 +650,8 @@ export default function Signup() {
       if (oh * 60 + om >= ch * 60 + cm)
         e.closeTime = "Close time must be after open time.";
     }
-
-    // Files
     if (certs.length === 0)
       e.certificate = "Upload at least one certificate/proof.";
-
     setErrorsS(e);
     return Object.keys(e).length === 0;
   }, [
@@ -709,18 +676,14 @@ export default function Signup() {
     role === "driver" && driverValid && driverEmailVerified;
   const canShopSubmit =
     role === "shop" && shopValid && (driverEmailVerified || shopEmailVerified);
-
-  // Lock the entire Shop form until an email is verified (driver OR shop)
   const shopLocked = !(driverEmailVerified || shopEmailVerified);
 
-  /* ----------------------------- Submit handlers ----------------------------- */
   const afterSignupNotice = () =>
     Alert.alert(
       "Submitted!",
       "Your account has been created and needs to be verified by the admins first. You'll be notified once approved."
     );
 
-  // Sync Shop email/verification with Driver email if Driver is verified
   useEffect(() => {
     if (driverEmailVerified) {
       const normalized = dEmail.trim().toLowerCase();
@@ -735,7 +698,6 @@ export default function Signup() {
     }
   }, [driverEmailVerified, dEmail]);
 
-  // REPLACE the whole function:
   const submitDriver = async () => {
     if (!driverValid) return;
     if (!driverEmailVerified) {
@@ -745,7 +707,6 @@ export default function Signup() {
 
     setLoading(true);
     try {
-      // 1) Ensure there is a live session
       const { data: sessData, error: sessErr } =
         await supabase.auth.getSession();
       if (sessErr) throw sessErr;
@@ -758,7 +719,6 @@ export default function Signup() {
         return;
       }
 
-      // 2) Fetch current user and guard user.id
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr) throw userErr;
       const user = userData?.user;
@@ -772,7 +732,6 @@ export default function Signup() {
       }
       const authUserId: string = user.id;
 
-      // 3) Normalize and block duplicates in app_user
       const normalizedEmail = dEmail.trim().toLowerCase();
       if (await emailExistsInAppUser(normalizedEmail)) {
         setErrorsD((prev) => ({ ...prev, dEmail: "Email already exist" }));
@@ -784,7 +743,6 @@ export default function Signup() {
         return;
       }
 
-      // 4) (Optional) set a password for the Auth account
       if (dPw?.trim()) {
         const { error: pwErr } = await supabase.auth.updateUser({
           password: dPw,
@@ -797,7 +755,6 @@ export default function Signup() {
         }
       }
 
-      // 5) Build photoUrl (Google/metadata → fallback to Gravatar)
       let photoUrl: string | null =
         (user.identities ?? []).find((i: any) => i.provider === "google")
           ?.identity_data?.picture ??
@@ -812,7 +769,6 @@ export default function Signup() {
         photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
       }
 
-      // 6) Insert into app_user (password hashed by DB trigger)
       const { error: insertErr } = await supabase.from("app_user").insert([
         {
           user_id: authUserId,
@@ -827,7 +783,6 @@ export default function Signup() {
       ]);
       if (insertErr) throw insertErr;
 
-      // 7) Go to driver landing page (already logged in via OTP)
       router.replace("/driver/driverLandingpage");
     } catch (err: any) {
       Alert.alert("Sign up failed", err?.message ?? "Something went wrong.");
@@ -841,9 +796,6 @@ export default function Signup() {
 
     setLoading(true);
     try {
-      console.log("Starting shop submission process...");
-
-      // 0) Network guard
       const networkState = await NetInfo.fetch();
       if (!networkState.isConnected) {
         throw new Error(
@@ -851,7 +803,6 @@ export default function Signup() {
         );
       }
 
-      // 1) Ensure there is a live session
       const { data: sessData, error: sessErr } =
         await supabase.auth.getSession();
       if (sessErr) throw new Error(`Authentication error: ${sessErr.message}`);
@@ -864,7 +815,6 @@ export default function Signup() {
         return;
       }
 
-      // 2) Fetch current user and guard user.id
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr)
         throw new Error(`User authentication error: ${userErr.message}`);
@@ -879,13 +829,12 @@ export default function Signup() {
       }
       const authUserId: string = user.id;
 
-      // 3) Optional: set/update password
       const normalizedEmail = sEmail.trim().toLowerCase();
       if (!driverEmailVerified) {
         const exists = await emailExistsInAppUser(normalizedEmail);
         if (exists) {
           setSEmailCheckError("Email already exist");
-          setTouchedS((prev) => ({ ...prev, sEmail: true })); // make sure it shows under the input
+          setTouchedS((prev) => ({ ...prev, sEmail: true }));
           setLoading(false);
           return;
         }
@@ -902,7 +851,6 @@ export default function Signup() {
         }
       }
 
-      // 4) Build photoUrl (Google/metadata → fallback to Gravatar)
       let photoUrl: string | null =
         (user.identities ?? []).find((i: any) => i.provider === "google")
           ?.identity_data?.picture ??
@@ -917,7 +865,6 @@ export default function Signup() {
         photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
       }
 
-      // 5) Save contact to app_user with role = "Shop owner"
       const appUserRow = {
         user_id: authUserId,
         role: "Shop owner" as const,
@@ -933,13 +880,9 @@ export default function Signup() {
         .upsert([appUserRow], { onConflict: "user_id" });
       if (upsertUserErr) throw upsertUserErr;
 
-      // 6) Upload certificates to storage bucket "certificates"
-      //    (make sure your uploadCertificatesAndGetUrls() now saves to: shop/<uid>/...)
       const { urls: certificateUrls, paths: certificatePaths } =
         await uploadCertificatesAndGetUrls(authUserId, certs);
-      // ^ you can use `certificateUrls` for immediate previews if you want
 
-      // 7) Insert/Upsert shop_details (STORE PATHS, not signed URLs)
       const { data: upsertShop, error: upsertShopErr } = await supabase
         .from("shop_details")
         .upsert(
@@ -947,7 +890,7 @@ export default function Signup() {
             {
               user_id: authUserId,
               services: JSON.stringify(services),
-              certificate_url: JSON.stringify(certificatePaths), // store storage paths
+              certificate_url: JSON.stringify(certificatePaths),
               time_open: openTime,
               time_close: closeTime,
               days: JSON.stringify(days),
@@ -961,7 +904,6 @@ export default function Signup() {
 
       const newShopId: string = upsertShop.shop_id;
 
-      // 8) Link or create place
       if (shopName && shopName !== "Shop not Listed") {
         const placeId = shopName as string;
         const { error: updPlaceErr } = await supabase
@@ -972,7 +914,6 @@ export default function Signup() {
       } else {
         const lat = coords?.lat ?? null;
         const lng = coords?.lng ?? null;
-
         const newPlacePayload: any = {
           name: null,
           category: null,
@@ -984,17 +925,14 @@ export default function Signup() {
             lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null,
           owner: newShopId,
         };
-
         const { error: insPlaceErr } = await supabase
           .from("places")
           .insert([newPlacePayload]);
         if (insPlaceErr) throw insPlaceErr;
       }
 
-      // 9) Done
       router.replace("/shop/mechanicLandingpage");
     } catch (err: any) {
-      console.error("Shop submission error:", err);
       if (
         err.message?.includes("Network request failed") ||
         err.message?.includes("Failed to fetch")
@@ -1018,28 +956,22 @@ export default function Signup() {
 
   const sanitizeFileName = (name: string) => name.replace(/[^\w.-]+/g, "_");
 
-  // REPLACE your whole uploadCertificatesAndGetUrls with this:
   async function uploadCertificatesAndGetUrls(
     userId: string,
     files: Array<{ uri: string; name: string; mime: string | null }>
   ) {
-    // returns both signed URLs (for immediate preview) and storage paths (for DB)
     const urls: string[] = [];
     const paths: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-
       const ext = (
         f.name?.split(".").pop() ||
         (f.mime?.split("/")[1] ?? "bin")
       ).toLowerCase();
       const base = sanitizeFileName(f.name || `file_${i}.${ext}`);
 
-      // IMPORTANT: folder layout must match your RLS policy:
-      // certificates bucket → shop/<USER_ID>/<file>
       const path = `shop/${userId}/${Date.now()}_${i}_${base}`;
-
       const fileToUpload: any = {
         uri: f.uri,
         name: base,
@@ -1052,20 +984,13 @@ export default function Signup() {
           contentType: fileToUpload.type,
           upsert: false,
         });
-
-      if (upErr) {
-        console.log("Supabase upload error:", upErr);
+      if (upErr)
         throw new Error(`Failed to upload certificate: ${upErr.message}`);
-      }
 
-      // bucket is private → generate a signed URL for preview/use
       const { data: signed, error: signErr } = await supabase.storage
         .from("certificates")
-        .createSignedUrl(path, 60 * 60 * 24); // 24 hours
-
-      if (signErr) {
-        throw new Error(`Failed to sign URL: ${signErr.message}`);
-      }
+        .createSignedUrl(path, 60 * 60 * 24);
+      if (signErr) throw new Error(`Failed to sign URL: ${signErr.message}`);
 
       urls.push(signed.signedUrl);
       paths.push(path);
@@ -1074,7 +999,6 @@ export default function Signup() {
     return { urls, paths };
   }
 
-  /* ----------------------------- Actions from dropdown ----------------------------- */
   const handleCertAction = (action: "camera" | "gallery" | "file") => {
     if (action === "camera") setAskCamera(true);
     else if (action === "gallery") setAskGallery(true);
@@ -1143,8 +1067,6 @@ export default function Signup() {
                         setDriverEmailCheckError("Enter a valid email.");
                         return;
                       }
-
-                      // Block OTP if email already exists in app_user
                       const exists = await emailExistsInAppUser(normalized);
                       if (exists) {
                         setDriverEmailCheckError("Email already exist");
@@ -1152,14 +1074,11 @@ export default function Signup() {
                         setDriverEmailVerified(false);
                         return;
                       }
-
-                      // Send OTP
                       const { error } = await supabase.auth.signInWithOtp({
                         email: normalized,
                         options: { shouldCreateUser: true },
                       });
                       if (error) throw error;
-
                       setShowDriverOtpModal(true);
                     } catch (err: any) {
                       setDriverEmailCheckError(
@@ -1227,9 +1146,10 @@ export default function Signup() {
                           setDriverOtpResendLoading(true);
                           setDriverOtpError("");
                           try {
+                            const normalized = dEmail.trim().toLowerCase();
                             const { error } = await supabase.auth.signInWithOtp(
                               {
-                                email: dEmail,
+                                email: normalized,
                                 options: { shouldCreateUser: true },
                               }
                             );
@@ -1258,14 +1178,23 @@ export default function Signup() {
                           setDriverOtpSendLoading(true);
                           setDriverOtpError("");
                           try {
+                            const normalized = dEmail.trim().toLowerCase();
                             const { error } = await supabase.auth.verifyOtp({
-                              email: dEmail,
+                              email: normalized,
                               token: driverOtp,
                               type: "email",
                             });
                             if (error) {
                               setDriverOtpError(
                                 error.message || "Invalid code."
+                              );
+                              return;
+                            }
+                            // ✅ Wait for session to be set before closing the modal / enabling form
+                            const session = await waitForSession();
+                            if (!session) {
+                              setDriverOtpError(
+                                "Could not establish a session. Please try again."
                               );
                               return;
                             }
@@ -1414,7 +1343,6 @@ export default function Signup() {
                 </Text>
               </View>
 
-              {/* Shop (dynamic: places with no owner) */}
               <Select
                 label="Shop"
                 value={shopName}
@@ -1422,14 +1350,13 @@ export default function Signup() {
                   shopListLoading ? "Loading shops…" : "Select your shop"
                 }
                 options={[
-                  ...shopOptions, // { label, value: place_id }
+                  ...shopOptions,
                   { label: "Shop not Listed", value: "Shop not Listed" },
                 ]}
                 onSelect={(v) => {
                   if (shopLocked) return;
-                  setShopName(v); // v is either a place_id or the string "Shop not Listed"
+                  setShopName(v);
                   markTouchedS("shopName");
-
                   if (v === "Shop not Listed") {
                     setAskLocation(true);
                   } else {
@@ -1457,7 +1384,6 @@ export default function Signup() {
                 </Text>
               ) : null}
 
-              {/* Type of Shop */}
               {shopName === "Shop not Listed" && (
                 <View className="mt-3">
                   <Select
@@ -1476,7 +1402,6 @@ export default function Signup() {
                 </View>
               )}
 
-              {/* Location prompt (after permission) */}
               {locationPromptShown && !shopLocked && (
                 <View className="mt-3 flex-row items-center gap-3 rounded-xl border border-gray-300 bg-[#F8FAFF] p-3">
                   <Ionicons name="location-outline" size={18} />
@@ -1525,7 +1450,7 @@ export default function Signup() {
                     placeholder="Shop address (auto from your location)"
                     value={shopAddress}
                     onChangeText={(t) => {
-                      setShopAddress(t); // allow user to tweak if needed
+                      setShopAddress(t);
                       markTouchedS("shopAddress");
                     }}
                     editable={!shopLocked}
@@ -1541,7 +1466,6 @@ export default function Signup() {
                 </View>
               )}
 
-              {/* Contact person */}
               <View className="mt-5 mb-2">
                 <Text className="text-sm font-semibold text-gray-900">
                   Contact person
@@ -1561,7 +1485,6 @@ export default function Signup() {
                 onBlur={() => markTouchedS("sFullname")}
               />
 
-              {/* Shop email */}
               <FieldRow
                 icon="mail-outline"
                 placeholder="Email"
@@ -1584,14 +1507,12 @@ export default function Signup() {
                 onBlur={() => markTouchedS("sEmail")}
               />
 
-              {/* If driver email is verified, reusing it — no OTP for shop */}
               {driverEmailVerified ? (
                 <Text className="mt-1 ml-1 text-xs text-green-600">
                   Using your verified driver email ✓
                 </Text>
               ) : null}
 
-              {/* Shop Verify Email button (only when driver not verified AND shop not verified) */}
               {!driverEmailVerified && !shopEmailVerified && (
                 <Pressable
                   onPress={async () => {
@@ -1599,15 +1520,11 @@ export default function Signup() {
                     setSEmailCheckLoading(true);
                     try {
                       const normalized = sEmail.trim().toLowerCase();
-                      // make sure the error shows under the input
                       markTouchedS("sEmail");
-
                       if (!isEmail(normalized)) {
                         setSEmailCheckError("Enter a valid email.");
                         return;
                       }
-
-                      // NEW: block if email already exists in app_user (same as driver)
                       const exists = await emailExistsInAppUser(normalized);
                       if (exists) {
                         setSEmailCheckError("Email already exist");
@@ -1615,14 +1532,11 @@ export default function Signup() {
                         setShopEmailVerified(false);
                         return;
                       }
-
-                      // proceed with OTP
                       const { error } = await supabase.auth.signInWithOtp({
                         email: normalized,
                         options: { shouldCreateUser: true },
                       });
                       if (error) throw error;
-
                       setShowShopOtpModal(true);
                     } catch (err: any) {
                       setSEmailCheckError(
@@ -1684,9 +1598,10 @@ export default function Signup() {
                           setSOtpError("");
                           setSOtpResendLoading(true);
                           try {
+                            const normalized = sEmail.trim().toLowerCase();
                             const { error } = await supabase.auth.signInWithOtp(
                               {
-                                email: sEmail,
+                                email: normalized,
                                 options: { shouldCreateUser: true },
                               }
                             );
@@ -1715,13 +1630,21 @@ export default function Signup() {
                           setSOtpError("");
                           setSOtpSendLoading(true);
                           try {
+                            const normalized = sEmail.trim().toLowerCase();
                             const { error } = await supabase.auth.verifyOtp({
-                              email: sEmail,
+                              email: normalized,
                               token: sOtp,
                               type: "email",
                             });
                             if (error) {
                               setSOtpError(error.message || "Invalid code.");
+                              return;
+                            }
+                            const session = await waitForSession();
+                            if (!session) {
+                              setSOtpError(
+                                "Could not establish a session. Please try again."
+                              );
                               return;
                             }
                             setShowShopOtpModal(false);
@@ -1771,7 +1694,6 @@ export default function Signup() {
                 error={touchedS.sPhone ? errorsS.sPhone : undefined}
                 onBlur={() => markTouchedS("sPhone")}
               />
-
               <FieldRow
                 icon="location-outline"
                 placeholder="Contact address"
@@ -1920,7 +1842,7 @@ export default function Signup() {
                 </View>
               </View>
 
-              {/* Passwords */}
+              {/* Security */}
               <View className="mt-5 mb-2">
                 <Text className="text-sm font-semibold text-gray-900">
                   Security
@@ -1976,7 +1898,6 @@ export default function Signup() {
                 disabled={shopLocked}
               />
 
-              {/* Thumbnails / list */}
               <View className="mt-3 flex-row flex-wrap gap-3">
                 {certs.map((f, idx) => {
                   const isImg =
@@ -2043,6 +1964,7 @@ export default function Signup() {
             </>
           )}
         </View>
+
         <View className="mt-4 items-center">
           <Text className="text-sm text-gray-700">
             Already have an account?{" "}
@@ -2056,7 +1978,7 @@ export default function Signup() {
         </View>
       </ScrollView>
 
-      {/* ---------- PREVIEW MODAL (certs) ---------- */}
+      {/* PREVIEW MODAL */}
       <Modal
         visible={previewIndex !== null}
         transparent
@@ -2088,9 +2010,7 @@ export default function Signup() {
             })()}
             <View className="mt-3 flex-row justify-end gap-2">
               <Pressable
-                onPress={() => {
-                  openFileExternally(previewIndex);
-                }}
+                onPress={() => openFileExternally(previewIndex)}
                 className="rounded-xl border border-gray-300 px-4 py-2"
               >
                 <Text className="font-bold text-gray-900">Open</Text>
@@ -2106,8 +2026,7 @@ export default function Signup() {
         </View>
       </Modal>
 
-      {/* ---------- ASK-FIRST MODALS ---------- */}
-      {/* Ask: Camera */}
+      {/* ASK-FIRST MODALS */}
       <Modal
         visible={askCamera}
         transparent
@@ -2146,7 +2065,6 @@ export default function Signup() {
         </Pressable>
       </Modal>
 
-      {/* Ask: Gallery */}
       <Modal
         visible={askGallery}
         transparent
@@ -2185,7 +2103,6 @@ export default function Signup() {
         </Pressable>
       </Modal>
 
-      {/* Ask: Files */}
       <Modal
         visible={askFiles}
         transparent
@@ -2224,7 +2141,6 @@ export default function Signup() {
         </Pressable>
       </Modal>
 
-      {/* Ask: Location for "Shop not Listed" */}
       <Modal
         visible={askLocation}
         transparent
@@ -2264,7 +2180,6 @@ export default function Signup() {
         </Pressable>
       </Modal>
 
-      {/* Loading overlay */}
       <LoadingScreen visible={loading} message="Creating your account..." />
     </View>
   );

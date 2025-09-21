@@ -13,14 +13,23 @@ import {
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
+import * as FileSystem from "expo-file-system";
 import LoadingScreen from "../../components/LoadingScreen";
+import { supabase } from "../../utils/supabase";
 
-/* ------------------------------ Design tokens ------------------------------ */
+// Works on both new & old typings
+const IMAGES_ONLY: any =
+  (ImagePicker as any).MediaType?.Images ?? ImagePicker.MediaTypeOptions.Images;
+
+/* ------------------------------- Design tokens ----------------------------- */
 const COLORS = {
   bg: "#F4F6F8",
   surface: "#FFFFFF",
@@ -46,10 +55,60 @@ const cardShadow = Platform.select({
 type VehicleType = "car" | "motorcycle" | "van" | "truck";
 type IconLib = "ion" | "mci";
 const MAX_PHOTOS = 4;
+const MIN_DESC = 12; // require at least 12 meaningful characters
+
+/* ------------------------------ Small helpers ------------------------------ */
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  // lightweight decoder (no atob needed)
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+  let bufferLength = base64.length * 0.75;
+  const len = base64.length;
+
+  if (base64[len - 1] === "=") bufferLength--;
+  if (base64[len - 2] === "=") bufferLength--;
+
+  const arraybuffer = new ArrayBuffer(bufferLength);
+  const bytes = new Uint8Array(arraybuffer);
+
+  let p = 0;
+  for (let i = 0; i < len; i += 4) {
+    const enc1 = chars.indexOf(base64[i]);
+    const enc2 = chars.indexOf(base64[i + 1]);
+    const enc3 = chars.indexOf(base64[i + 2]);
+    const enc4 = chars.indexOf(base64[i + 3]);
+
+    const chr1 = (enc1 << 2) | (enc2 >> 4);
+    const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+    const chr3 = ((enc3 & 3) << 6) | enc4;
+
+    bytes[p++] = chr1;
+    if (enc3 !== 64) bytes[p++] = chr2;
+    if (enc4 !== 64) bytes[p++] = chr3;
+  }
+  return arraybuffer;
+}
+
+function guessExtAndMime(uri: string, fallbackType = "image/jpeg") {
+  const ext = uri.split("?")[0].split(".").pop()?.toLowerCase();
+  const type =
+    ext === "png"
+      ? "image/png"
+      : ext === "webp"
+      ? "image/webp"
+      : ext === "heic" || ext === "heif"
+      ? "image/heic"
+      : fallbackType;
+  return { ext: ext || "jpg", type };
+}
 
 /* ------------------------------- Small UI --------------------------------- */
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <Text className="mb-1 ml-1 text-[12px] font-medium text-slate-800">{children}</Text>;
+  return (
+    <Text className="mb-1 ml-1 text-[12px] font-medium text-slate-800">
+      {children}
+    </Text>
+  );
 }
 
 function VehicleChip({
@@ -75,15 +134,23 @@ function VehicleChip({
       style={cardShadow as any}
       android_ripple={{ color: "rgba(0,0,0,0.05)" }}
     >
-      <Icon name={iconName as any} size={18} color={selected ? COLORS.primary : COLORS.text} />
-      <Text className={`text-[13px] ${selected ? "text-[#1E3A8A]" : "text-slate-800"} font-medium`}>
+      <Icon
+        name={iconName as any}
+        size={18}
+        color={selected ? COLORS.primary : COLORS.text}
+      />
+      <Text
+        className={`text-[13px] ${
+          selected ? "text-[#1E3A8A]" : "text-slate-800"
+        } font-medium`}
+      >
         {label}
       </Text>
     </Pressable>
   );
 }
 
-/* ------------------------------ Popups (like Reviews) ------------------------------ */
+/* -------------------------------- Modals ---------------------------------- */
 function SuccessModal({
   visible,
   onClose,
@@ -96,20 +163,39 @@ function SuccessModal({
   subtitle?: string;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
-      <View className="flex-1 items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.45)" }}>
-        <View className="w-80 items-center rounded-2xl bg-white px-6 py-7" style={cardShadow as any}>
-          <View className="h-16 w-16 items-center justify-center rounded-full" style={{ backgroundColor: "#DCFCE7" }}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+    >
+      <View
+        className="flex-1 items-center justify-center"
+        style={{ backgroundColor: "rgba(0,0,0,0.45)" }}
+      >
+        <View
+          className="w-80 items-center rounded-2xl bg-white px-6 py-7"
+          style={cardShadow as any}
+        >
+          <View
+            className="h-16 w-16 items-center justify-center rounded-full"
+            style={{ backgroundColor: "#DCFCE7" }}
+          >
             <Ionicons name="checkmark" size={32} color={COLORS.success} />
           </View>
-          <Text className="mt-4 text-[17px] font-semibold text-slate-900">{title}</Text>
-          <Text className="mt-1 text-center text-[13px] text-slate-600">{subtitle}</Text>
-
+          <Text className="mt-4 text-[17px] font-semibold text-slate-900">
+            {title}
+          </Text>
+          <Text className="mt-1 text-center text-[13px] text-slate-600">
+            {subtitle}
+          </Text>
           <Pressable
             onPress={onClose}
             className="mt-5 w-full items-center justify-center rounded-xl bg-blue-700 py-3 active:opacity-90"
           >
-            <Text className="text-[14px] font-semibold text-white">Done</Text>
+            <Text className="text-[14px] font-semibold text-white">
+              View Status
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -131,27 +217,48 @@ function ErrorModal({
   message?: string;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
-      <View className="flex-1 items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.45)" }}>
-        <View className="w-80 items-center rounded-2xl bg-white px-6 py-7" style={cardShadow as any}>
-          <View className="h-16 w-16 items-center justify-center rounded-full" style={{ backgroundColor: "#FEE2E2" }}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+    >
+      <View
+        className="flex-1 items-center justify-center"
+        style={{ backgroundColor: "rgba(0,0,0,0.45)" }}
+      >
+        <View
+          className="w-80 items-center rounded-2xl bg-white px-6 py-7"
+          style={cardShadow as any}
+        >
+          <View
+            className="h-16 w-16 items-center justify-center rounded-full"
+            style={{ backgroundColor: "#FEE2E2" }}
+          >
             <Ionicons name="alert-circle" size={32} color={COLORS.danger} />
           </View>
-          <Text className="mt-4 text-[17px] font-semibold text-slate-900">{title}</Text>
-          <Text className="mt-1 text-center text-[13px] text-slate-600">{message}</Text>
-
+          <Text className="mt-4 text-[17px] font-semibold text-slate-900">
+            {title}
+          </Text>
+          <Text className="mt-1 text-center text-[13px] text-slate-600">
+            {message}
+          </Text>
           <View className="mt-5 w-full flex-row gap-2">
             <Pressable
               onPress={onDismiss || (() => {})}
               className="flex-1 items-center justify-center rounded-xl border border-slate-300 py-3 active:opacity-90"
             >
-              <Text className="text-[14px] font-semibold text-slate-800">Close</Text>
+              <Text className="text-[14px] font-semibold text-slate-800">
+                Close
+              </Text>
             </Pressable>
             <Pressable
               onPress={onRetry}
               className="flex-1 items-center justify-center rounded-xl bg-blue-700 py-3 active:opacity-90"
             >
-              <Text className="text-[14px] font-semibold text-white">Try again</Text>
+              <Text className="text-[14px] font-semibold text-white">
+                Try again
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -180,16 +287,36 @@ function ConfirmModal({
   onConfirm: () => void;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
-      <View className="flex-1 items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.45)" }}>
-        <View className="w-80 rounded-2xl bg-white px-6 py-7" style={cardShadow as any}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+    >
+      <View
+        className="flex-1 items-center justify-center"
+        style={{ backgroundColor: "rgba(0,0,0,0.45)" }}
+      >
+        <View
+          className="w-80 rounded-2xl bg-white px-6 py-7"
+          style={cardShadow as any}
+        >
           <View className="items-center">
-            <View className="h-16 w-16 items-center justify-center rounded-full" style={{ backgroundColor: "#DBEAFE" }}>
-              <Ionicons name="information-circle" size={32} color={COLORS.primary} />
+            <View
+              className="h-16 w-16 items-center justify-center rounded-full"
+              style={{ backgroundColor: "#DBEAFE" }}
+            >
+              <Ionicons
+                name="information-circle"
+                size={32}
+                color={COLORS.primary}
+              />
             </View>
           </View>
 
-          <Text className="mt-4 text-center text-[17px] font-semibold text-slate-900">Post this emergency?</Text>
+          <Text className="mt-4 text-center text-[17px] font-semibold text-slate-900">
+            Post this emergency?
+          </Text>
           <Text className="mt-1 text-center text-[12px] text-slate-600">
             We’ll notify responders within range.
           </Text>
@@ -203,7 +330,10 @@ function ConfirmModal({
             </Text>
             <Text className="mt-1 text-[12px] text-slate-700">
               <Text className="font-semibold">Location:</Text>{" "}
-              {(address ? address + " • " : "") + (coords ? `${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}` : "—")}
+              {(address ? address + " • " : "") +
+                (coords
+                  ? `${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}`
+                  : "—")}
             </Text>
             <Text className="mt-1 text-[12px] text-slate-700">
               <Text className="font-semibold">Photos:</Text> {photosCount}
@@ -215,13 +345,17 @@ function ConfirmModal({
               onPress={onCancel}
               className="flex-1 items-center justify-center rounded-xl border border-slate-300 py-3 active:opacity-90"
             >
-              <Text className="text-[14px] font-semibold text-slate-800">Cancel</Text>
+              <Text className="text-[14px] font-semibold text-slate-800">
+                Cancel
+              </Text>
             </Pressable>
             <Pressable
               onPress={onConfirm}
               className="flex-1 items-center justify-center rounded-xl bg-blue-700 py-3 active:opacity-90"
             >
-              <Text className="text-[14px] font-semibold text-white">Post now</Text>
+              <Text className="text-[14px] font-semibold text-white">
+                Post now
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -245,15 +379,21 @@ export default function EmergencyRequest() {
   const [loading, setLoading] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [successVisible, setSuccessVisible] = useState(false);
+  const [postedId, setPostedId] = useState<string | null>(null);
 
   // Location (auto-detected)
   const [locLoading, setLocLoading] = useState(true);
-  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(
+    null
+  );
   const [address, setAddress] = useState<string | null>(null);
   const [locErrorVisible, setLocErrorVisible] = useState(false);
 
+  const trimmed = desc.trim();
+  const isDescTooShort = trimmed.length > 0 && trimmed.length < MIN_DESC;
+
   // Require coords for submit
-  const canSubmit = !!vehicle && desc.trim().length >= 8 && !!coords;
+  const canSubmit = !!vehicle && trimmed.length >= MIN_DESC && !!coords;
 
   /* ------------------------------ Image pickers ----------------------------- */
   const requestMedia = async () => {
@@ -285,8 +425,7 @@ export default function EmergencyRequest() {
         return;
       }
       const res = await ImagePicker.launchImageLibraryAsync({
-        // FIX: MediaTypeOptions (not MediaType)
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: IMAGES_ONLY,
         allowsMultipleSelection: true,
         selectionLimit: Math.max(1, MAX_PHOTOS - photos.length),
         quality: 0.9,
@@ -294,12 +433,17 @@ export default function EmergencyRequest() {
       });
 
       if (!res.canceled) {
-        const uris = (res.assets || []).map((a) => a.uri).filter(Boolean) as string[];
+        const uris = (res.assets || [])
+          .map((a) => a.uri)
+          .filter(Boolean) as string[];
         addUris(uris);
       }
     } catch (e) {
       console.warn("pickFromGallery error:", e);
-      Alert.alert("Choose photos failed", "Please try again or pick one photo at a time.");
+      Alert.alert(
+        "Choose photos failed",
+        "Please try again or pick one photo at a time."
+      );
     }
   };
 
@@ -312,8 +456,11 @@ export default function EmergencyRequest() {
     const res = await ImagePicker.launchCameraAsync({
       quality: 0.9,
       allowsEditing: true,
+      mediaTypes: IMAGES_ONLY,
     });
-    if (!res.canceled && res.assets?.[0]?.uri) addUris([res.assets[0].uri]);
+    if (!res.canceled && res.assets?.[0]?.uri) {
+      addUris([res.assets[0].uri]);
+    }
   };
 
   const removePhoto = (index: number) => {
@@ -340,10 +487,15 @@ export default function EmergencyRequest() {
       setCoords({ lat, lon });
 
       try {
-        const parts = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+        const parts = await Location.reverseGeocodeAsync({
+          latitude: lat,
+          longitude: lon,
+        });
         if (parts && parts[0]) {
           const p = parts[0];
-          const line = [p.name, p.street, p.subregion || p.city, p.region].filter(Boolean).join(", ");
+          const line = [p.name, p.street, p.subregion || p.city, p.region]
+            .filter(Boolean)
+            .join(", ");
           setAddress(line || null);
         } else {
           setAddress(null);
@@ -361,16 +513,97 @@ export default function EmergencyRequest() {
     }
   };
 
-  // Auto-run on mount so location is captured immediately
   useEffect(() => {
     detectLocation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* ------------------------------ Upload helper ----------------------------- */
+  async function uploadPhotosToBucket(
+    userId: string,
+    groupId: string,
+    uris: string[]
+  ) {
+    const bucket = supabase.storage.from("emergency-attachments");
+    const urls: string[] = [];
+
+    for (let i = 0; i < uris.length; i++) {
+      const uri = uris[i];
+
+      // 1) Read local file via Expo FS as base64 (RN-safe), convert to ArrayBuffer
+      let arrayBuffer: ArrayBuffer;
+      let { type: contentType, ext } = guessExtAndMime(uri);
+
+      try {
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        arrayBuffer = base64ToArrayBuffer(base64.replace(/\r?\n/g, ""));
+      } catch (readErr) {
+        console.warn("read->base64->arrayBuffer failed", { uri, readErr });
+        throw readErr;
+      }
+
+      const path = `${userId}/${groupId}/photo-${Date.now()}-${i}.${ext}`;
+
+      // 2) Try direct upload (ArrayBuffer)
+      console.log("Storage upload start", {
+        uri,
+        size: (arrayBuffer as any)?.byteLength,
+        type: contentType,
+        path,
+      });
+
+      let uploadedOk = false;
+      let lastErr: any = null;
+
+      try {
+        const { error } = await bucket.upload(path, arrayBuffer, {
+          upsert: true,
+          contentType,
+        });
+        if (error) throw error;
+        uploadedOk = true;
+      } catch (err: any) {
+        lastErr = err;
+        console.warn(
+          "direct upload failed, will try signed upload",
+          err?.message || err
+        );
+      }
+
+      // 3) Fallback: signed upload with ArrayBuffer
+      if (!uploadedOk) {
+        try {
+          const { data: sign, error: signErr } =
+            await bucket.createSignedUploadUrl(path);
+          if (signErr) throw signErr;
+
+          const { error: up2Err } = await bucket.uploadToSignedUrl(
+            path,
+            sign.token,
+            arrayBuffer,
+            { upsert: true, contentType }
+          );
+          if (up2Err) throw up2Err;
+
+          uploadedOk = true;
+        } catch (err2) {
+          console.error("signed upload also failed", err2);
+          throw lastErr || err2;
+        }
+      }
+
+      // 4) Public URL (for public bucket). If private, store `path` instead.
+      const { data } = bucket.getPublicUrl(path);
+      urls.push(data.publicUrl);
+    }
+
+    return urls;
+  }
 
   /* -------------------------------- Submit --------------------------------- */
   const onSubmit = () => {
     if (!canSubmit) return;
-    // Open confirmation first (same design family as Reviews)
     setConfirmVisible(true);
   };
 
@@ -378,11 +611,62 @@ export default function EmergencyRequest() {
     setConfirmVisible(false);
     setLoading(true);
 
-    // TODO: Upload photos to Supabase and insert row in `emergency`
-    await new Promise((r) => setTimeout(r, 900));
+    try {
+      // 1) Auth user
+      const { data: userRes, error: userErr } = await supabase.auth.getUser();
+      if (userErr) throw userErr;
+      const userId = userRes.user?.id;
+      if (!userId) throw new Error("No signed-in user.");
 
-    setLoading(false);
-    setSuccessVisible(true);
+      if (!coords) throw new Error("Location not available.");
+
+      // 🔎 Quick ping to Storage before heavy uploads
+      try {
+        const ping = await supabase.storage
+          .from("emergency-attachments")
+          .list("", { limit: 1 });
+        if (ping.error)
+          console.warn("storage list error →", ping.error.message);
+        else console.log("storage list ok →", ping.data?.length, "items");
+      } catch (e) {
+        console.warn("storage list threw →", e);
+      }
+
+      // 2) Upload photos (optional)
+      let attachmentUrls: string[] = [];
+      if (photos.length) {
+        const groupId = Date.now().toString(36); // simple grouping folder
+        attachmentUrls = await uploadPhotosToBucket(userId, groupId, photos);
+      }
+
+      // 3) Insert emergency row and retrieve the generated emergency_id
+      const { data: inserted, error: insErr } = await supabase
+        .from("emergency")
+        .insert({
+          user_id: userId,
+          vehicle_type: vehicle!, // required
+          breakdown_cause: trimmed,
+          attachments: attachmentUrls, // JSONB array of URLs
+          latitude: coords.lat,
+          longitude: coords.lon,
+        })
+        .select("emergency_id")
+        .single();
+
+      if (insErr) throw insErr;
+
+      setPostedId(inserted.emergency_id);
+      setSuccessVisible(true);
+    } catch (err: any) {
+      console.warn("Post emergency failed:", err);
+      Alert.alert(
+        "Posting failed",
+        err?.message?.toString?.() ||
+          "Please check your connection and try again."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   /* ------------------------------- Components ------------------------------- */
@@ -424,33 +708,52 @@ export default function EmergencyRequest() {
     <SafeAreaView className="flex-1 bg-white">
       {/* Page header (back + title) */}
       <View className="relative h-14 flex-row items-center border-b border-slate-100 bg-white">
-        <Pressable onPress={() => router.back()} hitSlop={12} className="absolute left-4">
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={12}
+          className="absolute left-4"
+        >
           <Ionicons name="arrow-back" size={24} color="#0F172A" />
         </Pressable>
         <View className="absolute inset-0 items-center justify-center">
-          <Text className="text-[16px] font-medium text-slate-900">Post Emergency</Text>
+          <Text className="text-[16px] font-medium text-slate-900">
+            Post Emergency
+          </Text>
         </View>
       </View>
 
       {/* MAIN CONTENT — card-style body */}
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} className="flex-1">
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        className="flex-1"
+      >
         <ScrollView
           className="flex-1 bg-white"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) }}
           keyboardShouldPersistTaps="handled"
         >
           {/* Outer card */}
-          <View className="mx-4 mt-4 rounded-2xl bg-white" style={cardShadow as any}>
+          <View
+            className="mx-4 mt-4 rounded-2xl bg-white"
+            style={cardShadow as any}
+          >
             {/* Header text */}
             <View className="px-5 pt-4">
-              <Text className="text-[16px] font-medium text-slate-900">What’s the situation?</Text>
-              <Text className="mt-1 text-[12px] text-slate-600">We’ll notify nearby responders once you submit.</Text>
+              <Text className="text-[16px] font-medium text-slate-900">
+                What’s the situation?
+              </Text>
+              <Text className="mt-1 text-[12px] text-slate-600">
+                We’ll notify nearby responders once you submit.
+              </Text>
             </View>
 
             {/* Body sections */}
             <View className="px-5 pb-5 pt-2">
               {/* Vehicle type */}
-              <View className="mt-3 rounded-2xl border border-slate-200 bg-white p-4" style={cardShadow as any}>
+              <View
+                className="mt-3 rounded-2xl border border-slate-200 bg-white p-4"
+                style={cardShadow as any}
+              >
                 <FieldLabel>Vehicle type</FieldLabel>
                 <View className="mt-1" />
                 <View className="flex-row mb-2">
@@ -489,28 +792,53 @@ export default function EmergencyRequest() {
 
               {/* Description */}
               <View className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <FieldLabel>Brief description (probable cause of breakdown)</FieldLabel>
-                <View className="rounded-xl border border-slate-300 bg-white">
+                <FieldLabel>
+                  Brief description (probable cause of breakdown)
+                </FieldLabel>
+
+                <View
+                  className={`rounded-xl border bg-white ${
+                    isDescTooShort ? "border-red-500" : "border-slate-300"
+                  }`}
+                >
                   <TextInput
                     value={desc}
                     onChangeText={setDesc}
                     placeholder="e.g., Flat rear tire, losing air fast near Argao bridge…"
                     placeholderTextColor="#6B7280"
                     multiline
-                    className="min-h-[90px] p-3 text-[14px] text-slate-900"
+                    style={{ textAlignVertical: "top", paddingTop: 8 }}
+                    className="min-h-[90px] text-left p-3 text-[14px] text-slate-900"
                   />
                 </View>
-                <Text className="mt-1 text-[11px] text-slate-600">Be specific so responders can prepare.</Text>
+
+                {isDescTooShort ? (
+                  <Text className="mt-1 text-[11px] text-red-600">
+                    Please add at least {MIN_DESC - trimmed.length} more
+                    character
+                    {MIN_DESC - trimmed.length > 1 ? "s" : ""} so responders
+                    know what to prepare.
+                  </Text>
+                ) : (
+                  <Text className="mt-1 text-[11px] text-slate-600">
+                    Be specific so responders can prepare.
+                  </Text>
+                )}
               </View>
 
               {/* Current location (read-only, auto) */}
-              <View className="mt-3 rounded-2xl border border-slate-200 bg-white p-4" style={cardShadow as any}>
+              <View
+                className="mt-3 rounded-2xl border border-slate-200 bg-white p-4"
+                style={cardShadow as any}
+              >
                 <FieldLabel>Your location</FieldLabel>
 
                 {locLoading && !coords ? (
                   <View className="mt-1 flex-row items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <ActivityIndicator size="small" />
-                    <Text className="text-[12px] text-slate-700">Detecting your location…</Text>
+                    <Text className="text-[12px] text-slate-700">
+                      Detecting your location…
+                    </Text>
                   </View>
                 ) : null}
 
@@ -520,12 +848,14 @@ export default function EmergencyRequest() {
                       {address ? address + " • " : ""}
                       {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}
                     </Text>
-                    <Text className="mt-1 text-[11px] text-slate-500">Location is captured automatically.</Text>
+                    <Text className="mt-1 text-[11px] text-slate-500">
+                      Location is captured automatically.
+                    </Text>
                   </View>
                 ) : null}
 
                 {!locLoading && !coords ? (
-                  <View className="mt-1 rounded-xl border border-amber-300 bg-amber-50 p-3">
+                  <View className="mt-1 rounded-2xl border border-amber-300 bg-amber-50 p-3">
                     <Text className="text-[12px] text-amber-800">
                       We couldn’t get your location. Tap “Try again”.
                     </Text>
@@ -533,7 +863,9 @@ export default function EmergencyRequest() {
                       onPress={() => setLocErrorVisible(true)}
                       className="mt-2 self-start rounded-lg border border-amber-300 px-3 py-1"
                     >
-                      <Text className="text-[12px] text-amber-800">Open help</Text>
+                      <Text className="text-[12px] text-amber-800">
+                        Open help
+                      </Text>
                     </Pressable>
                   </View>
                 ) : null}
@@ -549,34 +881,53 @@ export default function EmergencyRequest() {
 
                 <View className="mt-2 flex-row gap-2">
                   <Pressable
-                    onPress={photos.length >= MAX_PHOTOS ? undefined : pickFromGallery}
+                    onPress={
+                      photos.length >= MAX_PHOTOS ? undefined : pickFromGallery
+                    }
                     className={`flex-1 items-center justify-center rounded-xl border border-slate-300 py-2 ${
-                      photos.length >= MAX_PHOTOS ? "opacity-50" : "active:opacity-90"
+                      photos.length >= MAX_PHOTOS
+                        ? "opacity-50"
+                        : "active:opacity-90"
                     }`}
                   >
                     <Ionicons name="image-outline" size={18} color="#111827" />
                     <Text className="mt-1 text-[12px] text-slate-700">
-                      {photos.length >= MAX_PHOTOS ? "Max reached" : "Choose photos"}
+                      {photos.length >= MAX_PHOTOS
+                        ? "Max reached"
+                        : "Choose photos"}
                     </Text>
                   </Pressable>
                   <Pressable
-                    onPress={photos.length >= MAX_PHOTOS ? undefined : takePhoto}
+                    onPress={
+                      photos.length >= MAX_PHOTOS ? undefined : takePhoto
+                    }
                     className={`flex-1 items-center justify-center rounded-xl border border-slate-300 py-2 ${
-                      photos.length >= MAX_PHOTOS ? "opacity-50" : "active:opacity-90"
+                      photos.length >= MAX_PHOTOS
+                        ? "opacity-50"
+                        : "active:opacity-90"
                     }`}
                   >
                     <Ionicons name="camera-outline" size={18} color="#111827" />
                     <Text className="mt-1 text-[12px] text-slate-700">
-                      {photos.length >= MAX_PHOTOS ? "Max reached" : "Take picture"}
+                      {photos.length >= MAX_PHOTOS
+                        ? "Max reached"
+                        : "Take picture"}
                     </Text>
                   </Pressable>
                 </View>
               </View>
 
               {/* Submit */}
-              <View className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4" style={cardShadow as any}>
-                <Text className="text-[15px] font-medium text-slate-900">Ready to post?</Text>
-                <Text className="mt-1 text-[12px] text-slate-600">We’ll ping responders near your location.</Text>
+              <View
+                className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                style={cardShadow as any}
+              >
+                <Text className="text-[15px] font-medium text-slate-900">
+                  Ready to post?
+                </Text>
+                <Text className="mt-1 text-[12px] text-slate-600">
+                  We’ll ping responders near your location.
+                </Text>
 
                 {!coords && (
                   <Text className="mt-2 text-[11px] text-red-600">
@@ -592,7 +943,9 @@ export default function EmergencyRequest() {
                   }`}
                   android_ripple={{ color: "rgba(255,255,255,0.15)" }}
                 >
-                  <Text className="text-[14px] font-medium text-white">Post Emergency</Text>
+                  <Text className="text-[14px] font-medium text-white">
+                    Post Emergency
+                  </Text>
                 </Pressable>
               </View>
             </View>
@@ -608,21 +961,32 @@ export default function EmergencyRequest() {
         onRequestClose={() => setPreviewOpen(false)}
         statusBarTranslucent
       >
-        <Pressable className="flex-1 items-center justify-center bg-black/80 p-4" onPress={() => setPreviewOpen(false)}>
+        <Pressable
+          className="flex-1 items-center justify-center bg-black/80 p-4"
+          onPress={() => setPreviewOpen(false)}
+        >
           {photos[previewIndex] ? (
-            <Image source={{ uri: photos[previewIndex] }} style={{ width: "100%", height: "80%" }} resizeMode="contain" />
+            <Image
+              source={{ uri: photos[previewIndex] }}
+              style={{ width: "100%", height: "80%" }}
+              resizeMode="contain"
+            />
           ) : null}
         </Pressable>
       </Modal>
 
       {/* Loading overlay — spinner */}
-      <LoadingScreen visible={loading} message="Posting your emergency…" variant="spinner" />
+      <LoadingScreen
+        visible={loading}
+        message="Posting your emergency…"
+        variant="spinner"
+      />
 
-      {/* Modals (Reviews-style) */}
+      {/* Modals */}
       <ConfirmModal
         visible={confirmVisible}
         vehicle={vehicle}
-        desc={desc}
+        desc={trimmed}
         address={address}
         coords={coords}
         photosCount={photos.length}
@@ -645,7 +1009,7 @@ export default function EmergencyRequest() {
         visible={successVisible}
         onClose={() => {
           setSuccessVisible(false);
-          router.back();
+          router.replace("/driver/requeststatus"); // ⬅️ no emergency_id param
         }}
         title="Emergency posted"
         subtitle="We’ve alerted nearby responders."

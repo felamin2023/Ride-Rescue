@@ -1,23 +1,12 @@
-// app/(admin)/admindashboard.tsx
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  Pressable,
-  ScrollView,
-  Platform,
-  Dimensions,
-  Image,
-} from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { View, Text, Pressable, ScrollView, Platform, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Link, useRouter } from "expo-router";
-import {
-  BarChart as KitBarChart,
-  LineChart as KitLineChart,
-  PieChart as KitPieChart,
-} from "react-native-chart-kit";
-import { Picker } from "@react-native-picker/picker";
+import { useRouter } from "expo-router";
 
+import AdminSideDrawer from "../../components/adminSidedrawer";
+import AdminTopHeader from "../../components/AdminTopHeader";
+
+/* =============================== THEME =============================== */
 const COLORS = {
   bg: "#F4F6F8",
   surface: "#FFFFFF",
@@ -26,525 +15,479 @@ const COLORS = {
   sub: "#64748B",
   primary: "#2563EB",
   brand: "#0F2547",
+  positiveBlue: "#2563EB",
+  negativeBlue: "#93C5FD",
+  trackBlue: "#E8F0FE",
 };
-
-const cardShadow = Platform.select({
-  ios: {
-    shadowColor: "#000",
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  android: { elevation: 2 },
-});
-
-const { width } = Dimensions.get("window");
 const SIDEBAR_W = 240;
 
-const menu = [
-  {
-    label: "Dashboard",
-    icon: "grid-outline" as const,
-    href: "/admindashboard",
-  },
-  {
-    label: "Requests",
-    icon: "document-text-outline" as const,
-    href: "/admindashboard",
-  },
-  {
-    label: "Shops & Mechanics",
-    icon: "build-outline" as const,
-    href: "/admindashboard",
-  },
-  { label: "Users", icon: "people-outline" as const, href: "/admindashboard" },
-  {
-    label: "Customer Reviews",
-    icon: "chatbubbles-outline" as const,
-    href: "/admindashboard",
-  },
-  { label: "Payments", icon: "card-outline" as const, href: "/admindashboard" },
-  { label: "Accounts", icon: "key-outline" as const, href: "/admindashboard" },
-];
+/* how far to nudge the Total Users donut to the RIGHT on desktop */
+const NUDGE_PX = 240;
 
-function SectionCard({
-  title,
-  children,
-  right,
-}: {
-  title: string;
-  children: React.ReactNode;
-  right?: React.ReactNode;
-}) {
+const PIE_COLORS = { morning: "#FDE68A", afternoon: "#93C5FD", evening: "#1E3A8A" };
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+/* ========================= reduce motion hook ========================= */
+const usePrefersReducedMotion = () => {
+  const [prefers, setPrefers] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const onChange = () => setPrefers(!!mq?.matches);
+    onChange();
+    mq?.addEventListener?.("change", onChange);
+    return () => mq?.removeEventListener?.("change", onChange);
+  }, []);
+  return prefers;
+};
+
+/* ============================= AutoWidth ============================= */
+function AutoWidth({ children }: { children: (w: number) => React.ReactNode }) {
+  const [w, setW] = useState(0);
   return (
-    <View
-      className="rounded-2xl bg-white"
-      style={[
-        { borderWidth: 1, borderColor: COLORS.border },
-        cardShadow as any,
-      ]}
-    >
-      <View className="flex-row items-center justify-between px-4 py-3">
-        <Text className="text-[15px] font-semibold text-slate-900">
-          {title}
-        </Text>
-        {right}
-      </View>
-      <View className="h-[1px] bg-slate-100" />
-      <View className="p-4">{children}</View>
+    <View className="w-full" onLayout={(e) => setW(Math.max(0, e.nativeEvent.layout.width))}>
+      {w > 0 ? children(w) : null}
     </View>
   );
 }
 
-/* --------------------------- Dashboard --------------------------- */
+/* ============================== DonutChart ============================== */
+function DonutChart({
+  data,
+  size = 148,
+  innerRatio = 0.64,
+  sweepDuration = 900,
+  centerOverride,
+  canvasWidth,
+  canvasHeight,
+  cx,
+  cy,
+}: {
+  data: { label: string; value: number; color?: string }[];
+  size?: number;
+  innerRatio?: number;
+  sweepDuration?: number;
+  centerOverride?: string;
+  canvasWidth?: number;
+  canvasHeight?: number;
+  cx?: number;
+  cy?: number;
+}) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const total = useMemo(() => data.reduce((s, d) => s + (Number(d.value) || 0), 0), [data]);
+
+  const W = canvasWidth ?? size;
+  const H = canvasHeight ?? size;
+  const centerX = cx ?? W / 2;
+  const centerY = cy ?? H / 2;
+
+  const r = size / 2 - 6;
+  const rInner = r * innerRatio;
+
+  const describeArc = (cx0: number, cy0: number, rO: number, rI: number, a0: number, a1: number) => {
+    const toRad = (a: number) => (Math.PI / 180) * a;
+    const sx = cx0 + rO * Math.cos(toRad(a0));
+    const sy = cy0 + rO * Math.sin(toRad(a0));
+    const ex = cx0 + rO * Math.cos(toRad(a1));
+    const ey = cy0 + rO * Math.sin(toRad(a1));
+    const big = a1 - a0 > 180 ? 1 : 0;
+    const sxi = cx0 + rI * Math.cos(toRad(a1));
+    const syi = cy0 + rI * Math.sin(toRad(a1));
+    const exi = cx0 + rI * Math.cos(toRad(a0));
+    const eyi = cy0 + rI * Math.sin(toRad(a0));
+    return `M ${sx} ${sy} A ${rO} ${rO} 0 ${big} 1 ${ex} ${ey} L ${sxi} ${syi} A ${rI} ${rI} 0 ${big} 0 ${exi} ${eyi} Z`;
+  };
+
+  const [progress, setProgress] = useState(prefersReducedMotion ? 1 : 0);
+  useEffect(() => {
+    if (prefersReducedMotion) return setProgress(1);
+    let raf: number;
+    const start = performance.now();
+    a: {
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - start) / sweepDuration);
+        setProgress(easeOutCubic(t));
+        if (t < 1) raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    }
+    return () => cancelAnimationFrame(raf);
+  }, [prefersReducedMotion, sweepDuration, data]);
+
+  const maxAngle = -90 + 360 * progress;
+
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
+      {(() => {
+        let acc = 0;
+        return data.map((d, i) => {
+          const seg = ((Number(d.value) || 0) / (total || 1)) * 360;
+          const start = -90 + acc;
+          const end = Math.min(-90 + acc + seg, maxAngle);
+          acc += seg;
+          if (end <= start) return null;
+          const path = describeArc(centerX, centerY, r, rInner, start, end);
+          const color = d.color ?? ["#2563EB", "#22C55E", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4"][i % 6];
+          return <path key={d.label} d={path} fill={color} opacity={0.95} />;
+        });
+      })()}
+      <circle cx={centerX} cy={centerY} r={rInner} fill="#fff" />
+      <text x={centerX} y={centerY - 1} textAnchor="middle" fontSize="16" fontWeight="800" fill={COLORS.text}>
+        {centerOverride ?? Math.round(data.reduce((s, d) => s + d.value, 0) * progress).toLocaleString()}
+      </text>
+      <text x={centerX} y={centerY + 12} textAnchor="middle" fontSize="10" fill={COLORS.sub}>Total</text>
+    </svg>
+  );
+}
+
+/* ============================= DualLineAreaChart ============================= */
+function DualLineAreaChart({
+  labels,
+  current,
+  previous,
+  width = 900,
+  height = 240,
+  padding = { top: 22, right: 16, bottom: 34, left: 42 },
+}: {
+  labels: string[];
+  current: number[];
+  previous?: number[];
+  width?: number; height?: number;
+  padding?: { top: number; right: number; bottom: number; left: number };
+}) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const chartW = width - padding.left - padding.right;
+  const chartH = height - padding.top - padding.bottom;
+
+  const { maxValue, ptsCur, ptsPrev, yTicks } = useMemo(() => {
+    const max = Math.max(0, ...current, ...(previous ?? []));
+    const pow10 = Math.pow(10, Math.max(0, String(Math.floor(max)).length - 1));
+    const niceMax = Math.ceil(max / pow10) * pow10 || 10;
+    const n = Math.max(current.length, labels.length, previous?.length || 0);
+    const xStep = n > 1 ? chartW / (n - 1) : 0;
+    const yScale = (v: number) => chartH - (v / niceMax) * chartH;
+    const mk = (arr?: number[]) => (arr ?? []).map((v, i) => [padding.left + i * xStep, padding.top + yScale(v)] as const);
+    const ticks = Array.from({ length: 5 }, (_, i) => Math.round((niceMax / 4) * i));
+    return { maxValue: niceMax, ptsCur: mk(current), ptsPrev: mk(previous), yTicks: ticks };
+  }, [current, previous, labels, chartW, chartH, padding.left, padding.top]);
+
+  const areaPath = useMemo(() => {
+    if (!ptsCur.length) return "";
+    const top = ptsCur.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`).join(" ");
+    const base = `L ${ptsCur[ptsCur.length - 1][0]} ${padding.top + chartH} L ${ptsCur[0][0]} ${padding.top + chartH} Z`;
+    return `${top} ${base}`;
+  }, [ptsCur, padding.top, chartH]);
+
+  const lineCur = useMemo(() => (ptsCur.length ? ptsCur.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`).join(" ") : ""), [ptsCur]);
+  const linePrev = useMemo(() => (ptsPrev?.length ? ptsPrev.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`).join(" ") : ""), [ptsPrev]);
+
+  const pathRef = useRef<SVGPathElement | null>(null);
+  const [lineLen, setLineLen] = useState(0);
+  const [progress, setProgress] = useState(prefersReducedMotion ? 1 : 0);
+
+  useEffect(() => {
+    const L = pathRef.current?.getTotalLength?.() ?? 0;
+    setLineLen(L);
+    if (prefersReducedMotion) return setProgress(1);
+    let raf: number;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / 900);
+      setProgress(easeOutCubic(t));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [lineCur, prefersReducedMotion]);
+
+  const xFromIdx = (i: number) => ptsCur[i]?.[0] ?? (ptsPrev?.[i]?.[0] ?? 0);
+
+  return (
+    <View style={{ width, overflow: "hidden" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", display: "block" }}>
+        <defs>
+          <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopOpacity="0.26" stopColor={COLORS.primary} />
+            <stop offset="100%" stopOpacity="0" stopColor={COLORS.primary} />
+          </linearGradient>
+        </defs>
+
+        {yTicks.map((t, i) => {
+          const y = padding.top + (chartH - (t / maxValue) * chartH);
+          return (
+            <g key={i}>
+              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="#E2E8F0" />
+              <text x={padding.left - 8} y={y} textAnchor="end" alignmentBaseline="middle" fontSize="10" fill="#334155">
+                {t}
+              </text>
+            </g>
+          );
+        })}
+
+        <path d={areaPath} fill="url(#areaGradient)" />
+        {linePrev ? <path d={linePrev} stroke="#475569" strokeWidth={2} fill="none" strokeDasharray="4 4" /> : null}
+        <path
+          ref={pathRef}
+          d={lineCur}
+          stroke={COLORS.primary}
+          strokeWidth={2.4}
+          fill="none"
+          style={{ strokeDasharray: lineLen || 1, strokeDashoffset: lineLen > 0 ? (1 - progress) * lineLen : 0 }}
+        />
+
+        {labels.map((lbl, i) => {
+          const x = xFromIdx(i);
+          return (
+            <text key={lbl} x={x} y={height - padding.bottom + 16} textAnchor="middle" fontSize="10" fill="#64748B">
+              {lbl}
+            </text>
+          );
+        })}
+      </svg>
+    </View>
+  );
+}
+
+/* ========================= Animated Service Donut ========================= */
+function ServiceDonut({
+  name,
+  positive,
+  size = 92,
+  stroke = 10,
+  duration = 900,
+}: {
+  name: string;
+  positive: number;
+  size?: number;
+  stroke?: number;
+  duration?: number;
+}) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const radius = (size - stroke) / 2;
+  const cx = size / 2, cy = size / 2;
+  const circ = 2 * Math.PI * radius;
+
+  const target = Math.max(0, Math.min(100, positive)) / 100;
+  const [p, setP] = useState(prefersReducedMotion ? target : 0);
+
+  useEffect(() => {
+    if (prefersReducedMotion) return setP(target);
+    let raf: number;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      setP(easeOutCubic(t) * target);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, prefersReducedMotion, duration]);
+
+  const posLen = p * circ;
+  const negLen = circ - posLen;
+
+  return (
+    <View className="items-center py-0.5 min-w-[96px]">
+      <svg width={size} height={size} style={{ display: "block" }}>
+        <defs>
+          <linearGradient id="donut-pos" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={COLORS.positiveBlue} />
+            <stop offset="100%" stopColor={COLORS.brand} />
+          </linearGradient>
+          <linearGradient id="donut-neg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#C7D2FE" />
+            <stop offset="100%" stopColor={COLORS.negativeBlue} />
+          </linearGradient>
+        </defs>
+        <circle cx={cx} cy={cy} r={radius} stroke={COLORS.trackBlue} strokeWidth={stroke} fill="none" />
+        <circle cx={cx} cy={cy} r={radius} stroke="url(#donut-pos)" strokeWidth={stroke} strokeDasharray={`${posLen} ${circ}`} strokeLinecap="round" fill="none" transform={`rotate(-90 ${cx} ${cy})`} />
+        <circle cx={cx} cy={cy} r={radius} stroke="url(#donut-neg)" strokeWidth={stroke} strokeDasharray={`${negLen} ${circ}`} strokeLinecap="round" fill="none" transform={`rotate(${(-90 + p * 360).toFixed(3)} ${cx} ${cy})`} opacity={0.9} />
+        <text x={cx} y={cy + 3} textAnchor="middle" fontSize="13" fontWeight="800" fill={COLORS.text}>{Math.round(p*100)}%</text>
+      </svg>
+      <Text className="mt-1.5 font-semibold text-[12px] text-slate-900">{name}</Text>
+    </View>
+  );
+}
+
+/* ========================= DATA (demo; swap to Supabase) ========================= */
+type RangeKey = "all" | "30d" | "7d";
+const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
+  { key: "all", label: "All time" },
+  { key: "30d", label: "Last 30 days" },
+  { key: "7d", label: "Last 7 days" },
+];
+function useDashboardData(range: RangeKey) {
+  const factor = range === "all" ? 1 : range === "30d" ? 0.35 : 0.18;
+  const totalUsers = Math.round(4293 * factor);
+  const composition = { active: 0.61, inactive: 0.26, returning: 0.13 };
+  const totalDrivers = Math.round(2609 * factor);
+  const totalShops = Math.round(1136 * factor);
+  const totalEmergencies = Math.round(547 * factor);
+  const requestTime = [
+    { name: "Morning", value: 28, color: PIE_COLORS.morning },
+    { name: "Afternoon", value: 40, color: PIE_COLORS.afternoon },
+    { name: "Evening", value: 32, color: PIE_COLORS.evening },
+  ];
+  const trendLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const trendNow = [8, 6, 10, 14, 12, 9, 16].map((n) => Math.round(n * (0.6 + factor)));
+  const trendPrev = [6, 7, 8, 12, 9, 11, 10].map((n) => Math.round(n * (0.55 + factor)));
+  return { totalUsers, composition, totalDrivers, totalShops, totalEmergencies, requestTime, trendLabels, trendNow, trendPrev };
+}
+
+/* ================================ PAGE ================================ */
 export default function AdminDashboard() {
   const router = useRouter();
+  const { width: viewportW } = useWindowDimensions();
 
   if (Platform.OS !== "web") {
     return (
-      <View
-        className="flex-1 items-center justify-center px-6"
-        style={{ backgroundColor: COLORS.bg }}
-      >
-        <View
-          className="items-center rounded-2xl bg-white p-6"
-          style={cardShadow as any}
-        >
-          <Ionicons name="laptop-outline" size={42} color={COLORS.brand} />
-          <Text className="mt-3 text-lg font-semibold text-slate-900">
-            Admin Dashboard is web-only
-          </Text>
-          <Text className="mt-1 text-center text-[13px] text-slate-600">
-            Please open this on a desktop browser. For mobile, continue using
-            the RideRescue app.
-          </Text>
-          <Pressable
-            onPress={() => router.replace("/driver/driverLandingpage")}
-            className="mt-4 rounded-xl bg-[#2563EB] px-4 py-2"
-          >
-            <Text className="font-semibold text-white">Go to mobile home</Text>
-          </Pressable>
+      <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: COLORS.bg }}>
+        <View className="items-center rounded-2xl bg-white p-5 shadow-md">
+          <Ionicons name="laptop-outline" size={38} color={COLORS.brand} />
+          <Text className="mt-2 text-[15px] font-semibold text-slate-900">Admin Dashboard is web-only</Text>
+          <Text className="mt-1 text-[12px] text-slate-500 text-center">Open on desktop. For mobile, use the app.</Text>
         </View>
       </View>
     );
   }
 
-  /* ---------------- Mock analytics ---------------- */
-  const BAR_LABELS_BASE = [
-    "01",
-    "02",
-    "03",
-    "04",
-    "05",
-    "06",
-    "07",
-    "08",
-    "09",
-    "10",
-    "11",
-    "12",
-  ];
-  const BAR_VALUES_BASE = [28, 24, 26, 32, 20, 30, 34, 22, 26, 24, 29, 35];
+  const isNarrow = viewportW <= 1366;
+  const contentAreaW = Math.max(320, viewportW - SIDEBAR_W);
 
-  const LINE_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
-  const LINE_NOW = [8, 6, 10, 14, 12, 9, 16];
-  const LINE_LAST = [6, 7, 8, 12, 9, 11, 10];
+  // Donut canvas geometry
+  const PIE_SIZE = 148;
+  const PIE_SAFE_PAD = Math.round(PIE_SIZE * (isNarrow ? 0.12 : 0.1));
+  const PIE_CANVAS_W = PIE_SIZE + PIE_SAFE_PAD;
+  const PIE_CANVAS_H = PIE_SIZE;
+  const PIE_CENTER_SHIFT = Math.round(PIE_SAFE_PAD * 0.4);
+  const PIE_CX = Math.round(PIE_CANVAS_W / 2 + PIE_CENTER_SHIFT);
+  const PIE_CY = Math.round(PIE_CANVAS_H / 2);
 
-  const PIE_DATA = [
-    {
-      name: "Morning",
-      value: 28,
-      color: "#A7C5FF",
-      legendFontColor: "#334155",
-      legendFontSize: 12,
-    },
-    {
-      name: "Afternoon",
-      value: 40,
-      color: "#5B8DEF",
-      legendFontColor: "#334155",
-      legendFontSize: 12,
-    },
-    {
-      name: "Evening",
-      value: 32,
-      color: "#243B80",
-      legendFontColor: "#334155",
-      legendFontSize: 12,
-    },
-  ];
-
-  /* ---------------- Sorting (reliable) ---------------- */
-  type SortBy = "timeline" | "value_desc" | "value_asc";
-  const [sortBy, setSortBy] = useState<SortBy>("timeline");
-  const [barLabels, setBarLabels] = useState<string[]>(BAR_LABELS_BASE);
-  const [barValues, setBarValues] = useState<number[]>(BAR_VALUES_BASE);
-
-  useEffect(() => {
-    const pairs = BAR_LABELS_BASE.map((label, i) => ({
-      label,
-      value: BAR_VALUES_BASE[i],
-    }));
-    if (sortBy === "value_desc") pairs.sort((a, b) => b.value - a.value);
-    if (sortBy === "value_asc") pairs.sort((a, b) => a.value - b.value);
-    setBarLabels(pairs.map((p) => p.label));
-    setBarValues(pairs.map((p) => p.value));
-  }, [sortBy]);
-
-  const revenueNow = useMemo(
-    () => barValues.reduce((a, b) => a + b, 0) * 10000, // mock peso scale
-    [barValues]
-  );
-
-  const contentWidth = Math.min(720, width - SIDEBAR_W - 80);
-  const smallCardWidth = 320;
-
-  const formatPHP = (n: number) => `₱ ${n.toLocaleString()}`;
-
-  const chartConfig = {
-    backgroundGradientFrom: "#ffffff",
-    backgroundGradientTo: "#ffffff",
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(15, 37, 71, ${opacity})`,
-    labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
-    propsForBackgroundLines: { strokeDasharray: "4 8", stroke: "#E5E9F0" },
-    fillShadowGradient: COLORS.primary,
-    fillShadowGradientOpacity: 0.2,
-    barPercentage: 0.6,
-  } as const;
-
-  // inner width of the small right card (360px card - 32px padding)
-  const smallInnerWidth = 360 - 32;
+  const [range, setRange] = useState<RangeKey>("all");
+  const data = useDashboardData(range);
+  const RT_TOTAL = data.requestTime.reduce((s, d) => s + d.value, 0);
 
   return (
     <View className="flex-1 flex-row" style={{ backgroundColor: COLORS.bg }}>
-      {/* Sidebar */}
-      <View
-        style={{ width: SIDEBAR_W }}
-        className="border-r border-slate-200 bg-white"
-      >
-        {/* Brand (bigger) */}
-        <View className="border-b border-slate-200 px-5 py-4">
-          <View className="flex-row items-center gap-3">
-            <Image
-              source={require("../../assets/images/logo2.png")}
-              style={{ width: 40, height: 40, borderRadius: 8 }}
-              resizeMode="contain"
-            />
-            <Text
-              className="text-[16px] font-extrabold tracking-wide"
-              style={{ color: COLORS.brand }}
-            >
-              RIDERESCUE
-            </Text>
-          </View>
-        </View>
+      <AdminSideDrawer width={SIDEBAR_W} />
+      <View style={{ width: contentAreaW }} className="flex-1">
+        <AdminTopHeader />
 
-        {/* Menu */}
-        <ScrollView>
-          <Text className="px-5 pt-4 pb-2 text-[11px] uppercase tracking-wider text-slate-400">
-            Menu
-          </Text>
-          {menu.slice(0, 5).map((m) => (
-            <Link key={m.label} href={m.href} asChild>
-              <Pressable
-                className="mx-2 mb-1 flex-row items-center gap-3 rounded-xl px-3 py-2.5 active:opacity-90"
-                android_ripple={{ color: "#e5e7eb" }}
-                style={{
-                  backgroundColor:
-                    m.label === "Dashboard" ? "#EEF2FF" : "transparent",
-                }}
-              >
-                <Ionicons
-                  name={m.icon}
-                  size={18}
-                  color={m.label === "Dashboard" ? COLORS.primary : "#475569"}
-                />
-                <Text
-                  className={`text-[13px] ${
-                    m.label === "Dashboard"
-                      ? "text-[#1e3a8a] font-semibold"
-                      : "text-slate-700"
-                  }`}
+        {/* cap and center the content */}
+        <ScrollView contentContainerStyle={{ padding: 12 }}>
+          <View className="w-full max-w-[1280px] mx-auto">
+
+            {/* ===== Row A: Total Users WITH inline KPIs ===== */}
+            <View className="-mx-2">
+              <View className="w-full px-2">
+                <SectionCard
+                  title="Total Users"
+                  right={
+                    <View className="flex-row">
+                      {RANGE_OPTIONS.map((opt) => (
+                        <FilterPill key={opt.key} label={opt.label} active={range === opt.key} onPress={() => setRange(opt.key)} />
+                      ))}
+                    </View>
+                  }
                 >
-                  {m.label}
-                </Text>
-              </Pressable>
-            </Link>
-          ))}
-          <Text className="px-5 pt-4 pb-2 text-[11px] uppercase tracking-wider text-slate-400">
-            Others
-          </Text>
-          {menu.slice(5).map((m) => (
-            <Link key={m.label} href={m.href} asChild>
-              <Pressable
-                className="mx-2 mb-1 flex-row items-center gap-3 rounded-xl px-3 py-2.5 active:opacity-90"
-                android_ripple={{ color: "#e5e7eb" }}
-              >
-                <Ionicons name={m.icon} size={18} color="#475569" />
-                <Text className="text-[13px] text-slate-700">{m.label}</Text>
-              </Pressable>
-            </Link>
-          ))}
-        </ScrollView>
-      </View>
+                  <View className="flex-row flex-wrap items-center -mx-2 justify-between">
+                    {/* Left cluster: donut + legend (left-aligned; slightly nudged right) */}
+                    <View
+                      className={
+                        isNarrow
+                          ? "px-2 w-full flex-row items-center justify-center mb-3"
+                          : "px-2 basis-[58%] flex-row items-center justify-start"
+                      }
+                    >
+                      <View
+                        className="w-[152px] h-[152px] items-center justify-center mr-2"
+                        style={{ marginLeft: isNarrow ? 0 : NUDGE_PX }}
+                      >
+                        <DonutChart
+                          data={[
+                            { label: "Active", value: data.composition.active * 100, color: "#3B82F6" },
+                            { label: "Inactive", value: data.composition.inactive * 100, color: "#9CA3AF" },
+                            { label: "Returning", value: data.composition.returning * 100, color: "#C7D2FE" },
+                          ]}
+                          size={140}
+                          centerOverride={data.totalUsers.toLocaleString()}
+                        />
+                      </View>
+                      {/* compact legend; no flex-1 so it stays tight */}
+                      <View className="space-y-2 min-w-[160px]">
+                        <LegendItemRow color="#3B82F6" label="Active" valueText={`${Math.round(data.composition.active * 100)}%`} />
+                        <LegendItemRow color="#9CA3AF" label="Inactive" valueText={`${Math.round(data.composition.inactive * 100)}%`} />
+                        <LegendItemRow color="#C7D2FE" label="Returning" valueText={`${Math.round(data.composition.returning * 100)}%`} />
+                      </View>
+                    </View>
 
-      {/* Main */}
-      <View style={{ width: width - SIDEBAR_W }} className="flex-1">
-        {/* Top bar */}
-        <View className="h-14 flex-row items-center justify-between border-b border-slate-200 bg-white px-4">
-          <Text className="text-[18px] font-bold text-slate-900">
-            Dashboard
-          </Text>
-          <Pressable className="flex-row items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5">
-            <Ionicons
-              name="person-circle-outline"
-              size={20}
-              color={COLORS.brand}
-            />
-            <Text className="text-[12px] text-slate-800">Admin</Text>
-            <Ionicons name="chevron-down" size={16} color="#64748B" />
-          </Pressable>
-        </View>
-
-        {/* Filter Row — Sort by (native Picker) */}
-        <View className="border-b border-slate-200 bg-white px-4 py-3">
-          <View className="flex-row items-center">
-            <View style={{ width: 220 }}>
-              <Text className="mb-1 text-[12px] font-semibold text-slate-700">
-                Sort by
-              </Text>
-              <View
-                className="rounded-xl border border-slate-200 bg-white"
-                style={cardShadow as any}
-              >
-                <Picker
-                  selectedValue={sortBy}
-                  onValueChange={(v) => setSortBy(v as SortBy)}
-                  mode="dropdown"
-                  dropdownIconColor="#64748B"
-                  style={{ height: 40 }}
-                >
-                  <Picker.Item label="Timeline order" value="timeline" />
-                  <Picker.Item label="Value (High → Low)" value="value_desc" />
-                  <Picker.Item label="Value (Low → High)" value="value_asc" />
-                </Picker>
+                    {/* Right: inline KPI cards */}
+                    <View className={isNarrow ? "px-2 w-full" : "px-2 basis-[42%]"}>
+                      <View className="flex-row flex-wrap -mx-1.5 justify-start">
+                        <InlineStat title="Total Drivers" value={data.totalDrivers} className="px-1.5 basis-1/3 min-w-[140px]" />
+                        <InlineStat title="Mechanics & Shops" value={data.totalShops} className="px-1.5 basis-1/3 min-w-[140px]" />
+                        <InlineStat title="Total Emergencies" value={data.totalEmergencies} className="px-1.5 basis-1/3 min-w-[140px]" />
+                      </View>
+                    </View>
+                  </View>
+                </SectionCard>
               </View>
             </View>
-            <View style={{ flex: 1 }} />
-          </View>
-        </View>
 
-        <ScrollView contentContainerStyle={{ padding: 16 }}>
-          {/* Top row */}
-          <View className="flex-row" style={{ gap: 16 }}>
-            {/* Revenue */}
-            <View className="flex-1">
-              <SectionCard
-                title="Revenue"
-                right={
-                  <Pressable className="rounded-lg border border-slate-200 px-3 py-1.5 active:opacity-90">
-                    <Text className="text-[12px] text-slate-700">Export</Text>
-                  </Pressable>
-                }
-              >
-                <Text className="text-[20px] font-extrabold text-slate-900">
-                  {formatPHP(revenueNow)}
-                </Text>
-                <View className="mt-1 flex-row items-center gap-1">
-                  <Ionicons
-                    name="trending-up-outline"
-                    size={14}
-                    color="#16A34A"
-                  />
-                  <Text className="text-[12px] font-semibold text-green-600">
-                    +2.1%
-                  </Text>
-                  <Text className="text-[12px] text-slate-500">
-                    vs previous
-                  </Text>
-                </View>
-
-                <View className="mt-4">
-                  <KitBarChart
-                    key={`bar-${barLabels.join("")}`} // 🔒 force re-render when order changes
-                    data={{
-                      labels: barLabels,
-                      datasets: [{ data: barValues }],
-                    }}
-                    width={contentWidth}
-                    height={180}
-                    fromZero
-                    // withInnerLines
-                    showValuesOnTopOfBars={false}
-                    chartConfig={chartConfig}
-                    style={{ borderRadius: 12, alignSelf: "center" }}
-                  />
-                </View>
-              </SectionCard>
+            {/* ===== Row B: Requests Trend ===== */}
+            <View className="-mx-2">
+              <View className="w-full px-2">
+                <SectionCard title="Requests Trend">
+                  <AutoWidth>{(w) => <DualLineAreaChart labels={data.trendLabels} current={data.trendNow} previous={data.trendPrev} width={w} />}</AutoWidth>
+                  <View className="mt-1.5 items-center">
+                    <View className="flex-row space-x-2">
+                      <LegendDot color={COLORS.primary} label="Current" />
+                      <LegendDot color="#475569" label="Previous" />
+                    </View>
+                  </View>
+                </SectionCard>
+              </View>
             </View>
 
-            {/* Request Time (pie) */}
-            <View style={{ width: 360 }}>
-              <SectionCard
-                title="Request Time"
-                right={
-                  <Pressable className="rounded-lg border border-slate-200 px-3 py-1.5 active:opacity-90">
-                    <Text className="text-[12px] text-slate-700">Export</Text>
-                  </Pressable>
-                }
-              >
-                <Text className="text-[12px] text-slate-500">
-                  Distribution by time of day
-                </Text>
-                <View className="mt-2 items-center justify-center">
-                  <KitPieChart
-                    data={PIE_DATA.map((p) => ({
-                      name: p.name,
-                      population: p.value,
-                      color: p.color,
-                      legendFontColor: p.legendFontColor,
-                      legendFontSize: p.legendFontSize,
-                    }))}
-                    accessor="population"
-                    width={smallInnerWidth} // 360 card - 32 padding = 328
-                    height={200}
-                    chartConfig={chartConfig}
-                    backgroundColor="transparent"
-                    hasLegend={false} // ✅ no built-in legend
-                    paddingLeft="0"
-                    center={[0, 0]}
-                    style={{ alignSelf: "center" }} // ✅ truly centered
-                  />
-                  {/* custom legend only */}
-                  <View className="mt-3 gap-1">
-                    {PIE_DATA.map((p) => (
-                      <LegendDot
-                        key={p.name}
-                        color={p.color}
-                        label={`${p.name} ${p.value}%`}
+            {/* ===== Row C: Request Time + Service Ratings ===== */}
+            <View className="flex-row flex-wrap -mx-2">
+              <View className={isNarrow ? "w-full px-2" : "flex-1 px-2"}>
+                <SectionCard title="Request Time">
+                  {/* centered pair: donut + compact legend */}
+                  <View className="w-full flex-row items-center justify-center">
+                    <View style={{ width: 148 + Math.round(148 * (isNarrow ? 0.12 : 0.1)), height: 148 }} className="items-center justify-center mr-4">
+                      <DonutChart
+                        data={data.requestTime.map((s) => ({ label: s.name, value: s.value, color: s.color }))}
+                        size={148}
+                        centerOverride={`${RT_TOTAL}`}
                       />
-                    ))}
+                    </View>
+                    <View className="space-y-2 min-w-[160px]">
+                      {data.requestTime.map((p) => (
+                        <LegendItemRow key={p.name} color={p.color!} label={p.name} valueText={`${p.value}%`} />
+                      ))}
+                    </View>
                   </View>
-                </View>
-              </SectionCard>
-            </View>
-          </View>
+                </SectionCard>
+              </View>
 
-          {/* Bottom row */}
-          <View className="mt-4 flex-row" style={{ gap: 16 }}>
-            {/* Ratings */}
-            <View className="flex-1">
-              <SectionCard title="Your Rating">
-                <Text className="text-[12px] text-slate-500">
-                  Summary from recent customer reviews
-                </Text>
-                <View
-                  className="mt-4 flex-row items-end"
-                  style={{ columnGap: 24 }}
+              <View className={isNarrow ? "w-full px-2" : "flex-1 px-2"}>
+                <SectionCard
+                  title="Service Ratings"
+                  right={<Text className="text-[12px] text-slate-500">Based on recent feedback</Text>}
                 >
-                  <Bubble percent={92} label="Response Time" color="#22D3EE" />
-                  <Bubble
-                    percent={85}
-                    label="Service Quality"
-                    color="#F59E0B"
-                    large
-                  />
-                  <Bubble
-                    percent={85}
-                    label="Resolution Rate"
-                    color="#A78BFA"
-                  />
-                </View>
-              </SectionCard>
-            </View>
-
-            {/* Top services */}
-            <View className="flex-1">
-              <SectionCard title="Top Requested Services">
-                <TopServiceRow name="Tire Vulcanizing" price={formatPHP(450)} />
-                <TopServiceRow
-                  name="Battery Jumpstart"
-                  price={formatPHP(750)}
-                />
-                <TopServiceRow
-                  name="Engine Diagnostics"
-                  price={formatPHP(450)}
-                />
-                <TopServiceRow
-                  name="Towing (short distance)"
-                  price={formatPHP(1200)}
-                />
-              </SectionCard>
-            </View>
-
-            {/* Requests trend */}
-            <View className="w-[360px]">
-              <SectionCard
-                title="Requests"
-                right={
-                  <Pressable className="rounded-lg border border-slate-200 px-3 py-1.5 active:opacity-90">
-                    <Text className="text-[12px] text-slate-700">Export</Text>
-                  </Pressable>
-                }
-              >
-                <Text className="text-[22px] font-extrabold text-slate-900">
-                  {LINE_NOW.reduce((a, b) => a + b, 0).toLocaleString()}
-                </Text>
-                <View className="mt-1 flex-row items-center gap-1">
-                  <Ionicons
-                    name="trending-down-outline"
-                    size={14}
-                    color="#DC2626"
-                  />
-                  <Text className="text-[12px] font-semibold text-red-600">
-                    2.1%
-                  </Text>
-                  <Text className="text-[12px] text-slate-500">
-                    vs previous
-                  </Text>
-                </View>
-
-                <View className="mt-3">
-                  <KitLineChart
-                    data={{
-                      labels: LINE_LABELS,
-                      datasets: [
-                        {
-                          data: LINE_NOW,
-                          color: (o = 1) => `rgba(37,99,235, ${o})`,
-                          strokeWidth: 2,
-                        },
-                        {
-                          data: LINE_LAST,
-                          color: (o = 1) => `rgba(203,213,225, ${o})`,
-                          strokeWidth: 2,
-                        },
-                      ],
-                      // legend intentionally omitted (no in-chart labels)
-                    }}
-                    width={smallInnerWidth}
-                    height={160}
-                    withDots
-                    withShadow
-                    withInnerLines={false}
-                    fromZero
-                    chartConfig={{
-                      ...chartConfig,
-                      fillShadowGradient: COLORS.primary,
-                      fillShadowGradientOpacity: 0.16,
-                    }}
-                    bezier
-                    style={{ borderRadius: 12, alignSelf: "center" }}
-                  />
-                  {/* custom minimal legend */}
-                  <View className="mt-3 flex-row items-center justify-center">
-                    <LegendDot color={COLORS.primary} label="Current" />
-                    <View style={{ width: 16 }} />
-                    <LegendDot color="#CBD5E1" label="Previous" />
+                  <View className="mt-0.5 flex-row flex-wrap items-center justify-evenly">
+                    <ServiceDonut name="Vulcanize" positive={90} />
+                    <ServiceDonut name="Repair Shop" positive={80} />
                   </View>
-                </View>
-              </SectionCard>
+                  <View className="mt-1.5 items-center">
+                    <View className="flex-row space-x-2">
+                      <LegendDot color={COLORS.positiveBlue} label="Positive" />
+                      <LegendDot color={COLORS.negativeBlue} label="Negative" />
+                    </View>
+                  </View>
+                </SectionCard>
+              </View>
             </View>
           </View>
         </ScrollView>
@@ -553,60 +496,80 @@ export default function AdminDashboard() {
   );
 }
 
-/* ------------------------- helpers ------------------------- */
+/* ============================== UI HELPERS ============================== */
+function SectionCard({
+  title,
+  children,
+  right,
+  className,
+}: {
+  title: string;
+  children: React.ReactNode;
+  right?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <View className={["bg-white border border-slate-200 rounded-2xl shadow-md mb-4", className ?? ""].join(" ")}>
+      <View className="flex-row items-center justify-between px-3 py-2">
+        <Text className="text-[14px] font-bold text-slate-900">{title}</Text>
+        {right}
+      </View>
+      <View className="h-[1px] bg-slate-200/60" />
+      <View className="p-2.5">{children}</View>
+    </View>
+  );
+}
+
+function FilterPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      className={[
+        "px-2.5 py-1.5 rounded-full ml-1.5 border",
+        active ? "bg-blue-600 border-transparent" : "bg-slate-100 border-slate-200",
+      ].join(" ")}
+    >
+      <Text className={active ? "text-white text-[11px] font-bold" : "text-slate-900 text-[11px] font-bold"}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** Compact legend: label and value sit close together (no ml-auto). */
+function LegendItemRow({ color, label, valueText }: { color: string; label: string; valueText?: string }) {
+  return (
+    <View className="w-full flex-row items-center">
+      <View className="flex-row items-center min-w-0 shrink">
+        <View style={{ backgroundColor: color }} className="w-[10px] h-[10px] rounded-full" />
+        <Text numberOfLines={1} className="ml-2 text-[12px] text-slate-700">{label}</Text>
+        {valueText ? (
+          <Text className="ml-2 text-[12px] font-bold text-slate-900">{valueText}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <View className="flex-row items-center">
-      <View
-        className="h-2.5 w-2.5 rounded-full"
-        style={{ backgroundColor: color }}
-      />
-      <Text className="ml-2 text-[12px] text-slate-600">{label}</Text>
+      <View style={{ backgroundColor: color }} className="w-[10px] h-[10px] rounded-full" />
+      <Text className="ml-2 text-[12px] text-slate-700">{label}</Text>
     </View>
   );
 }
 
-function Bubble({
-  percent,
-  label,
-  color,
-  large,
-}: {
-  percent: number;
-  label: string;
-  color: string;
-  large?: boolean;
-}) {
-  const size = large ? 124 : 96;
+/** Lightweight stat card meant to live INSIDE another card. */
+function InlineStat({ title, value, className }: { title: string; value: number; className?: string }) {
   return (
-    <View className="items-center">
-      <View
-        className="items-center justify-center rounded-full"
-        style={{
-          width: size,
-          height: size,
-          backgroundColor: "#fff",
-          borderWidth: 8,
-          borderColor: color,
-        }}
-      >
-        <Text className="text-[20px] font-bold text-slate-800">{percent}%</Text>
-      </View>
-      <Text className="mt-2 text-[12px] text-slate-600">{label}</Text>
-    </View>
-  );
-}
-
-function TopServiceRow({ name, price }: { name: string; price: string }) {
-  return (
-    <View className="flex-row items-center justify-between py-2">
-      <View className="flex-row items-center gap-3">
-        <View className="h-8 w-8 items-center justify-center rounded-full bg-slate-100">
-          <Ionicons name="construct-outline" size={16} color={COLORS.brand} />
+    <View className={["", className ?? ""].join(" ")}>
+      <View className="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <View className="p-3 items-center">
+          <Text className="text-[12px] font-bold text-slate-600 text-center">{title}</Text>
+          <Text className="mt-1.5 text-[24px] font-extrabold text-slate-900 text-center">
+            {value.toLocaleString()}
+          </Text>
         </View>
-        <Text className="text-[13px] text-slate-700">{name}</Text>
       </View>
-      <Text className="text-[12px] text-slate-500">{price}</Text>
     </View>
   );
 }

@@ -1,4 +1,4 @@
-// app/(driver)/mechanicLandingpage.tsx
+// app/shop/mechanicLandingpage.native.tsx
 import React, {
   useMemo,
   useState,
@@ -30,7 +30,9 @@ import * as Location from "expo-location";
 import SideDrawer from "../../components/SideDrawer";
 import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
-import MapView, { Marker, Polyline } from "react-native-maps";
+
+// ✅ use the cross-platform wrapper instead of react-native-maps
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
 /* ------------------------------ Configurable rules ------------------------------ */
 // Distance gate in **km** for the first RULE_MINUTES minutes.

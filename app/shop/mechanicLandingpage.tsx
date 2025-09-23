@@ -35,11 +35,9 @@ import { supabase } from "../../utils/supabase";
 import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
 /* ------------------------------ Configurable rules ------------------------------ */
-// Distance gate in **km** for the first RULE_MINUTES minutes.
-// 👉 Change this to 1 to apply the 1 km rule.
-const KM_GATE = 2;
-// Time window in minutes before the post becomes visible to everyone.
-const RULE_MINUTES = 10;
+/** Show to 0–0.8 km for the first RULE_MINUTES; after that show to all. */
+const KM_GATE = 0.8; // km (800 m)
+const RULE_MINUTES = 2; // minutes (set 10 in production)
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -68,7 +66,7 @@ const cardShadow = Platform.select({
 
 /* ---------------------------------- Types ---------------------------------- */
 type RequestItem = {
-  id: string;
+  id: string; // emergency_id
   name: string;
   vehicle: string;
   service: string;
@@ -101,6 +99,8 @@ type EmergencyRow = {
 };
 
 type AppUserRow = { full_name: string | null; photo_url: string | null };
+
+type MyReqStatus = "pending" | "canceled" | "rejected" | "accepted";
 
 /* ----------------------------- Helpers ----------------------------- */
 const AVATAR_PLACEHOLDER =
@@ -202,6 +202,28 @@ function isVisibleByGate(
   return dist <= KM_GATE;
 }
 
+/* ----------------------------- DEBUG PRINTER ----------------------------- */
+const DEBUG_PRINTS = true;
+function printDebug(
+  tag: string,
+  postLat?: number,
+  postLng?: number,
+  my?: { lat: number; lng: number } | null,
+  distanceMeters?: number,
+  createdAt?: string
+) {
+  if (!DEBUG_PRINTS) return;
+  const pLat = typeof postLat === "number" ? postLat.toFixed(6) : "n/a";
+  const pLng = typeof postLng === "number" ? postLng.toFixed(6) : "n/a";
+  const me = my ? `${my.lat.toFixed(6)}, ${my.lng.toFixed(6)}` : "unknown";
+  const dist =
+    typeof distanceMeters === "number" ? Math.round(distanceMeters) : "n/a";
+  const created = createdAt ?? "n/a";
+  console.log(
+    `[RIDERESCUE] ${tag} | post=(${pLat}, ${pLng}) | me=(${me}) | distance_m=${dist} | created_at=${created}`
+  );
+}
+
 /* ------------------------------- Small UI bits ------------------------------ */
 function StatusPill({ status }: { status: RequestItem["status"] }) {
   const map: Record<
@@ -219,7 +241,7 @@ function StatusPill({ status }: { status: RequestItem["status"] }) {
       style={{ backgroundColor: s.bg }}
       className="rounded-full px-2 py-[2px]"
     >
-      <Text style={{ color: s.text }} className="text-[11px] font-semibold">
+      <Text className="text-[11px] font-semibold" style={{ color: s.text }}>
         {s.label}
       </Text>
     </View>
@@ -232,6 +254,103 @@ function Meta({ icon, children }: { icon: any; children: React.ReactNode }) {
       <Ionicons name={icon} size={14} color={COLORS.sub} />
       <Text className="text-[12px] text-slate-600">{children}</Text>
     </View>
+  );
+}
+
+/* ----------------------- Top Toast (3 seconds) ----------------------- */
+function TopToast({ show, message }: { show: boolean; message: string }) {
+  if (!show) return null;
+  return (
+    <View
+      style={{
+        position: "absolute",
+        left: 12,
+        right: 12,
+        top: 12,
+        zIndex: 1000,
+      }}
+    >
+      <View
+        className="rounded-2xl px-4 py-3"
+        style={{ backgroundColor: "rgba(15,37,71,0.95)" }}
+      >
+        <Text className="text-white text-[13px] font-semibold">{message}</Text>
+      </View>
+    </View>
+  );
+}
+
+/* ----------------------- Centered Confirmation (shared) ---------------------- */
+function CenterConfirm({
+  visible,
+  title,
+  message,
+  onCancel,
+  onConfirm,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  confirmColor = "#2563EB",
+}: {
+  visible: boolean;
+  title: string;
+  message?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  confirmColor?: string;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onCancel}
+    >
+      <View
+        className="flex-1 items-center justify-center"
+        style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
+      >
+        <View
+          className="w-11/12 max-w-md rounded-2xl bg-white p-5"
+          style={cardShadow as any}
+        >
+          <View className="items-center mb-2">
+            <Ionicons
+              name="alert-circle-outline"
+              size={28}
+              color={confirmColor}
+            />
+          </View>
+          <Text className="text-lg font-semibold text-slate-900 text-center">
+            {title}
+          </Text>
+          {message ? (
+            <Text className="mt-2 text-[14px] text-slate-600 text-center">
+              {message}
+            </Text>
+          ) : null}
+
+          <View className="mt-5 flex-row gap-10">
+            <Pressable
+              onPress={onCancel}
+              className="flex-1 rounded-2xl border border-slate-300 py-2.5 items-center"
+            >
+              <Text className="text-[14px] text-slate-900">{cancelLabel}</Text>
+            </Pressable>
+            <Pressable
+              onPress={onConfirm}
+              className="flex-1 rounded-2xl py-2.5 items-center"
+              style={{ backgroundColor: confirmColor }}
+            >
+              <Text className="text-[14px] text-white font-semibold">
+                {confirmLabel}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -321,77 +440,77 @@ function ImageViewerModal({
   );
 }
 
-/* ----------------------- Centered Confirmation (shared) ---------------------- */
-function CenterConfirm({
-  visible,
-  title,
-  message,
-  onCancel,
-  onConfirm,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
-  confirmColor = "#2563EB",
+/* ---------------------------------- Card ----------------------------------- */
+function RequestCard({
+  item,
+  myStatus,
+  onPressCard,
+  onAcceptOrCancel,
 }: {
-  visible: boolean;
-  title: string;
-  message?: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  confirmColor?: string;
+  item: RequestItem;
+  myStatus?: MyReqStatus;
+  onPressCard: (it: RequestItem) => void;
+  onAcceptOrCancel: (it: RequestItem) => void; // decides based on myStatus
 }) {
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onCancel}
-    >
-      <View
-        className="flex-1 items-center justify-center"
-        style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
-      >
-        <View
-          className="w-11/12 max-w-md rounded-2xl bg-white p-5"
-          style={cardShadow as any}
-        >
-          <View className="items-center mb-2">
-            <Ionicons
-              name="alert-circle-outline"
-              size={28}
-              color={confirmColor}
-            />
-          </View>
-          <Text className="text-lg font-semibold text-slate-900 text-center">
-            {title}
-          </Text>
-          {message ? (
-            <Text className="mt-2 text-[14px] text-slate-600 text-center">
-              {message}
-            </Text>
-          ) : null}
+  const isPendingMine = myStatus === "pending";
+  const isDisabled = myStatus === "accepted"; // optional: disable if already chosen
+  const label = isPendingMine ? "Cancel" : "Accept";
+  const bg = isPendingMine ? COLORS.danger : COLORS.primary;
 
-          <View className="mt-5 flex-row gap-10">
-            <Pressable
-              onPress={onCancel}
-              className="flex-1 rounded-2xl border border-slate-300 py-2.5 items-center"
-            >
-              <Text className="text-[14px] text-slate-900">{cancelLabel}</Text>
-            </Pressable>
-            <Pressable
-              onPress={onConfirm}
-              className="flex-1 rounded-2xl py-2.5 items-center"
-              style={{ backgroundColor: confirmColor }}
-            >
-              <Text className="text-[14px] text-white font-semibold">
-                {confirmLabel}
-              </Text>
-            </Pressable>
+  return (
+    <Pressable
+      onPress={() => onPressCard(item)}
+      className="bg-white rounded-2xl p-4 mb-4 border border-slate-200"
+      style={cardShadow as any}
+    >
+      <View className="flex-row items-center">
+        <RNImage
+          source={{ uri: item.avatar || AVATAR_PLACEHOLDER }}
+          className="w-12 h-12 rounded-xl"
+        />
+        <View className="ml-3 flex-1">
+          <Text
+            className="text-[16px] font-semibold text-slate-900"
+            numberOfLines={1}
+          >
+            {item.name}
+          </Text>
+          <View className="mt-1 flex-row items-center gap-2">
+            <Meta icon="car-outline">{item.vehicle}</Meta>
+            <StatusPill status={item.status} />
           </View>
         </View>
       </View>
-    </Modal>
+
+      <View className="h-px bg-slate-200 my-4" />
+
+      <View className="gap-1">
+        <Meta icon="construct-outline">{item.service}</Meta>
+        {item.landmark ? (
+          <Meta icon="location-outline">{item.landmark}</Meta>
+        ) : null}
+        <View className="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+          <Meta icon="time-outline">{item.time}</Meta>
+          {typeof item.distanceKm === "number" && (
+            <Meta icon="navigate-outline">{item.distanceKm.toFixed(1)} km</Meta>
+          )}
+        </View>
+      </View>
+
+      <View className="h-px bg-slate-200 my-4" />
+
+      <Pressable
+        disabled={isDisabled}
+        onPress={() => onAcceptOrCancel(item)}
+        className="rounded-2xl py-2.5 items-center"
+        style={{
+          backgroundColor: isDisabled ? "#cbd5e1" : bg,
+          opacity: isDisabled ? 0.7 : 1,
+        }}
+      >
+        <Text className="text-[14px] text-white font-semibold">{label}</Text>
+      </Pressable>
+    </Pressable>
   );
 }
 
@@ -401,7 +520,8 @@ function DetailSheet({
   item,
   myCoords,
   onClose,
-  onAccept,
+  onAcceptOrCancel,
+  myStatus,
   onMessage,
   onOpenViewer,
 }: {
@@ -409,7 +529,8 @@ function DetailSheet({
   item: RequestItem | null;
   myCoords: { lat: number; lng: number } | null;
   onClose: () => void;
-  onAccept: (it: RequestItem) => void;
+  onAcceptOrCancel: (it: RequestItem) => void;
+  myStatus?: MyReqStatus;
   onMessage: (it: RequestItem) => void;
   onOpenViewer: (images: string[], startIndex: number) => void;
 }) {
@@ -462,6 +583,11 @@ function DetailSheet({
       ? haversineKm(myCoords.lat, myCoords.lng, item.lat, item.lng)
       : undefined;
 
+  const isPendingMine = myStatus === "pending";
+  const isDisabled = myStatus === "accepted";
+  const label = isPendingMine ? "Cancel" : "Accept";
+  const bg = isPendingMine ? COLORS.danger : COLORS.primary;
+
   return (
     <Modal
       visible={visible}
@@ -481,7 +607,7 @@ function DetailSheet({
         {/* Header row */}
         <View className="flex-row items-center">
           <RNImage
-            source={{ uri: item.avatar }}
+            source={{ uri: item.avatar || AVATAR_PLACEHOLDER }}
             className="w-12 h-12 rounded-xl"
           />
           <View className="ml-3 flex-1">
@@ -582,7 +708,7 @@ function DetailSheet({
             </View>
           </View>
 
-          {/* Actions */}
+          {/* Toggle map */}
           <View className="mt-5 gap-3">
             <View className="flex-row gap-3">
               <Pressable
@@ -612,7 +738,6 @@ function DetailSheet({
               </Pressable>
             </View>
 
-            {/* INLINE MAP */}
             {showLocation ? (
               <View className="mt-3">
                 {item.lat && item.lng ? (
@@ -683,81 +808,22 @@ function DetailSheet({
             ) : null}
 
             <Pressable
-              onPress={() => onAccept(item)}
+              disabled={isDisabled}
+              onPress={() => onAcceptOrCancel(item)}
               className="rounded-2xl py-2.5 items-center"
-              style={{ backgroundColor: COLORS.primary }}
+              style={{
+                backgroundColor: isDisabled ? "#cbd5e1" : bg,
+                opacity: isDisabled ? 0.7 : 1,
+              }}
             >
               <Text className="text-[14px] text-white font-semibold">
-                Accept
+                {label}
               </Text>
             </Pressable>
           </View>
         </ScrollView>
       </View>
     </Modal>
-  );
-}
-
-/* ---------------------------------- Card ----------------------------------- */
-function RequestCard({
-  item,
-  onPressCard,
-  onAccept,
-}: {
-  item: RequestItem;
-  onPressCard: (it: RequestItem) => void;
-  onAccept: (it: RequestItem) => void;
-}) {
-  return (
-    <Pressable
-      onPress={() => onPressCard(item)}
-      className="bg-white rounded-2xl p-4 mb-4 border border-slate-200"
-      style={cardShadow as any}
-    >
-      <View className="flex-row items-center">
-        <RNImage
-          source={{ uri: item.avatar }}
-          className="w-12 h-12 rounded-xl"
-        />
-        <View className="ml-3 flex-1">
-          <Text
-            className="text-[16px] font-semibold text-slate-900"
-            numberOfLines={1}
-          >
-            {item.name}
-          </Text>
-          <View className="mt-1 flex-row items-center gap-2">
-            <Meta icon="car-outline">{item.vehicle}</Meta>
-            <StatusPill status={item.status} />
-          </View>
-        </View>
-      </View>
-
-      <View className="h-px bg-slate-200 my-4" />
-
-      <View className="gap-1">
-        <Meta icon="construct-outline">{item.service}</Meta>
-        {item.landmark ? (
-          <Meta icon="location-outline">{item.landmark}</Meta>
-        ) : null}
-        <View className="flex-row flex-wrap items-center gap-x-3 gap-y-1">
-          <Meta icon="time-outline">{item.time}</Meta>
-          {typeof item.distanceKm === "number" && (
-            <Meta icon="navigate-outline">{item.distanceKm.toFixed(1)} km</Meta>
-          )}
-        </View>
-      </View>
-
-      <View className="h-px bg-slate-200 my-4" />
-
-      <Pressable
-        onPress={() => onAccept(item)}
-        className="rounded-2xl py-2.5 items-center"
-        style={{ backgroundColor: COLORS.primary }}
-      >
-        <Text className="text-[14px] text-white font-semibold">Accept</Text>
-      </Pressable>
-    </Pressable>
   );
 }
 
@@ -881,11 +947,44 @@ export default function RequestScreen() {
     visible: boolean;
     message?: string;
   }>({ visible: false });
-  const [confirmAccept, setConfirmAccept] = useState<RequestItem | null>(null);
 
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [viewerImages, setViewerImages] = useState<string[]>([]);
-  const [viewerIndex, setViewerIndex] = useState(0);
+  // Confirm flows
+  const [confirmAccept, setConfirmAccept] = useState<RequestItem | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<RequestItem | null>(null);
+
+  // Toast
+  const [toast, setToast] = useState<{ show: boolean; msg: string }>({
+    show: false,
+    msg: "",
+  });
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = (msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ show: true, msg });
+    toastTimer.current = setTimeout(
+      () => setToast({ show: false, msg: "" }),
+      3000
+    );
+  };
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) {
+        clearTimeout(toastTimer.current);
+        toastTimer.current = null; // optional: avoid double-clears
+      }
+    };
+  }, []);
+
+  // ---- shop identity & my requests on visible emergencies ----
+  const [shopId, setShopId] = useState<string | null>(null);
+  /** Map: emergency_id -> { service_id, status } for THIS shop */
+  const [myReq, setMyReq] = useState<
+    Record<string, { service_id: string; status: MyReqStatus }>
+  >({});
+
+  const myStatusFor = (emergencyId: string) => myReq[emergencyId]?.status;
+  const hasMyPending = (emergencyId: string) =>
+    myReq[emergencyId]?.status === "pending";
 
   const messageDriver = (it: RequestItem) => {
     try {
@@ -900,6 +999,10 @@ export default function RequestScreen() {
     setViewerIndex(startIndex);
     setViewerOpen(true);
   };
+
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerImages, setViewerImages] = useState<string[]>([]);
+  const [viewerIndex, setViewerIndex] = useState(0);
 
   // ---- LOCATION SETUP & GATE ----
   const checkAndGetLocation = useCallback(async () => {
@@ -938,20 +1041,18 @@ export default function RequestScreen() {
         if (withSpinner)
           setLoading({ visible: true, message: "Loading requests…" });
 
-        // Prefer the server-enforced RPC if present
-        // NOTE: if your function params are "lat, lon" change keys to { lat: myCoords.lat, lon: myCoords.lng }
-        const rpcArgs: any = { _lat: myCoords.lat, _lon: myCoords.lng };
+        // Prefer RPC if you created one; otherwise query table
         let ems: EmergencyRow[] | null = null;
-
         try {
-          const { data, error } = await supabase.rpc(
-            "visible_emergencies",
-            rpcArgs
-          );
+          const { data, error } = await supabase.rpc("visible_emergencies", {
+            lat: myCoords.lat,
+            lon: myCoords.lng,
+          });
           if (error) throw error;
-          ems = (data || []) as EmergencyRow[];
-        } catch (rpcErr) {
-          // Fallback to raw table + client gating (UI-only)
+          ems = ((data || []) as EmergencyRow[]).filter((r) =>
+            isVisibleByGate(r, myCoords)
+          );
+        } catch {
           const { data, error } = await supabase
             .from("emergency")
             .select("*")
@@ -986,6 +1087,21 @@ export default function RequestScreen() {
               r.latitude,
               r.longitude
             );
+
+            // 🔎 debug
+            const distM =
+              typeof item.distanceKm === "number"
+                ? item.distanceKm * 1000
+                : undefined;
+            printDebug(
+              `[fetch] ${r.emergency_id}`,
+              r.latitude,
+              r.longitude,
+              myCoords,
+              distM,
+              r.created_at
+            );
+
             return item;
           })
         );
@@ -1015,6 +1131,50 @@ export default function RequestScreen() {
       rows.length === 0 || rows.every((r) => typeof r.distanceKm === "number");
     setDistanceReady(ready);
   }, [rows, myCoords]);
+
+  /* ---------------- get current user's shop_id ---------------- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: auth } = await supabase.auth.getUser();
+        const uid = auth?.user?.id;
+        if (!uid) return;
+        const { data, error } = await supabase
+          .from("shop_details")
+          .select("shop_id")
+          .eq("user_id", uid)
+          .single();
+        if (!error && data?.shop_id) setShopId(data.shop_id);
+      } catch {}
+    })();
+  }, []);
+
+  /* ---- fetch THIS shop's requests for visible emergencies ---- */
+  useEffect(() => {
+    (async () => {
+      if (!shopId || rows.length === 0) return;
+      const ids = rows.map((r) => r.id);
+      const { data, error } = await supabase
+        .from("service_requests")
+        .select("service_id, emergency_id, status")
+        .in("emergency_id", ids)
+        .eq("shop_id", shopId);
+
+      if (!error && data) {
+        const next: Record<
+          string,
+          { service_id: string; status: MyReqStatus }
+        > = {};
+        for (const r of data as any[]) {
+          next[r.emergency_id] = {
+            service_id: r.service_id,
+            status: r.status as MyReqStatus,
+          };
+        }
+        setMyReq((prev) => ({ ...prev, ...next }));
+      }
+    })();
+  }, [shopId, rows]);
 
   /* ------------------------ REALTIME PATCH + REFRESH ------------------------ */
   const applyRealtimePatch = useCallback(
@@ -1073,6 +1233,19 @@ export default function RequestScreen() {
               row.latitude,
               row.longitude
             );
+            // 🔎 debug
+            const distM =
+              typeof next[idx].distanceKm === "number"
+                ? next[idx].distanceKm * 1000
+                : undefined;
+            printDebug(
+              `[realtime:UPDATE] ${row.emergency_id}`,
+              row.latitude,
+              row.longitude,
+              myCoords,
+              distM,
+              row.created_at
+            );
           }
         } else {
           const lite: RequestItem = {
@@ -1098,7 +1271,21 @@ export default function RequestScreen() {
           };
           next.unshift(lite);
 
-          // Enrich in background (landmark + profile)
+          // 🔎 debug
+          const distM =
+            typeof lite.distanceKm === "number"
+              ? lite.distanceKm * 1000
+              : undefined;
+          printDebug(
+            `[realtime:INSERT] ${row.emergency_id}`,
+            row.latitude,
+            row.longitude,
+            myCoords,
+            distM,
+            row.created_at
+          );
+
+          // Enrich profile + landmark later
           (async () => {
             const landmark = await reverseGeocode(row.latitude, row.longitude);
             let name = "Customer";
@@ -1137,9 +1324,7 @@ export default function RequestScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "emergency" },
         (payload) => {
-          // 1) Apply gate-aware patch
           applyRealtimePatch(payload);
-          // 2) Quiet refetch to keep ordering/derived fields accurate
           fetchPending(false);
         }
       )
@@ -1150,7 +1335,7 @@ export default function RequestScreen() {
     };
   }, [applyRealtimePatch, fetchPending]);
 
-  // Fallback polling (if realtime drops) and to capture items that aged past 10 minutes
+  // Fallback polling (if realtime drops) and to capture items that aged past RULE_MINUTES
   useEffect(() => {
     const id = setInterval(() => {
       if (myCoords) fetchPending(false);
@@ -1158,33 +1343,123 @@ export default function RequestScreen() {
     return () => clearInterval(id);
   }, [fetchPending, myCoords]);
 
-  /* ----------------------------- ACCEPT ACTION ----------------------------- */
-  const handleAccept = (it: RequestItem) => setConfirmAccept(it);
+  /* ----------------------------- ACCEPT / CANCEL ----------------------------- */
+  const handleAcceptOrCancel = (it: RequestItem) => {
+    // If already sent by THIS shop for this emergency -> cancel flow
+    if (hasMyPending(it.id)) {
+      setConfirmCancel(it);
+    } else {
+      setConfirmAccept(it);
+    }
+  };
 
-  const doAccept = async () => {
-    if (!confirmAccept) return;
-    const id = confirmAccept.id;
+  const doSendRequest = async () => {
+    if (!confirmAccept || !shopId) return;
+    const emergencyId = confirmAccept.id;
+    const lat = myCoords?.lat ?? 0;
+    const lng = myCoords?.lng ?? 0;
     setConfirmAccept(null);
 
     try {
-      setLoading({ visible: true, message: "Accepting request…" });
-      const { error } = await supabase
-        .from("emergency")
-        .update({
-          emergency_status: "in_process",
-          accepted_at: new Date().toISOString(),
-        })
-        .eq("emergency_id", id);
-      if (error) throw error;
+      setLoading({ visible: true, message: "Sending request…" });
 
-      // Optimistic removal (it will disappear because it’s no longer waiting)
-      setRows((prev) => prev.filter((r) => r.id !== id));
+      // Existing row?
+      const { data: existing } = await supabase
+        .from("service_requests")
+        .select("service_id, status")
+        .eq("emergency_id", emergencyId)
+        .eq("shop_id", shopId)
+        .maybeSingle();
+
+      if (existing) {
+        if (existing.status === "canceled") {
+          const { error: upErr } = await supabase
+            .from("service_requests")
+            .update({
+              status: "pending",
+              requested_at: new Date().toISOString(),
+            })
+            .eq("service_id", existing.service_id);
+          if (upErr) throw upErr;
+          setMyReq((m) => ({
+            ...m,
+            [emergencyId]: {
+              service_id: existing.service_id,
+              status: "pending",
+            },
+          }));
+        } else {
+          // Already pending/accepted/rejected — just mirror
+          setMyReq((m) => ({
+            ...m,
+            [emergencyId]: {
+              service_id: existing.service_id,
+              status: existing.status as MyReqStatus,
+            },
+          }));
+        }
+      } else {
+        // Fresh insert
+        const { data: ins, error: insErr } = await supabase
+          .from("service_requests")
+          .insert({
+            emergency_id: emergencyId,
+            shop_id: shopId,
+            latitude: lat,
+            longitude: lng,
+            status: "pending",
+          })
+          .select("service_id, status")
+          .single();
+        if (insErr) throw insErr;
+        setMyReq((m) => ({
+          ...m,
+          [emergencyId]: {
+            service_id: ins.service_id,
+            status: ins.status as MyReqStatus,
+          },
+        }));
+      }
 
       setLoading({ visible: false });
-      if (selected?.id === id) setSheetOpen(false);
+      showToast("Request sent");
     } catch (e: any) {
       setLoading({ visible: false });
-      Alert.alert("Failed to accept", e?.message ?? "Please try again.");
+      Alert.alert("Failed to send", e?.message ?? "Please try again.");
+    }
+  };
+
+  const doCancelRequest = async () => {
+    if (!confirmCancel || !shopId) return;
+    const emergencyId = confirmCancel.id;
+    const my = myReq[emergencyId];
+    setConfirmCancel(null);
+
+    if (!my?.service_id) {
+      showToast("No request to cancel");
+      return;
+    }
+    try {
+      setLoading({ visible: true, message: "Canceling…" });
+      const { error } = await supabase
+        .from("service_requests")
+        .update({
+          status: "canceled",
+          rejected_at: new Date().toISOString(), // using rejected_at for canceled timestamp
+        })
+        .eq("service_id", my.service_id);
+      if (error) throw error;
+
+      // reflect locally
+      setMyReq((m) => ({
+        ...m,
+        [emergencyId]: { service_id: my.service_id, status: "canceled" },
+      }));
+      setLoading({ visible: false });
+      showToast("Request canceled");
+    } catch (e: any) {
+      setLoading({ visible: false });
+      Alert.alert("Failed to cancel", e?.message ?? "Please try again.");
     }
   };
 
@@ -1240,11 +1515,12 @@ export default function RequestScreen() {
         renderItem={({ item }) => (
           <RequestCard
             item={item}
+            myStatus={myStatusFor(item.id)}
             onPressCard={(it) => {
               setSelected(it);
               setSheetOpen(true);
             }}
-            onAccept={handleAccept}
+            onAcceptOrCancel={handleAcceptOrCancel}
           />
         )}
         ListEmptyComponent={
@@ -1261,20 +1537,34 @@ export default function RequestScreen() {
         item={selected}
         myCoords={myCoords}
         onClose={() => setSheetOpen(false)}
-        onAccept={(it) => setConfirmAccept(it)}
+        onAcceptOrCancel={handleAcceptOrCancel}
+        myStatus={selected ? myStatusFor(selected.id) : undefined}
         onMessage={messageDriver}
         onOpenViewer={openViewer}
       />
 
+      {/* Accept confirm */}
       <CenterConfirm
         visible={!!confirmAccept}
         title="Accept this request?"
-        message="This will notify the driver and mark the job as Accepted."
+        message="This will send your request to the driver."
         onCancel={() => setConfirmAccept(null)}
-        onConfirm={doAccept}
+        onConfirm={doSendRequest}
         confirmLabel="Accept Request"
-        cancelLabel="Cancel"
+        cancelLabel="Back"
         confirmColor={COLORS.primary}
+      />
+
+      {/* Cancel confirm */}
+      <CenterConfirm
+        visible={!!confirmCancel}
+        title="Cancel your request?"
+        message="This will withdraw your request for this post."
+        onCancel={() => setConfirmCancel(null)}
+        onConfirm={doCancelRequest}
+        confirmLabel="Yes, Cancel"
+        cancelLabel="Back"
+        confirmColor={COLORS.danger}
       />
 
       <LoadingScreen
@@ -1298,6 +1588,9 @@ export default function RequestScreen() {
         startIndex={viewerIndex}
         onClose={() => setViewerOpen(false)}
       />
+
+      {/* Top toast */}
+      <TopToast show={toast.show} message={toast.msg} />
     </View>
   );
 }

@@ -1216,7 +1216,7 @@ export default function RequestScreen() {
               resizeMode="contain"
             />
             <Text className="text-white text-[20px] font-semibold">
-              RideRescue
+              Ride Rescue
             </Text>
           </View>
 

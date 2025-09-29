@@ -22,10 +22,10 @@ import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../../utils/supabase";
 import EditContactSheet from "../../components/EditContactSheet";
+import LoadingScreen from "../../components/LoadingScreen";
 import ShopDetailsSheet from "../../components/ShopDetailsSheet";
 
 /* ------------------------------ helpers ------------------------------ */
-
 
 // Map raw category 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -121,18 +121,20 @@ function ListItem({
   value,
   onPress,
   chevron = true,
+  disabled = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   value?: string;
   onPress?: () => void;
   chevron?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       onPress={onPress}
-      disabled={!onPress}
-      className="flex-row items-center px-5 py-5 active:opacity-80"
+      disabled={!onPress || disabled}
+      className={`flex-row items-center px-5 py-5 ${disabled ? "opacity-60" : ""}`}
       android_ripple={{ color: "#e5e7eb" }}
     >
       <View className="w-11 h-11 rounded-full bg-[#F1F5F9] items-center justify-center mr-4">
@@ -440,82 +442,81 @@ export default function DriverProfile() {
   }, []);
 
   /* ---------- prefill Shop details (Option 1 fields) ---------- */
-useEffect(() => {
-  if (!authUserId) return;
-  let cancelled = false;
-  (async () => {
-    try {
-      const { data, error } = await supabase
-        .from("shop_details")
-        .select(
-          "services,certificate_url,time_open,time_close,days,is_verified,shop_id,place_id" // 👈 added place_id
-        )
-        .eq("user_id", authUserId)
-        .maybeSingle();
+  useEffect(() => {
+    if (!authUserId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("shop_details")
+          .select(
+            "services,certificate_url,time_open,time_close,days,is_verified,shop_id,place_id"
+          )
+          .eq("user_id", authUserId)
+          .maybeSingle();
 
-      if (error) {
-        console.warn("shop_details fetch error:", error.message);
+        if (error) {
+          console.warn("shop_details fetch error:", error.message);
+        }
+        if (cancelled || !data) return;
+
+        setShopInitial({
+          services: data.services ?? null,
+          certificate_url: data.certificate_url ?? null,
+          time_open: data.time_open ?? null,
+          time_close: data.time_close ?? null,
+          days: data.days ?? null,
+          is_verified: data.is_verified ?? false,
+          shop_id: data.shop_id ?? undefined,
+          place_id: data.place_id ?? null, 
+        });
+      } catch (e: any) {
+        console.warn("shop_details prefill failed:", e?.message);
+
       }
-      if (cancelled || !data) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId]);
 
-      setShopInitial({
-        services: data.services ?? null,
-        certificate_url: data.certificate_url ?? null,
-        time_open: data.time_open ?? null,
-        time_close: data.time_close ?? null,
-        days: data.days ?? null,
-        is_verified: data.is_verified ?? false,
-        shop_id: data.shop_id ?? undefined,
-        place_id: data.place_id ?? null, 
-      });
-    } catch (e: any) {
-      console.warn("shop_details prefill failed:", e?.message);
-
-    }
-  })();
-  return () => {
-    cancelled = true;
-  };
-}, [authUserId]);
-
-
-
-useEffect(() => {
-  const pid = shopInitial?.place_id;
-  if (!pid) {
-    setShopDisplayName(null);
-    return;
-  }
-
-  let cancelled = false;
-  (async () => {
-    try {
-      const { data, error } = await supabase
-        .from("places")
-        .select("name,category")
-        .eq("place_id", pid)
-        .maybeSingle();
-      if (error) {
-        console.warn("places fetch error:", error.message);
-      }
-      if (cancelled) return;
-      setShopDisplayName((data?.name ?? "").trim() || null);
-      setShopCategory(formatCategory(data?.category));
-    } catch (e: any) {
-      console.warn("Failed to load place name:", e?.message);
-      if (!cancelled) 
+  useEffect(() => {
+    const pid = shopInitial?.place_id;
+    if (!pid) {
       setShopDisplayName(null);
-      setShopCategory(null);
+      return;
     }
-  })();
 
-  return () => {
-    cancelled = true;
-  };
-}, [shopInitial?.place_id]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("places")
+          .select("name,category")
+          .eq("place_id", pid)
+          .maybeSingle();
+        if (error) {
+          console.warn("places fetch error:", error.message);
+        }
+        if (cancelled) return;
+        setShopDisplayName((data?.name ?? "").trim() || null);
+        setShopCategory(formatCategory(data?.category));
+      } catch (e: any) {
+        console.warn("Failed to load place name:", e?.message);
+        if (!cancelled) 
+        setShopDisplayName(null);
+        setShopCategory(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shopInitial?.place_id]);
 
   /* ---------- edit modal open/close ---------- */
   const openEdit = () => {
+    if (saving) return; // safety
     setDraftName(fullName);
     setDraftEmail(email);
     setDraftAvatar(avatarUri || null);
@@ -527,6 +528,7 @@ useEffect(() => {
     setEditOpen(true);
   };
   const closeEdit = () => {
+    if (saving) return; // 🚫 ignore while saving
     if (!dirty) return dismissEditImmediately();
     showDialog("Discard changes?", "You have unsaved edits.", [
       { label: "Cancel", variant: "secondary" },
@@ -798,14 +800,6 @@ useEffect(() => {
   };
 
   /* ------------------------------ render ------------------------------ */
-  if (loading) {
-    return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-[#EAF1F6]">
-        <ActivityIndicator />
-        <Text className="mt-3 text-[#0F172A]">Loading profile…</Text>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView className="flex-1 bg-[#EAF1F6]">
@@ -878,8 +872,8 @@ useEffect(() => {
           <ListItem
             icon="construct-outline"
             label="Shop Details"
-            value="Shop schedule,services.." // shows hours/days/services if available
-            onPress={onPressEditShop} // 🔐 now gated by password like Edit Contact
+            value="Shop schedule,services.."
+            onPress={onPressEditShop}
           />
         </View>
 
@@ -892,20 +886,26 @@ useEffect(() => {
         <View className="flex-1 bg-black/40">
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} className="flex-1 justify-end">
             <Animated.View className="bg-white rounded-t-3xl max-h-[90%]" style={{ transform: [{ translateY: sheetY }] }}>
-              <View {...panResponder.panHandlers}>
+              {/* 🔒 Disable drag when saving */}
+              <View {...(saving ? {} : panResponder.panHandlers)}>
                 <View className="items-center pt-3">
                   <View className="h-1.5 w-12 rounded-full bg-gray-300" />
                 </View>
 
                 <View className="flex-row items-center justify-between px-5 py-3">
-                  <Pressable onPress={closeEdit} className="px-3 py-2 -ml-2 rounded-lg active:opacity-80" android_ripple={{ color: "#e5e7eb" }}>
+                  <Pressable
+                    onPress={closeEdit}
+                    disabled={saving}
+                    className={`px-3 py-2 -ml-2 rounded-lg ${saving ? "opacity-60" : ""}`}
+                    android_ripple={{ color: "#e5e7eb" }}
+                  >
                     <Ionicons name="close" size={22} color="#0F172A" />
                   </Pressable>
                   <Text className="text-[16px] font-semibold text-[#0F172A]">Edit Profile</Text>
                   <Pressable
                     onPress={handleSave}
                     disabled={saving}
-                    className="px-3 py-1.5 rounded-lg active:opacity-80"
+                    className={`px-3 py-1.5 rounded-lg ${saving ? "opacity-60" : ""}`}
                     android_ripple={{ color: "#e5e7eb" }}
                   >
                     {saving ? <ActivityIndicator /> : <Text className="text-[14px] font-semibold text-[#0F2547]">Save</Text>}
@@ -913,7 +913,13 @@ useEffect(() => {
                 </View>
               </View>
 
-              <ScrollView className="px-5" contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                className="px-5"
+                contentContainerStyle={{ paddingBottom: 24 }}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                pointerEvents={saving ? "none" : "auto"} // 🔒 freeze scroll & taps while saving
+              >
                 {/* avatar */}
                 <View className="items-center mt-2 mb-4">
                   <View className="w-24 h-24 rounded-full overflow-hidden border border-[#EEF2F7]">
@@ -926,9 +932,15 @@ useEffect(() => {
                     )}
                   </View>
                   <View className="flex-row gap-3 mt-3">
-                    <Pressable onPress={pickNewPhoto} className="px-3 py-2 rounded-xxl bg-[#fcfcfc] active:opacity-90 " android_ripple={{ color: "#dbeafe" }}>
+                    <Pressable
+                      onPress={pickNewPhoto}
+                      disabled={saving}
+                      className={`px-3 py-2 rounded-xxl bg-[#fcfcfc] ${saving ? "opacity-60" : ""}`}
+                      android_ripple={{ color: "#dbeafe" }}
+                    >
                       <Text className="text-[13px] text-[#0F2547]">Change photo</Text>
                     </Pressable>
+                    
                   </View>
                 </View>
 
@@ -938,7 +950,7 @@ useEffect(() => {
                     {shopCategory ? (
                       <View className="mb-1">
                         <Text className="text-[12px] mb-1 text-[#64748B]">Shop Type</Text>
-                        <View className="border rounded-xl px-4 py-3 bg-[#F8FAFC] "  style={{ borderColor: "#E5E9F0" }}>
+                        <View className="border rounded-xl px-4 py-3 bg-[#F8FAFC]"  style={{ borderColor: "#E5E9F0" }}>
                           <Text className="text-[#77797a]">{shopCategory}</Text>
                         </View>
                       </View>
@@ -948,8 +960,9 @@ useEffect(() => {
                       value={draftName}
                       onChangeText={(t) => {
                         setDraftName(t);
-                        setDirty(true); // enables the Save button flow
+                        setDirty(true);
                       }}
+                      editable={!saving} // 🔒
                       autoCapitalize="words"
                       autoCorrect={false}
                       placeholder="Full name / contact person"
@@ -958,7 +971,6 @@ useEffect(() => {
                     />
                   </View>
 
-
                   <View>
                     <Text className="text-[12px] mb-1 text-[#64748B]">Email</Text>
                     <TextInput
@@ -966,6 +978,7 @@ useEffect(() => {
                       autoCapitalize="none"
                       value={draftEmail}
                       onChangeText={(t) => { setDraftEmail(t); setDirty(true); }}
+                      editable={!saving} // 🔒
                       placeholder="Enter your email"
                       className="bg-white border rounded-xl px-4 py-3"
                       style={{ borderColor: "#E5E9F0" }}
@@ -994,9 +1007,14 @@ useEffect(() => {
                               onChangeText={(t) => { setPwCurrent(t); setDirty(true); }}
                               placeholder="Enter current password"
                               secureTextEntry={!pwVisible.current}
+                              editable={!saving} // 🔒
                               className="flex-1 py-3"
                             />
-                            <Pressable onPress={() => setPwVisible((s) => ({ ...s, current: !s.current }))} className="px-2 py-2">
+                            <Pressable
+                              onPress={() => setPwVisible((s) => ({ ...s, current: !s.current }))}
+                              disabled={saving}
+                              className={`px-2 py-2 ${saving ? "opacity-60" : ""}`}
+                            >
                               <Ionicons name={pwVisible.current ? "eye-off" : "eye"} size={18} color="#64748B" />
                             </Pressable>
                           </View>
@@ -1010,9 +1028,14 @@ useEffect(() => {
                               onChangeText={(t) => { setPwNew(t); setDirty(true); }}
                               placeholder="At least 8 chars, with letters & numbers"
                               secureTextEntry={!pwVisible.next}
+                              editable={!saving} // 🔒
                               className="flex-1 py-3"
                             />
-                            <Pressable onPress={() => setPwVisible((s) => ({ ...s, next: !s.next }))} className="px-2 py-2">
+                            <Pressable
+                              onPress={() => setPwVisible((s) => ({ ...s, next: !s.next }))}
+                              disabled={saving}
+                              className={`px-2 py-2 ${saving ? "opacity-60" : ""}`}
+                            >
                               <Ionicons name={pwVisible.next ? "eye-off" : "eye"} size={18} color="#64748B" />
                             </Pressable>
                           </View>
@@ -1026,9 +1049,14 @@ useEffect(() => {
                               onChangeText={(t) => { setPwNew2(t); setDirty(true); }}
                               placeholder="Re-type new password"
                               secureTextEntry={!pwVisible.next2}
+                              editable={!saving} // 🔒
                               className="flex-1 py-3"
                             />
-                            <Pressable onPress={() => setPwVisible((s) => ({ ...s, next2: !s.next2 }))} className="px-2 py-2">
+                            <Pressable
+                              onPress={() => setPwVisible((s) => ({ ...s, next2: !s.next2 }))}
+                              disabled={saving}
+                              className={`px-2 py-2 ${saving ? "opacity-60" : ""}`}
+                            >
                               <Ionicons name={pwVisible.next2 ? "eye-off" : "eye"} size={18} color="#64748B" />
                             </Pressable>
                           </View>
@@ -1040,7 +1068,8 @@ useEffect(() => {
 
                         <Pressable
                           onPress={() => showDialog("Forgot password?", "Go to the login screen and tap “Forgot password”. We’ll send a reset link to your email.")}
-                          className="mt-2 self-start"
+                          disabled={saving}
+                          className={`mt-2 self-start ${saving ? "opacity-60" : ""}`}
                         >
                           <Text className="text-[12px] underline" style={{ color: "#2563EB" }}>
                             Forgot your password?
@@ -1051,6 +1080,17 @@ useEffect(() => {
                   </View>
                 </View>
               </ScrollView>
+
+              {/* ✨ Light overlay that blocks touches while saving */}
+              {saving && (
+                <View
+                  pointerEvents="auto"
+                  className="absolute left-0 right-0 top-0 bottom-0 rounded-t-3xl items-center justify-center"
+                  style={{ backgroundColor: "rgba(255,255,255,0.55)" }}
+                >
+                  
+                </View>
+              )}
             </Animated.View>
           </KeyboardAvoidingView>
         </View>
@@ -1229,6 +1269,11 @@ useEffect(() => {
           setShopInitial(data);
           showDialog("Shop details updated", "Your shop information has been saved.");
         }}
+      />
+      <LoadingScreen
+        visible={loading}
+        message="Loading profile…"
+        variant="spinner"
       />
     </SafeAreaView>
   );

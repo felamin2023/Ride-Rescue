@@ -935,6 +935,11 @@ export default function RequestScreen() {
         icon: "notifications-outline" as const,
       },
       {
+      label: "Accepted Requests",
+      href: "/shop/mechanicAcceptedrequests", // ← the page we built
+      icon: "document-text-outline" as const, // you can use "time-outline" or "clipboard-outline" if you prefer
+    },
+      {
         label: "Transaction History",
         href: "/shop/completedrequest",
         icon: "receipt-outline" as const,

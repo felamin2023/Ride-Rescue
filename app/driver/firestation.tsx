@@ -1,5 +1,5 @@
 // app/(driver)/firestation.tsx
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -11,17 +11,14 @@ import {
   Modal,
   Platform,
   TouchableOpacity,
-  Animated,
-  Easing,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import LoadingScreen from "../../components/LoadingScreen";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
 
-/* ------------------------------ Design tokens ------------------------------ */
+/* ------------------------------ Design tokens (match vulcanize) ------------------------------ */
 const COLORS = {
   bg: "#F4F6F8",
   surface: "#FFFFFF",
@@ -33,15 +30,17 @@ const COLORS = {
   primaryDark: "#1D4ED8",
 };
 
-/** Softer, minimal shadow for cards & sheets */
-const SOFT_SHADOW = Platform.select({
-  ios: { shadowColor: "#0F172A", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
-  android: { elevation: 1 },
+// Same shadow set as vulcanize
+const cardShadow = Platform.select({
+  ios: { shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
+  android: { elevation: 3 },
 });
-
-/** Very light shadow for tiny UI bits */
-const MICRO_SHADOW = Platform.select({
-  ios: { shadowColor: "#0F172A", shadowOpacity: 0.03, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+const panelShadow = Platform.select({
+  ios: { shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } },
+  android: { elevation: 2 },
+});
+const buttonShadow = Platform.select({
+  ios: { shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
   android: { elevation: 1 },
 });
 
@@ -49,7 +48,7 @@ const MICRO_SHADOW = Platform.select({
 type Facility = {
   id: string;
   name: string;
-  category: "fire" | "hospital" | "police" | "gas" | "repair" | "vulcanize";
+  category: "fire" | "hospital" | "police" | "gas" | "repair" | "vulcanize" | "mdrrmo";
   address1: string;
   address2?: string;
   plusCode?: string;
@@ -102,18 +101,18 @@ const MOCK: Facility[] = [
   },
 ];
 
-/* --------------------------------- Filters --------------------------------- */
+/* --------------------------------- Filters (order matches vulcanize) -------------------------------- */
 const FILTERS: FilterItem[] = [
-  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },
-  { key: "hospital", icon: "medical-outline",   label: "Hospital" },
-  { key: "police",   icon: "shield-outline",    label: "Police" },
-  { key: "gas",      icon: "flash-outline",     label: "Gas" },
-  { key: "repair",   icon: "construct-outline", label: "Repair" },
-  { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
-  { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
+  { key: "vulcanize", icon: "trail-sign-outline",  label: "Vulcanize" },
+  { key: "repair",    icon: "construct-outline",   label: "Repair" },
+  { key: "gas",       icon: "flash-outline",       label: "Gas" },
+  { key: "hospital",  icon: "medical-outline",     label: "Hospital" },
+  { key: "police",    icon: "shield-outline",      label: "Police" },
+  { key: "fire",      icon: "flame-outline",       label: "Fire Station" },
+  { key: "mdrrmo",    icon: "megaphone-outline",   label: "MDRRMO" },
 ];
 
-/* --------------------------------- Small UI -------------------------------- */
+/* --------------------------------- Small UI (identical to vulcanize) -------------------------------- */
 function Stars({ rating = 0 }: { rating?: number }) {
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
@@ -122,56 +121,64 @@ function Stars({ rating = 0 }: { rating?: number }) {
       {Array.from({ length: 5 }).map((_, i) => {
         const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
         return (
-          <Ionicons key={i} name={name as any} size={14} color={"#F59E0B"} style={{ marginRight: i === 4 ? 0 : 2 }} />
+          <Ionicons
+            key={i}
+            name={name as any}
+            size={14}
+            color={"#F59E0B"}
+            style={{ marginRight: i === 4 ? 0 : 2 }}
+            accessibilityLabel={i < full ? "full star" : i === full && half ? "half star" : "empty star"}
+            accessible
+          />
         );
       })}
     </View>
   );
 }
 
-// Added size prop to match compact bottom sheets used elsewhere
 function PrimaryButton({
   label,
   onPress,
   variant = "primary",
   icon,
-  size = "md", // "sm" | "md"
 }: {
   label: string;
   onPress: () => void;
   variant?: "primary" | "secondary";
   icon?: any;
-  size?: "sm" | "md";
 }) {
   const isPrimary = variant === "primary";
-  const sizeStyles =
-    size === "sm"
-      ? { minHeight: 40, paddingVertical: Platform.OS === "ios" ? 8 : 6 }
-      : { minHeight: 48 };
-
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.9}
-      className={`flex-row items-center justify-center rounded-full px-4 ${isPrimary ? "" : "border"}`}
+      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${isPrimary ? "" : "border"}`}
       style={[
-        sizeStyles,
         isPrimary
           ? { backgroundColor: COLORS.primary }
           : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
-        MICRO_SHADOW,
+        buttonShadow,
       ]}
-      {...(Platform.OS === "android" ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } } : {})}
+      {...(Platform.OS === "android"
+        ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } }
+        : {})}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
       {icon ? (
-        <Ionicons name={icon} size={16} color={isPrimary ? "#FFFFFF" : COLORS.text} style={{ marginRight: 6 }} />
+        <Ionicons
+          name={icon}
+          size={16}
+          color={isPrimary ? "#FFFFFF" : COLORS.text}
+          style={{ marginRight: 6 }}
+        />
       ) : null}
       <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-/* ----------------------- Bottom Sheet (animated pop-up) ---------------------- */
+/* ----------------------- Bottom Sheet (match vulcanize layout) ---------------------- */
 function QuickActions({
   visible,
   onClose,
@@ -186,77 +193,25 @@ function QuickActions({
   onCall: (s: Facility) => void;
 }) {
   const insets = useSafeAreaInsets();
-  const mounted = useRef(false);
-  const [portalOpen, setPortalOpen] = useState(false);
-
-  // Anim values
-  const slide = useRef(new Animated.Value(1)).current;     // 1 = hidden, 0 = shown
-  const backdrop = useRef(new Animated.Value(0)).current;  // 0 = transparent, 1 = visible
-
-  // Handle mount / unmount with animation
-  useEffect(() => {
-    if (visible) {
-      setPortalOpen(true);
-      mounted.current = true;
-      Animated.parallel([
-        Animated.timing(backdrop, { toValue: 1, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.spring(slide, { toValue: 0, damping: 16, stiffness: 180, mass: 0.9, useNativeDriver: true }),
-      ]).start();
-    } else if (mounted.current) {
-      Animated.parallel([
-        Animated.timing(backdrop, { toValue: 0, duration: 180, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-        Animated.timing(slide, { toValue: 1, duration: 220, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      ]).start(({ finished }) => {
-        if (finished) setPortalOpen(false);
-      });
-    }
-  }, [visible]);
-
-  // Close triggered by user (tap backdrop / X / action)
-  const requestClose = () => {
-    Animated.parallel([
-      Animated.timing(backdrop, { toValue: 0, duration: 180, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-      Animated.timing(slide, { toValue: 1, duration: 220, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-    ]).start(({ finished }) => {
-      if (finished) {
-        setPortalOpen(false);
-        onClose(); // tell parent to flip `visible` false
-      }
-    });
-  };
-
   if (!facility) return null;
 
-  const translateY = slide.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 360 + insets.bottom], // slides up from off-screen
-  });
-  const backdropOpacity = backdrop.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] });
-
   return (
-    <Modal transparent statusBarTranslucent animationType="none" visible={portalOpen} onRequestClose={requestClose}>
-      {/* Backdrop */}
-      <Animated.View
-        style={{ flex: 1, backgroundColor: "black", opacity: backdropOpacity }}
-      >
-        <Pressable style={{ flex: 1 }} onPress={requestClose} />
-      </Animated.View>
-
-      {/* Sheet */}
-      <Animated.View
-        style={[
-          {
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            transform: [{ translateY }],
-          },
-        ]}
-      >
+    <Modal
+      transparent
+      statusBarTranslucent
+      animationType="fade"
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
+        <Pressable style={{ flex: 1 }} onPress={onClose} />
         <View
           style={[
             {
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
               backgroundColor: "#FFFFFF",
               borderTopLeftRadius: 24,
               borderTopRightRadius: 24,
@@ -265,7 +220,7 @@ function QuickActions({
               borderTopWidth: 1,
               borderColor: COLORS.border,
             },
-            SOFT_SHADOW,
+            panelShadow,
           ]}
         >
           <View className="items-center mb-3">
@@ -273,7 +228,7 @@ function QuickActions({
           </View>
 
           <View className="flex-row items-center gap-3 pb-3">
-            <View className="overflow-hidden rounded-xl" style={{ width: 44, height: 44, backgroundColor: "#F1F5F9" }}>
+            <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
               {facility.avatar ? (
                 <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
               ) : (
@@ -283,63 +238,63 @@ function QuickActions({
               )}
             </View>
             <View className="flex-1">
-              <Text className="text-[15px] font-bold text-slate-900" numberOfLines={1}>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
                 {facility.name}
               </Text>
               <Text className="text-[12px] text-slate-500" numberOfLines={1}>
                 {facility.address1}
               </Text>
             </View>
-            <Pressable onPress={requestClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close">
+            <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close quick actions">
               <Ionicons name="close" size={20} color={COLORS.text} />
             </Pressable>
           </View>
 
           <View className="h-[1px] bg-slate-200" />
 
-          {/* Compact actions for consistency */}
           <View className="mt-3 gap-3">
+            {/* Keep 1:1 layout; adapt labels */}
             <PrimaryButton
-              label="Call Fire Station"
-              icon="call-outline"
-              size="sm"
+              label="Location"
+              icon="navigate-outline"
               onPress={() => {
-                onCall(facility);
-                requestClose();
+                onOpenMaps(facility);
+                onClose();
               }}
             />
             <PrimaryButton
-              label="Open in Google Maps"
+              label="Call Station"
               variant="secondary"
-              icon="navigate-outline"
-              size="sm"
+              icon="call-outline"
               onPress={() => {
-                onOpenMaps(facility);
-                requestClose();
+                onCall(facility);
+                onClose();
               }}
             />
             <PrimaryButton
               label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
-              size="sm"
               onPress={() => {
                 const text = facility.plusCode || facility.address1 || facility.name;
                 Clipboard.setStringAsync(text);
-                requestClose();
+                onClose();
               }}
             />
           </View>
         </View>
 
-        {/* Safe-area filler to keep sheet flush */}
-        <View pointerEvents="none" style={{ height: insets.bottom, backgroundColor: "#FFFFFF" }} />
-      </Animated.View>
+        {/* pad safe-area bottom */}
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }}
+        />
+      </View>
     </Modal>
   );
 }
 
-/* ------------------------------- Details Modal ------------------------------ */
+/* ------------------------------- Details Modal (match vulcanize) ------------------------------ */
 function DetailsModal({
   visible,
   facility,
@@ -356,11 +311,16 @@ function DetailsModal({
   if (!facility) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
+      <Pressable
+        className="flex-1"
+        style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }}
+        onPress={onClose}
+      >
         <Pressable onPress={() => {}}>
-          <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, SOFT_SHADOW]}>
-            <View className="flex-row items-center gap-3">
-              <View className="overflow-hidden rounded-xl" style={{ width: 56, height: 56, backgroundColor: "#F1F5F9" }}>
+          <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
+            {/* Header */}
+            <View className="flex-row items-start gap-3">
+              <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
                 {facility.avatar ? (
                   <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
                 ) : (
@@ -369,74 +329,49 @@ function DetailsModal({
                   </View>
                 )}
               </View>
+
               <View className="flex-1">
-                <Text className="text-[18px] font-extrabold text-slate-900" numberOfLines={2}>
-                  {facility.name}
-                </Text>
-                <View className="mt-1 flex-row items-center gap-2">
-                  <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
-                    <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{facility.category}</Text>
+                <View className="flex-row items-start justify-between">
+                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>
+                    {facility.name}
+                  </Text>
+                  <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
+                    <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{facility.category}</Text>
                   </View>
-                  <Text className="text-slate-300">•</Text>
-                  <Stars rating={facility.rating ?? 0} />
-                  <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
-                  {typeof facility.distanceKm === "number" && (
-                    <>
-                      <Text className="text-slate-300">•</Text>
-                      <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km away</Text>
-                    </>
-                  )}
                 </View>
               </View>
             </View>
 
-            <View className="mt-3 h-[1px] bg-slate-200" />
-
+            {/* Address FIRST */}
             <View className="mt-3 gap-1">
               <Text className="text-[13px] text-slate-700">{facility.address1}</Text>
               {facility.address2 ? <Text className="text-[12px] text-slate-500">{facility.address2}</Text> : null}
-              {facility.plusCode ? (
-                <View className="flex-row items-center gap-2">
-                  <Ionicons name="locate-outline" size={14} color={COLORS.sub} />
-                  <Text className="text-[12px] text-slate-600">Plus Code: {facility.plusCode}</Text>
-                </View>
-              ) : null}
-              {facility.lat && facility.lng ? (
-                <View className="flex-row items-center gap-2">
-                  <Ionicons name="pin-outline" size={14} color={COLORS.sub} />
-                  <Text className="text-[12px] text-slate-600">
-                    ({facility.lat.toFixed(5)}, {facility.lng.toFixed(5)})
-                  </Text>
-                </View>
-              ) : null}
-              {facility.phone ? (
-                <View className="flex-row items-center gap-2">
-                  <Ionicons name="call-outline" size={14} color={COLORS.sub} />
-                  <Text className="text-[12px] text-slate-600">{facility.phone}</Text>
-                </View>
-              ) : null}
             </View>
 
+            {/* Divider */}
+            <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 12, marginHorizontal: 8 }} />
+
+            {/* Ratings / distance */}
+            <View className="mt-2 flex-row items-center gap-2">
+              <Stars rating={facility.rating ?? 0} />
+              <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
+              {typeof facility.distanceKm === "number" && (
+                <>
+                  <Text className="text-slate-300">•</Text>
+                  <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km away</Text>
+                </>
+              )}
+            </View>
+
+            {/* Actions */}
             <View className="mt-4 flex-row items-center gap-2">
               <View className="flex-1">
-                <PrimaryButton label="Call" icon="call-outline" onPress={() => onCall(facility)} />
+                <PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(facility)} />
               </View>
               <View style={{ width: 10 }} />
               <View className="flex-1">
-                <PrimaryButton label="Open in Maps" icon="navigate-outline" variant="secondary" onPress={() => onOpenMaps(facility)} />
+                <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(facility)} />
               </View>
-            </View>
-
-            <View className="mt-3">
-              <PrimaryButton
-                label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
-                icon="copy-outline"
-                variant="secondary"
-                onPress={() => {
-                  const text = facility.plusCode || facility.address1 || facility.name;
-                  Clipboard.setStringAsync(text);
-                }}
-              />
             </View>
           </View>
         </Pressable>
@@ -445,7 +380,7 @@ function DetailsModal({
   );
 }
 
-/* --------------------------------- Card ---------------------------------- */
+/* --------------------------------- Card (identical sizes/layout to vulcanize) ---------------------------------- */
 function FacilityCard({
   facility,
   onLocation,
@@ -458,9 +393,17 @@ function FacilityCard({
   onPressCard: (s: Facility) => void;
 }) {
   return (
-    <Pressable onPress={() => onPressCard(facility)} className="mx-4 my-2 rounded-2xl bg-white p-4" style={[{ borderColor: COLORS.border, borderWidth: 1 }, SOFT_SHADOW]}>
+    <Pressable
+      onPress={() => onPressCard(facility)}
+      className="mx-4 my-2 rounded-2xl bg-white p-4"
+      style={[{ borderColor: COLORS.border, borderWidth: 1 }, cardShadow]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open actions for ${facility.name}`}
+    >
+      {/* Header row with avatar + title/badge */}
       <View className="flex-row items-start gap-3">
-        <View className="overflow-hidden rounded-xl" style={{ width: 64, height: 64, backgroundColor: "#F1F5F9" }}>
+        {/* Circular image — 56x56 */}
+        <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
           {facility.avatar ? (
             <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
           ) : (
@@ -471,37 +414,53 @@ function FacilityCard({
         </View>
 
         <View className="flex-1">
-          <View className="flex-row items-center justify-between">
-            <Text className="text-[16px] font-extrabold text-slate-900 flex-1" numberOfLines={2}>
+          {/* Title row: 16px, not bold; badge self-start */}
+          <View className="flex-row items-start justify-between">
+            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>
               {facility.name}
             </Text>
-            <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-1">
-              <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{facility.category}</Text>
+            <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
+              <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{facility.category}</Text>
             </View>
           </View>
+        </View>
+      </View>
 
-          <View className="mt-1 flex-row items-center gap-2">
-            <Stars rating={facility.rating ?? 0} />
-            <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
-            {typeof facility.distanceKm === "number" && (
-              <>
-                <Text className="text-slate-300">•</Text>
-                <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km</Text>
-              </>
-            )}
+      {/* Divider under header — marginTop:8, marginHorizontal:8 */}
+      <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
+
+      {/* Body aligned with text column — paddingLeft:68 */}
+      <View style={{ paddingTop: 8, paddingLeft: 68 }}>
+        {/* Address */}
+        <Text className="text-[13px] text-slate-700" numberOfLines={2}>
+          {facility.address1}
+        </Text>
+        {facility.address2 ? (
+          <Text className="text-[12px] text-slate-500" numberOfLines={1}>
+            {facility.address2}
+          </Text>
+        ) : null}
+
+        {/* Ratings / distance */}
+        <View className="mt-2 flex-row items-center gap-2">
+          <Stars rating={facility.rating ?? 0} />
+          <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
+          {typeof facility.distanceKm === "number" && (
+            <>
+              <Text className="text-slate-300">•</Text>
+              <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km</Text>
+            </>
+          )}
+        </View>
+
+        {/* Actions — Call (secondary) left, Location (primary) right */}
+        <View className="mt-3 flex-row items-center gap-2">
+          <View className="flex-1">
+            <PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(facility)} />
           </View>
-
-          <Text className="mt-2 text-[13px] text-slate-700" numberOfLines={2}>{facility.address1}</Text>
-          {facility.address2 ? <Text className="text-[12px] text-slate-500" numberOfLines={1}>{facility.address2}</Text> : null}
-
-          <View className="mt-3 flex-row items-center gap-2">
-            <View className="flex-1">
-              <PrimaryButton label="Open Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} />
-            </View>
-            <View style={{ width: 12 }} />
-            <View className="flex-1">
-              <PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(facility)} />
-            </View>
+          <View style={{ width: 12 }} />
+          <View className="flex-1">
+            <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} />
           </View>
         </View>
       </View>
@@ -509,7 +468,7 @@ function FacilityCard({
   );
 }
 
-/* --------------------------------- Screen --------------------------------- */
+/* --------------------------------- Screen (vulcanize-style header/search + divider kept) --------------------------------- */
 export default function FireStationScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -518,9 +477,8 @@ export default function FireStationScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
 
-  // Optional loading overlay message
-  const [busy, setBusy] = useState(false);
-  const [busyMsg, setBusyMsg] = useState<string | undefined>(undefined);
+  // Inline header search toggle (same as vulcanize)
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
@@ -539,34 +497,20 @@ export default function FireStationScreen() {
     }).sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
   }, [filters, query]);
 
-  const openMaps = async (s: Facility) => {
-    setBusy(true);
-    setBusyMsg("Opening Google Maps…");
-    try {
-      if (s.lat && s.lng) {
-        const url = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
-        await Linking.openURL(url);
-      } else if (s.address1) {
-        const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`;
-        await Linking.openURL(url);
-      }
-    } finally {
-      setBusy(false);
-      setBusyMsg(undefined);
+  const openMaps = (s: Facility) => {
+    if (s.lat && s.lng) {
+      const url = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
+      Linking.openURL(url).catch(() => {});
+    } else if (s.address1) {
+      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`;
+      Linking.openURL(url).catch(() => {});
     }
   };
 
-  const callFacility = async (s: Facility) => {
+  const callFacility = (s: Facility) => {
     if (!s.phone) return;
     const telUrl = `tel:${s.phone}`;
-    setBusy(true);
-    setBusyMsg("Opening dialer…");
-    try {
-      await Linking.openURL(telUrl);
-    } finally {
-      setBusy(false);
-      setBusyMsg(undefined);
-    }
+    Linking.openURL(telUrl).catch(() => {});
   };
 
   const openActions = (s: Facility) => {
@@ -583,43 +527,92 @@ export default function FireStationScreen() {
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
       <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.bg }}>
-        <View className="flex-row items-center justify-between px-4 py-3">
-          <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
-            <Ionicons name="arrow-back" size={22} color={COLORS.text} />
-          </Pressable>
-          <Text className="text-2xl font-extrabold text-slate-900">Fire Stations</Text>
-          <View style={{ width: 36 }} />
-        </View>
-      </SafeAreaView>
-
-      {/* Search */}
-      <View className="px-4">
-        <View className="flex-row items-center rounded-2xl bg-white px-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, MICRO_SHADOW]}>
-          <Ionicons name="search" size={18} color={COLORS.muted} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search by name, address, plus code…"
-            placeholderTextColor={COLORS.muted}
-            className="flex-1 px-2 py-3 text-[15px] text-slate-900"
-            autoCapitalize="none"
-            returnKeyType="search"
-          />
-          {query.length > 0 && (
-            <Pressable onPress={() => setQuery("")} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+        {/* Header is relative so title can be absolutely centered */}
+        <View className="relative px-4 py-3">
+          <View className="flex-row items-center justify-between">
+            {/* Back button with safe fallback */}
+            <Pressable
+              onPress={() => {
+                try {
+                  // @ts-ignore expo-router may expose canGoBack
+                  if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
+                  else router.replace("/");
+                } catch {
+                  router.replace("/");
+                }
+              }}
+              hitSlop={10}
+              className="h-9 w-9 items-center justify-center rounded-xl"
+              accessibilityLabel="Go back"
+            >
+              <Ionicons name="arrow-back" size={22} color={COLORS.text} />
             </Pressable>
+
+            {/* Right side: search icon OR expanded search input (same row) */}
+            {!searchOpen ? (
+              <Pressable
+                onPress={() => setSearchOpen(true)}
+                hitSlop={10}
+                className="h-9 w-9 items-center justify-center rounded-xl"
+                accessibilityLabel="Open search"
+              >
+                <Ionicons name="search" size={20} color={COLORS.text} />
+              </Pressable>
+            ) : (
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <View
+                  className="flex-row items-center rounded-2xl bg-white px-3 py-1"
+                  style={[
+                    { borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 },
+                    panelShadow,
+                  ]}
+                >
+                  <Ionicons name="search" size={18} color={COLORS.muted} />
+                  <TextInput
+                    value={query}
+                    onChangeText={setQuery}
+                    placeholder="Search by name, address, plus code…"
+                    placeholderTextColor={COLORS.muted}
+                    className="flex-1 px-2 py-2 text-[15px] text-slate-900"
+                    autoCapitalize="none"
+                    returnKeyType="search"
+                    autoFocus
+                  />
+                  {query.length > 0 && (
+                    <Pressable onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Clear search">
+                      <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+                    </Pressable>
+                  )}
+                  <Pressable onPress={() => setSearchOpen(false)} hitSlop={8} accessibilityLabel="Close search" style={{ marginLeft: 6 }}>
+                    <Ionicons name="close" size={18} color={COLORS.text} />
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          </View>
+
+          {/* Absolutely centered title; does NOT intercept touches */}
+          {!searchOpen && (
+            <View
+              pointerEvents="none"
+              style={{ position: "absolute", left: 0, right: 0, top: 12, alignItems: "center" }}
+            >
+              <Text className="text-xl font-bold text-[#0F172A]">Fire Stations</Text>
+            </View>
           )}
         </View>
-      </View>
 
-      {/* Reusable Filter Chips */}
+        {/* Full-width divider under the header (kept as requested) */}
+        <View style={{ height: 1, backgroundColor: COLORS.border }} />
+      </SafeAreaView>
+
+      {/* Filter chips (same spacing/gap as vulcanize) */}
       <FilterChips
         items={FILTERS}
         selected={filters}
         onToggle={toggleFilter}
-        containerStyle={{ paddingHorizontal: 16, marginTop: 12 }}
-        gap={12}
+        containerStyle={{ paddingHorizontal: 16, marginTop: 10 }}
+        gap={8}
         horizontal
         accessibilityLabel="Facility filters"
       />
@@ -629,8 +622,14 @@ export default function FireStationScreen() {
         data={data}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingVertical: 10, paddingBottom: 24 }}
+        keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => (
-          <FacilityCard facility={item} onLocation={openMaps} onCall={callFacility} onPressCard={openActions} />
+          <FacilityCard
+            facility={item}
+            onLocation={openMaps}
+            onCall={callFacility}
+            onPressCard={openActions} // tap card => quick actions (bottom sheet)
+          />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
         ListEmptyComponent={
@@ -641,14 +640,23 @@ export default function FireStationScreen() {
         }
       />
 
-      {/* Bottom sheet actions (animated) */}
-      <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} onCall={callFacility} />
+      {/* Bottom sheet */}
+      <QuickActions
+        visible={sheetOpen}
+        onClose={closeActions}
+        facility={selectedFacility}
+        onOpenMaps={openMaps}
+        onCall={callFacility}
+      />
 
-      {/* Optional details modal */}
-      <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callFacility} />
-
-      {/* Loading overlay */}
-      <LoadingScreen visible={busy} message={busyMsg} />
+      {/* Details modal (present for reuse, not opened by default) */}
+      <DetailsModal
+        visible={detailsOpen}
+        facility={selectedFacility}
+        onClose={closeDetails}
+        onOpenMaps={openMaps}
+        onCall={callFacility}
+      />
     </View>
   );
 }

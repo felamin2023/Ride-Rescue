@@ -1,4 +1,4 @@
-// app/shop/mechanicprofile.tsx
+// app/shop/driverprofile.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -22,6 +22,8 @@ import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../../utils/supabase";
 import EditContactSheet from "../../components/EditContactSheet";
+import LoadingScreen from "../../components/LoadingScreen";
+
 
 /* ------------------------------ helpers ------------------------------ */
 const cardShadow = Platform.select({
@@ -182,10 +184,6 @@ function DialogModal({
               })}
             </View>
           ) : null}
-
-          <Pressable onPress={onClose} className="mt-3 items-center">
-            <Text className="text-xs text-gray-500 underline">Close</Text>
-          </Pressable>
         </View>
       </View>
     </Modal>
@@ -199,7 +197,7 @@ export default function DriverProfile() {
   /* ---------- screen state ---------- */
   const [notifOn, setNotifOn] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState(false); // 🔒 used to freeze the sheet
 
   /* ---------- profile state ---------- */
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -318,6 +316,8 @@ export default function DriverProfile() {
       }),
     [dirty]
   );
+  // 🔒 while saving, disable the pan/drag handlers to prevent accidental close
+  const panHandlers = saving ? {} : (panResponder.panHandlers as any);
 
   /* ---------- bootstrap profile ---------- */
   useEffect(() => {
@@ -396,6 +396,7 @@ export default function DriverProfile() {
     setEditOpen(true);
   };
   const closeEdit = () => {
+    if (saving) return; // 🔒 don't allow closing while saving
     if (!dirty) return dismissEditImmediately();
     showDialog("Discard changes?", "You have unsaved edits.", [
       { label: "Cancel", variant: "secondary" },
@@ -405,6 +406,7 @@ export default function DriverProfile() {
 
   /* ---------- avatar picking ---------- */
   const pickNewPhoto = async () => {
+    if (saving) return; // 🔒 frozen while saving
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       showDialog("Permission needed", "Please allow photo library access.");
@@ -422,6 +424,7 @@ export default function DriverProfile() {
     }
   };
   const removePhoto = () => {
+    if (saving) return; // 🔒
     setDraftAvatar(null);
     setDirty(true);
   };
@@ -479,7 +482,7 @@ export default function DriverProfile() {
     const wantsPwChange = !!(pwCurrent || pwNew || pwNew2);
 
     try {
-      setSaving(true);
+      setSaving(true); // 🔒 start freeze
 
       // 0) password update first
       if (wantsPwChange) {
@@ -541,7 +544,7 @@ export default function DriverProfile() {
     } catch (e: any) {
       showDialog("Save failed", e?.message ?? "Something went wrong.");
     } finally {
-      setSaving(false);
+      setSaving(false); // 🔓 unfreeze
     }
   };
 
@@ -631,14 +634,6 @@ export default function DriverProfile() {
   };
 
   /* ------------------------------ render ------------------------------ */
-  if (loading) {
-    return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-[#EAF1F6]">
-        <ActivityIndicator />
-        <Text className="mt-3 text-[#0F172A]">Loading profile…</Text>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView className="flex-1 bg-[#EAF1F6]">
@@ -716,13 +711,19 @@ export default function DriverProfile() {
         <View className="flex-1 bg-black/40">
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} className="flex-1 justify-end">
             <Animated.View className="bg-white rounded-t-3xl max-h-[90%]" style={{ transform: [{ translateY: sheetY }] }}>
-              <View {...panResponder.panHandlers}>
+              <View {...panHandlers}>
                 <View className="items-center pt-3">
                   <View className="h-1.5 w-12 rounded-full bg-gray-300" />
                 </View>
 
                 <View className="flex-row items-center justify-between px-5 py-3">
-                  <Pressable onPress={closeEdit} className="px-3 py-2 -ml-2 rounded-lg active:opacity-80" android_ripple={{ color: "#e5e7eb" }}>
+                  <Pressable
+                    onPress={closeEdit}
+                    disabled={saving} // 🔒 disable close while saving
+                    className="px-3 py-2 -ml-2 rounded-lg active:opacity-80"
+                    android_ripple={{ color: "#e5e7eb" }}
+                
+                >
                     <Ionicons name="close" size={22} color="#0F172A" />
                   </Pressable>
                   <Text className="text-[16px] font-semibold text-[#0F172A]">Edit Profile</Text>
@@ -737,7 +738,13 @@ export default function DriverProfile() {
                 </View>
               </View>
 
-              <ScrollView className="px-5" contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                className="px-5"
+                contentContainerStyle={{ paddingBottom: 24 }}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                pointerEvents={saving ? "none" : "auto"} // 🔒 freeze touches inside while saving
+              >
                 {/* avatar */}
                 <View className="items-center mt-2 mb-4">
                   <View className="w-24 h-24 rounded-full overflow-hidden border border-[#EEF2F7]">
@@ -750,8 +757,13 @@ export default function DriverProfile() {
                     )}
                   </View>
                   <View className="flex-row gap-3 mt-3">
-                    <Pressable onPress={pickNewPhoto} className="px-3 py-2 rounded-lg bg-[#E8F1FF] active:opacity-90" android_ripple={{ color: "#dbeafe" }}>
-                      <Text className="text-[13px] text-[#0F2547]">Change photo</Text>
+                    <Pressable
+                      onPress={pickNewPhoto}
+                      disabled={saving} 
+                      className="px-3 py-2 rounded-lg bg-[#E8F1FF] active:opacity-90"
+                      android_ripple={{ color: "#dbeafe" }}
+                    >
+                      <Text className="text-[13px] text-[#0F2547]">{ "Change photo"}</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -761,6 +773,7 @@ export default function DriverProfile() {
                   <View>
                     <Text className="text-[12px] mb-1 text-[#64748B]">Full Name</Text>
                     <TextInput
+                      editable={!saving} // 🔒
                       value={draftName}
                       onChangeText={(t) => { setDraftName(t); setDirty(true); }}
                       placeholder="Enter your full name"
@@ -772,6 +785,7 @@ export default function DriverProfile() {
                   <View>
                     <Text className="text-[12px] mb-1 text-[#64748B]">Email</Text>
                     <TextInput
+                      editable={!saving} // 🔒
                       keyboardType="email-address"
                       autoCapitalize="none"
                       value={draftEmail}
@@ -800,13 +814,18 @@ export default function DriverProfile() {
                           <Text className="text-[12px] mb-1 text-[#64748B]">Current password</Text>
                           <View className="flex-row items-center border rounded-xl px-3" style={{ borderColor: "#E5E9F0" }}>
                             <TextInput
+                              editable={!saving} // 🔒
                               value={pwCurrent}
                               onChangeText={(t) => { setPwCurrent(t); setDirty(true); }}
                               placeholder="Enter current password"
                               secureTextEntry={!pwVisible.current}
                               className="flex-1 py-3"
                             />
-                            <Pressable onPress={() => setPwVisible((s) => ({ ...s, current: !s.current }))} className="px-2 py-2">
+                            <Pressable
+                              onPress={() => setPwVisible((s) => ({ ...s, current: !s.current }))}
+                              disabled={saving} // 🔒
+                              className="px-2 py-2"
+                            >
                               <Ionicons name={pwVisible.current ? "eye-off" : "eye"} size={18} color="#64748B" />
                             </Pressable>
                           </View>
@@ -816,13 +835,18 @@ export default function DriverProfile() {
                           <Text className="text-[12px] mb-1 text-[#64748B]">New password</Text>
                           <View className="flex-row items-center border rounded-xl px-3" style={{ borderColor: "#E5E9F0" }}>
                             <TextInput
+                              editable={!saving} // 🔒
                               value={pwNew}
                               onChangeText={(t) => { setPwNew(t); setDirty(true); }}
                               placeholder="At least 8 chars, with letters & numbers"
                               secureTextEntry={!pwVisible.next}
                               className="flex-1 py-3"
                             />
-                            <Pressable onPress={() => setPwVisible((s) => ({ ...s, next: !s.next }))} className="px-2 py-2">
+                            <Pressable
+                              onPress={() => setPwVisible((s) => ({ ...s, next: !s.next }))}
+                              disabled={saving} // 🔒
+                              className="px-2 py-2"
+                            >
                               <Ionicons name={pwVisible.next ? "eye-off" : "eye"} size={18} color="#64748B" />
                             </Pressable>
                           </View>
@@ -832,13 +856,18 @@ export default function DriverProfile() {
                           <Text className="text-[12px] mb-1 text-[#64748B]">Confirm new password</Text>
                           <View className="flex-row items-center border rounded-xl px-3" style={{ borderColor: "#E5E9F0" }}>
                             <TextInput
+                              editable={!saving} // 🔒
                               value={pwNew2}
                               onChangeText={(t) => { setPwNew2(t); setDirty(true); }}
                               placeholder="Re-type new password"
                               secureTextEntry={!pwVisible.next2}
                               className="flex-1 py-3"
                             />
-                            <Pressable onPress={() => setPwVisible((s) => ({ ...s, next2: !s.next2 }))} className="px-2 py-2">
+                            <Pressable
+                              onPress={() => setPwVisible((s) => ({ ...s, next2: !s.next2 }))}
+                              disabled={saving} // 🔒
+                              className="px-2 py-2"
+                            >
                               <Ionicons name={pwVisible.next2 ? "eye-off" : "eye"} size={18} color="#64748B" />
                             </Pressable>
                           </View>
@@ -850,6 +879,7 @@ export default function DriverProfile() {
 
                         <Pressable
                           onPress={() => showDialog("Forgot password?", "Go to the login screen and tap “Forgot password”. We’ll send a reset link to your email.")}
+                          disabled={saving} // 🔒
                           className="mt-2 self-start"
                         >
                           <Text className="text-[12px] underline" style={{ color: "#2563EB" }}>
@@ -861,6 +891,12 @@ export default function DriverProfile() {
                   </View>
                 </View>
               </ScrollView>
+
+              {/* 🔒 subtle saving overlay so users see it's frozen */}
+              {saving && (
+                <View className="absolute inset-0 bg-white/40 items-center justify-center rounded-t-3xl">
+                </View>
+              )}
             </Animated.View>
           </KeyboardAvoidingView>
         </View>
@@ -974,6 +1010,13 @@ export default function DriverProfile() {
           showDialog("Contact updated", "Your phone and address have been saved.");
         }}
       />
+
+      <LoadingScreen
+        visible={loading}
+        message="Loading profile…"
+        variant="spinner"
+      />
+
     </SafeAreaView>
   );
 }

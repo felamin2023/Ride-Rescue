@@ -107,7 +107,11 @@ export default function EditContactSheet({
   const [dTitle, setDTitle] = useState<string | undefined>(undefined);
   const [dMsg, setDMsg] = useState<string | undefined>(undefined);
   const [dActions, setDActions] = useState<DialogAction[]>([]);
-  const showDialog = (t?: string, m?: string, acts: DialogAction[] = [{ label: "OK", variant: "primary", onPress: () => setDOpen(false) }]) => {
+  const showDialog = (
+    t?: string,
+    m?: string,
+    acts: DialogAction[] = [{ label: "OK", variant: "primary", onPress: () => setDOpen(false) }]
+  ) => {
     setDTitle(t);
     setDMsg(m);
     setDActions(
@@ -158,6 +162,8 @@ export default function EditContactSheet({
       }),
     [dirty]
   );
+  // 🚫 while saving, disable drag handlers (prevents accidental close)
+  const panHandlers = saving ? {} : (panResponder.panHandlers as any);
 
   // when opened, reset from initial
   useEffect(() => {
@@ -167,9 +173,11 @@ export default function EditContactSheet({
       setDirty(false);
       sheetY.setValue(0);
     }
-  }, [open, initial?.phone, initial?.address]);
+  }, [open, initial?.phone, initial?.address, sheetY]);
 
   const handleClose = () => {
+    // 🚫 don't allow closing while saving
+    if (saving) return;
     if (!dirty) return dismissNow();
     showDialog("Discard changes?", "You have unsaved edits.", [
       { label: "Cancel", variant: "secondary" },
@@ -221,15 +229,20 @@ export default function EditContactSheet({
     <Modal visible animationType="fade" transparent statusBarTranslucent onRequestClose={handleClose}>
       <View className="flex-1 bg-black/40">
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} className="flex-1 justify-end">
-          <Animated.View className="bg-white rounded-t-3xl max-h[90%]" style={{ transform: [{ translateY: sheetY }] }}>
-            <View {...panResponder.panHandlers}>
+          <Animated.View className="bg-white rounded-t-3xl max-h-[90%]" style={{ transform: [{ translateY: sheetY }] }}>
+            <View {...panHandlers}>
               {/* drag handle + header */}
               <View className="items-center pt-3">
                 <View className="h-1.5 w-12 rounded-full bg-gray-300" />
               </View>
 
               <View className="flex-row items-center justify-between px-5 py-3">
-                <Pressable onPress={handleClose} className="px-3 py-2 -ml-2 rounded-lg active:opacity-80" android_ripple={{ color: "#e5e7eb" }}>
+                <Pressable
+                  onPress={handleClose}
+                  disabled={saving} // 🔒 block closing while saving
+                  className="px-3 py-2 -ml-2 rounded-lg active:opacity-80"
+                  android_ripple={{ color: "#e5e7eb" }}
+                >
                   <Ionicons name="close" size={22} color="#0F172A" />
                 </Pressable>
                 <Text className="text-[16px] font-semibold text-[#0F172A]">{title}</Text>
@@ -245,11 +258,18 @@ export default function EditContactSheet({
             </View>
 
             {/* body */}
-            <ScrollView className="px-5" contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView
+              className="px-5"
+              contentContainerStyle={{ paddingBottom: 24 }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              pointerEvents={saving ? "none" : "auto"} // 🔒 freeze touches while saving
+            >
               <View className="gap-3 mt-1">
                 <View>
                   <Text className="text-[12px] mb-1 text-[#64748B]">Phone</Text>
                   <TextInput
+                    editable={!saving} // 🔒
                     value={phone}
                     onChangeText={(t) => {
                       setPhone(t);
@@ -266,6 +286,7 @@ export default function EditContactSheet({
                 <View>
                   <Text className="text-[12px] mb-1 text-[#64748B]">Address</Text>
                   <TextInput
+                    editable={!saving} // 🔒
                     value={address}
                     onChangeText={(t) => {
                       setAddress(t);
@@ -280,6 +301,9 @@ export default function EditContactSheet({
                 </View>
               </View>
             </ScrollView>
+
+            {/* 🔒 subtle overlay (no spinner) so it's visually frozen */}
+            {saving && <View className="absolute inset-0 bg-white/40 rounded-t-3xl" />}
           </Animated.View>
         </KeyboardAvoidingView>
       </View>

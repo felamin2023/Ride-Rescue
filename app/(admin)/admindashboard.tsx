@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 
 import AdminSideDrawer from "../../components/adminSidedrawer";
 import AdminTopHeader from "../../components/AdminTopHeader";
+import { supabase } from "../../utils/supabase";
 
 /* =============================== THEME =============================== */
 const COLORS = {
@@ -316,13 +317,11 @@ const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "30d", label: "Last 30 days" },
   { key: "7d", label: "Last 7 days" },
 ];
+
 function useDashboardData(range: RangeKey) {
+  // demo-derived values for charts (unchanged)
   const factor = range === "all" ? 1 : range === "30d" ? 0.35 : 0.18;
-  const totalUsers = Math.round(4293 * factor);
   const composition = { active: 0.61, inactive: 0.26, returning: 0.13 };
-  const totalDrivers = Math.round(2609 * factor);
-  const totalShops = Math.round(1136 * factor);
-  const totalEmergencies = Math.round(547 * factor);
   const requestTime = [
     { name: "Morning", value: 28, color: PIE_COLORS.morning },
     { name: "Afternoon", value: 40, color: PIE_COLORS.afternoon },
@@ -331,7 +330,50 @@ function useDashboardData(range: RangeKey) {
   const trendLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const trendNow = [8, 6, 10, 14, 12, 9, 16].map((n) => Math.round(n * (0.6 + factor)));
   const trendPrev = [6, 7, 8, 12, 9, 11, 10].map((n) => Math.round(n * (0.55 + factor)));
-  return { totalUsers, composition, totalDrivers, totalShops, totalEmergencies, requestTime, trendLabels, trendNow, trendPrev };
+
+  // live counts (default to 0 while loading)
+  const [totals, setTotals] = useState({
+    totalUsers: 0,
+    totalDrivers: 0,
+    totalShops: 0,
+    totalEmergencies: 0,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.rpc("admin_dashboard_counts");
+      if (error) {
+        console.warn("[dashboard] counts rpc error:", error.message);
+        return;
+      }
+
+      // supabase-js returns an array for set-returning funcs
+      const row = Array.isArray(data) ? data[0] : data;
+
+      if (!cancelled && row) {
+        setTotals({
+          totalUsers: Number(row.total_users ?? 0),
+          totalDrivers: Number(row.total_drivers ?? 0),
+          totalShops: Number(row.total_shops ?? 0),
+          totalEmergencies: Number(row.total_emergencies ?? 0),
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [range]); // you can remove [range] if you don’t want to refetch on range change
+
+  return {
+    totalUsers: totals.totalUsers,
+    composition,
+    totalDrivers: totals.totalDrivers,
+    totalShops: totals.totalShops,
+    totalEmergencies: totals.totalEmergencies,
+    requestTime,
+    trendLabels,
+    trendNow,
+    trendPrev,
+  };
 }
 
 /* ================================ PAGE ================================ */

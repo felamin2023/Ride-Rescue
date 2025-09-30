@@ -11,7 +11,7 @@ const COLORS = {
 const menu = [
   { label: "Dashboard", icon: "grid-outline" as const, href: "/(admin)/admindashboard" },
   { label: "Shops & Mechanics", icon: "build-outline" as const, href: "/(admin)/adminshop-mechanic" },
-  { label: "Users", icon: "people-outline" as const, href: "/(admin)/adminusers" },
+  { label: "Drivers", icon: "people-outline" as const, href: "/(admin)/adminusers" },
   //{ label: "Payments", icon: "card-outline" as const, href: "/(admin)/payments" },
 ];
 

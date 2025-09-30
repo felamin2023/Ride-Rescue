@@ -2,6 +2,8 @@
 import React, { useState } from "react";
 import { View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { supabase } from "../utils/supabase"; // <-- adjust path if your utils lives elsewhere
 
 const COLORS = {
   brand: "#0F2547",
@@ -12,8 +14,8 @@ type AdminTopHeaderProps = {
   title?: string;
   /** Optional display name for the profile button. Defaults to "Admin". */
   userName?: string;
-  /** Optional logout handler. If not provided, logs to console. */
-  onLogout?: () => void;
+  /** Optional logout handler. If provided, it will be used instead of the built-in one. */
+  onLogout?: () => void | Promise<void>;
 };
 
 export default function AdminTopHeader({
@@ -22,6 +24,20 @@ export default function AdminTopHeader({
   onLogout,
 }: AdminTopHeaderProps) {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    setOpen(false);
+    try {
+      // Sign out from Supabase
+      await supabase.auth.signOut();
+    } catch (_) {
+      // ignore; we'll still navigate away
+    } finally {
+      // IMPORTANT: use the public route (no group prefix in URL)
+      router.replace("/adminlogin");
+    }
+  };
 
   return (
     <View className="h-14 flex-row items-center justify-between border-b border-slate-200 bg-white px-4">
@@ -47,10 +63,13 @@ export default function AdminTopHeader({
           <View className="absolute right-0 mt-2 w-28 rounded-md border bg-white shadow-md">
             <Pressable
               className="px-3 py-2 hover:bg-slate-100"
-              onPress={() => {
-                setOpen(false);
-                if (onLogout) onLogout();
-                else console.log("Logout clicked");
+              onPress={async () => {
+                if (onLogout) {
+                  setOpen(false);
+                  await onLogout();
+                } else {
+                  await handleLogout();
+                }
               }}
             >
               <Text className="text-sm text-slate-700">Logout</Text>

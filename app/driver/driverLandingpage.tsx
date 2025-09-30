@@ -182,7 +182,7 @@ export default function DriverHome() {
               resizeMode="contain"
             />
             <Text className="text-white text-[20px] font-semibold">
-              RideRescue
+              Ride Rescue
             </Text>
           </View>
 
@@ -548,16 +548,10 @@ function PendingEmergencyModal({
       <View className="flex-1 bg-black/40 items-center justify-center px-6">
         <View className="w-full max-w-md rounded-2xl p-6 bg-white border border-slate-200">
           {/* Close (X) */}
-          <Pressable
-            onPress={onClose}
-            className="absolute right-3 top-3 p-2 rounded-full"
-            android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: true }}
-          >
-            <Ionicons name="close" size={20} color="#0F2547" />
-          </Pressable>
+         
 
           <Text className="text-[18px] font-semibold text-[#0F2547] mb-2">
-            Pending Emergency Found
+            Pending Request! 
           </Text>
           <Text className="text-[13px] text-slate-600 mb-5">
             You still have a pending emergency post. You can check its status or

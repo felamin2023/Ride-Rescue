@@ -112,14 +112,13 @@ const MOCK: Facility[] = [
 
 /* --------------------------- Reusable filter items -------------------------- */
 const FILTERS: FilterItem[] = [
-  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },
+{ key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
+  { key: "repair",   icon: "construct-outline", label: "Repair" },
+  { key: "gas",      icon: "flash-outline",     label: "Gas" },
   { key: "hospital", icon: "medical-outline",   label: "Hospital" },
   { key: "police",   icon: "shield-outline",    label: "Police" },
-  { key: "gas",      icon: "flash-outline",     label: "Gas" },
-  { key: "repair",   icon: "construct-outline", label: "Repair" },
   { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
-  { key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
-];
+  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },];
 
 /* --------------------------------- Small UI -------------------------------- */
 function Stars({ rating = 0 }: { rating?: number }) {

@@ -376,7 +376,8 @@ export default function Signup() {
   const [showDriverOtpModal, setShowDriverOtpModal] = useState(false);
   const [driverOtp, setDriverOtp] = useState("");
   const [driverOtpError, setDriverOtpError] = useState("");
-  const [driverEmailCheckLoading, setDriverEmailCheckLoading] = useState(false);
+  const [driverEmailCheckLoading, setDriverEmailCheckLoading] =
+    useState(false);
   const [driverEmailCheckError, setDriverEmailCheckError] = useState("");
   const [driverOtpResendLoading, setDriverOtpResendLoading] = useState(false);
   const [driverOtpSendLoading, setDriverOtpSendLoading] = useState(false);
@@ -865,6 +866,7 @@ export default function Signup() {
         photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
       }
 
+      // 1) Upsert app_user (Shop owner)
       const appUserRow = {
         user_id: authUserId,
         role: "Shop owner" as const,
@@ -880,9 +882,43 @@ export default function Signup() {
         .upsert([appUserRow], { onConflict: "user_id" });
       if (upsertUserErr) throw upsertUserErr;
 
+      // 2) Upload certificates
       const { urls: certificateUrls, paths: certificatePaths } =
         await uploadCertificatesAndGetUrls(authUserId, certs);
 
+      // 3) Decide or create place_id BEFORE writing shop_details
+      let placeIdToUse: string | null = null;
+
+      if (shopName && shopName !== "Shop not Listed") {
+        // Existing place selected, the value is already a place_id
+        placeIdToUse = shopName as string;
+      } else {
+        // Create a new place first (without owner yet), then use its place_id
+        const lat = coords?.lat ?? null;
+        const lng = coords?.lng ?? null;
+        const newPlacePayload: any = {
+          name: null,
+          category: shopType ? (shopType.includes("Vulcanizing") ? "vulcanizing" : "repair_shop") : null,
+          address: shopAddress || null,
+          plus_code: null,
+          latitude: lat,
+          longitude: lng,
+          maps_link:
+            lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null,
+          owner: null, // set after we know the shop_id
+        };
+
+        const { data: createdPlace, error: insPlaceErr } = await supabase
+          .from("places")
+          .insert([newPlacePayload])
+          .select("place_id")
+          .single();
+        if (insPlaceErr) throw insPlaceErr;
+        placeIdToUse = createdPlace?.place_id ?? null;
+        if (!placeIdToUse) throw new Error("Failed to obtain new place_id.");
+      }
+
+      // 4) Upsert shop_details INCLUDING place_id now
       const { data: upsertShop, error: upsertShopErr } = await supabase
         .from("shop_details")
         .upsert(
@@ -894,6 +930,8 @@ export default function Signup() {
               time_open: openTime,
               time_close: closeTime,
               days: JSON.stringify(days),
+              // ✅ write the new column here (assumed name: place_id)
+              place_id: placeIdToUse,
             },
           ],
           { onConflict: "user_id" }
@@ -904,31 +942,13 @@ export default function Signup() {
 
       const newShopId: string = upsertShop.shop_id;
 
-      if (shopName && shopName !== "Shop not Listed") {
-        const placeId = shopName as string;
+      // 5) Ensure places.owner points to this shop_id
+      if (placeIdToUse) {
         const { error: updPlaceErr } = await supabase
           .from("places")
           .update({ owner: newShopId })
-          .eq("place_id", placeId);
+          .eq("place_id", placeIdToUse);
         if (updPlaceErr) throw updPlaceErr;
-      } else {
-        const lat = coords?.lat ?? null;
-        const lng = coords?.lng ?? null;
-        const newPlacePayload: any = {
-          name: null,
-          category: null,
-          address: shopAddress || null,
-          plus_code: null,
-          latitude: lat,
-          longitude: lng,
-          maps_link:
-            lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null,
-          owner: newShopId,
-        };
-        const { error: insPlaceErr } = await supabase
-          .from("places")
-          .insert([newPlacePayload]);
-        if (insPlaceErr) throw insPlaceErr;
       }
 
       router.replace("/shop/mechanicLandingpage");

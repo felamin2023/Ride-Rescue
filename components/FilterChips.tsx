@@ -14,13 +14,13 @@ import { Ionicons } from "@expo/vector-icons";
 /* --------------------------------- Design --------------------------------- */
 const COLORS = {
   border: "#E5E7EB",
-  text: "#0F172A",
+  text: "#000000",
   sub: "#475569",
   primary: "#2563EB",
   chipBg: "#FFFFFF",
   chipBgSelected: "#EEF2FF",
   chipBorderSelected: "#C7D2FE",
-  chipTextSelected: "#1E3A8A",
+  chipTextSelected: "#1E3A8A", // left as-is but no longer used
 };
 
 const MICRO_SHADOW = Platform.select({
@@ -96,9 +96,9 @@ function Chip({
       />
       <Text
         style={{
-          fontSize: 13,
+          fontSize: 11,
           fontWeight: "600",
-          color: selected ? COLORS.chipTextSelected : "#475569",
+          color: COLORS.text, // <- always black, even when selected
         }}
       >
         {label}

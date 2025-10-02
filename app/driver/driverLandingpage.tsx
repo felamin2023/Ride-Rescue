@@ -1,5 +1,5 @@
 // app/(driver)/driverLandingpage.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   StatusBar,
   Modal,
   ScrollView,
+  Linking,
+  Alert,
 } from "react-native";
 import { Link, useRouter } from "expo-router";
 import {
@@ -18,6 +20,7 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import SideDrawer from "../../components/SideDrawer";
 import { supabase } from "../../utils/supabase";
 
@@ -52,6 +55,13 @@ export default function DriverHome() {
   const [pendingVisible, setPendingVisible] = useState(false);
   const [checkingSOS, setCheckingSOS] = useState(false);
   const insets = useSafeAreaInsets();
+
+  /* ---------------------- LOCATION STATE ---------------------- */
+  const [locationText, setLocationText] = useState<string>("Fetching location...");
+  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locPerm, setLocPerm] = useState<"granted" | "denied" | "unknown">("unknown");
+  const [requestingLoc, setRequestingLoc] = useState(false);
+  const [locationExpanded, setLocationExpanded] = useState(false);
 
   /* ----------------------------- SOS animation ---------------------------- */
   const pulse = useRef(new Animated.Value(0)).current;
@@ -119,6 +129,71 @@ export default function DriverHome() {
     opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.28, 0] }),
   });
 
+  /* ---------------------- LOCATION SETUP ---------------------- */
+  // Reverse geocode: converts coordinates to human-readable address
+  const reverseGeocode = useCallback(async (lat: number, lon: number): Promise<string> => {
+    try {
+      const res = await Location.reverseGeocodeAsync({
+        latitude: lat,
+        longitude: lon,
+      });
+      if (res.length > 0) {
+        const p = res[0];
+        const parts = [p.name, p.street, p.subregion || p.city, p.region, p.country].filter(Boolean);
+        return parts.join(", ");
+      }
+    } catch {
+      // Ignore error
+    }
+    return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  }, []);
+
+  // Check and get location on mount
+  const checkAndGetLocation = useCallback(async () => {
+    setRequestingLoc(true);
+    try {
+      // Check current permission status
+      const current = await Location.getForegroundPermissionsAsync();
+      let status = current.status;
+
+      // Request if not granted
+      if (status !== "granted") {
+        const req = await Location.requestForegroundPermissionsAsync();
+        status = req.status;
+      }
+
+      setLocPerm(status === "granted" ? "granted" : "denied");
+
+      if (status === "granted") {
+        // Get current position
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+
+        setMyCoords({ lat, lng });
+
+        // Get human-readable address
+        const address = await reverseGeocode(lat, lng);
+        setLocationText(address);
+      } else {
+        setLocationText("Location permission denied");
+      }
+    } catch (err) {
+      console.error("[Location] Error:", err);
+      setLocationText("Unable to get location");
+    } finally {
+      setRequestingLoc(false);
+    }
+  }, [reverseGeocode]);
+
+  // Run on mount
+  useEffect(() => {
+    checkAndGetLocation();
+  }, [checkAndGetLocation]);
+
   /* ------------------------- SOS Press: pending check ------------------------- */
   const handleSOSPress = async () => {
     if (checkingSOS) return;
@@ -132,10 +207,10 @@ export default function DriverHome() {
         return;
       }
 
-      // Look for any latest 'waiting' or 'pending' emergency for this user
+      // Look for any latest 'waiting' or 'in_process' emergency for this user
       const { data, error } = await supabase
         .from("emergency")
-        .select("id")
+        .select("emergency_id")
         .eq("user_id", userId)
         .in("emergency_status", ["waiting", "in_process"])
         .order("created_at", { ascending: false })
@@ -206,28 +281,106 @@ export default function DriverHome() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Location */}
+        {/* Location Card with Expandable Dropdown */}
         <View className="px-6">
           <View
-            className="flex-row items-center rounded-2xl bg-white px-4 py-3 border border-slate-200 mt-3"
+            className="rounded-2xl bg-white border border-slate-200 mt-3 overflow-hidden"
             style={cardShadow as any}
           >
-            <View className="h-9 w-9 items-center justify-center rounded-full bg-[#F1F5F9] mr-3">
+            {/* Main Card - Clickable to expand */}
+            <Pressable
+              onPress={() => setLocationExpanded(!locationExpanded)}
+              className="flex-row items-center px-4 py-3 active:opacity-90"
+            >
+              <View className="h-9 w-9 items-center justify-center rounded-full bg-[#F1F5F9] mr-3">
+                <Ionicons
+                  name="navigate-outline"
+                  size={18}
+                  color={COLORS.brand}
+                />
+              </View>
+              <View className="flex-1">
+                <Text className="text-[12px] text-slate-500">
+                  Current location
+                </Text>
+                <Text
+                  className="text-[13px] font-semibold text-slate-900"
+                  numberOfLines={1}
+                >
+                  {requestingLoc ? "Fetching..." : locationText}
+                </Text>
+              </View>
+              
+              {/* Chevron indicator
               <Ionicons
-                name="navigate-outline"
+                name={locationExpanded ? "chevron-up" : "chevron-down"}
                 size={18}
-                color={COLORS.brand}
-              />
-            </View>
-            <View className="flex-1">
-              <Text className="text-[12px] text-slate-500">
-                Current location
-              </Text>
-              <Text className="text-[13px] font-semibold text-slate-900">
-                4th Mound Road, California
-              </Text>
-            </View>
+                color={COLORS.muted}
+                style={{ marginRight: 8 }}
+              /> */}
+              
+              {/* Refresh icon if permission granted */}
+              {locPerm === "granted" && (
+                <Pressable
+                  onPress={(e) => {
+                    e.stopPropagation(); // Prevent card toggle
+                    checkAndGetLocation();
+                  }}
+                  hitSlop={8}
+                  disabled={requestingLoc}
+                  className="ml-2"
+                >
+                  <Ionicons
+                    name="refresh-outline"
+                    size={18}
+                    color={COLORS.brand}
+                  />
+                </Pressable>
+              )}
+            </Pressable>
+
+            {/* Expandable Section - Shows full address */}
+            {locationExpanded && (
+              <View className="px-4 pb-4 pt-2 border-t border-slate-100">
+                <View className="flex-row items-start">
+                  <Ionicons
+                    name="location-outline"
+                    size={16}
+                    color={COLORS.brand}
+                    style={{ marginTop: 2, marginRight: 8 }}
+                  />
+                  <View className="flex-1">
+                    <Text className="text-[11px] text-slate-500 mb-1">
+                      Full Address:
+                    </Text>
+                    <Text className="text-[13px] text-slate-900 leading-5">
+                      {locationText}
+                    </Text>
+                    
+                    {/* Show coordinates if available */}
+                    {myCoords && (
+                      <Text className="text-[11px] text-slate-400 mt-2">
+                        Coordinates: {myCoords.lat.toFixed(6)}, {myCoords.lng.toFixed(6)}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              </View>
+            )}
           </View>
+
+          {/* Show settings button if permission denied */}
+          {locPerm === "denied" && (
+            <Pressable
+              onPress={() => Linking.openSettings()}
+              className="mt-2 flex-row items-center justify-center py-2 rounded-xl bg-blue-50"
+            >
+              <Ionicons name="settings-outline" size={14} color={COLORS.primary} />
+              <Text className="ml-1.5 text-[12px] font-medium text-blue-600">
+                Open Settings to Enable Location
+              </Text>
+            </Pressable>
+          )}
         </View>
 
         {/* Emergency card + SOS */}
@@ -286,7 +439,6 @@ export default function DriverHome() {
                     ]}
                   />
 
-                  {/* Replaced Link with controlled press to check pending first */}
                   <Pressable
                     disabled={checkingSOS}
                     onPress={handleSOSPress}
@@ -547,11 +699,8 @@ function PendingEmergencyModal({
     >
       <View className="flex-1 bg-black/40 items-center justify-center px-6">
         <View className="w-full max-w-md rounded-2xl p-6 bg-white border border-slate-200">
-          {/* Close (X) */}
-         
-
           <Text className="text-[18px] font-semibold text-[#0F2547] mb-2">
-            Pending Request! 
+            Pending Request!
           </Text>
           <Text className="text-[13px] text-slate-600 mb-5">
             You still have a pending emergency post. You can check its status or

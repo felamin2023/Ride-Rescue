@@ -4,20 +4,19 @@ import "react-native-get-random-values";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient } from "@supabase/supabase-js";
 
-const url = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-if (!url || !anon) {
-  throw new Error(
-    "[runtime not ready]: Missing Supabase configuration. Check your .env"
-  );
-}
+// ⬇️ TEMP hardcode (replace your env reads with these two lines)
+const url  = "https://ewrlmlsetyinyhjwgoko.supabase.co";
+const anon = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV3cmxtbHNldHlpbnloandnb2tvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUzOTk3OTgsImV4cCI6MjA3MDk3NTc5OH0.Xqt8WHv58IX-bGQt4bo887DUb0L-_4H20KLqH76DtJ8"; // from Settings → API → Client API key (anon)
+
+// (optional) sanity log
+console.log("[SB URL]", url);
+console.log("[SB KEY first 16]", (anon || "").slice(0, 16));
 
 export const supabase = createClient(url, anon, {
   auth: {
-    storage: AsyncStorage, // 👈 persist session across app restarts
+    storage: AsyncStorage,
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: false, // 👈 RN/Expo (no URL callbacks)
-    // flowType: "pkce",          // 👈 uncomment if you later add OAuth
+    detectSessionInUrl: false,
   },
 });

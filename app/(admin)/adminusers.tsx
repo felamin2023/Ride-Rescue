@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { supabase } from "../../utils/supabase"; // ⬅️ add this
 
 import AdminSideDrawer from "../../components/adminSidedrawer";
 import AdminTopHeader from "../../components/AdminTopHeader";
@@ -46,55 +47,16 @@ const cardShadow = Platform.select({
 
 /* ============================== TYPES ============================== */
 type UserStatus = "active" | "pending" | "suspended";
-type UserRole = "driver";
 type UserRow = {
-  id: string;
-  avatar_url?: string | null;
+  id: string;                // user_id (uuid)
+  avatar_url?: string | null; // photo_url
   full_name: string;
-  email: string; // masked for table
-  username?: string | null;
-  role: UserRole;
-  status: UserStatus;
-  joined_at: string; // ISO
-  last_active_at: string; // ISO
+  email: string;             // masked for table
+  role: "Driver";
+  status: UserStatus;        // we’ll mark as "active" (not in DB)
+  joined_at: string;         // from created_at
+  last_active_at: string;    // reuse created_at for now
 };
-
-/* ============================== SAMPLE ============================== */
-const SAMPLE: UserRow[] = [
-  {
-    id: "u1",
-    avatar_url: null,
-    full_name: "John Smith",
-    email: "j***@gmail.com",
-    username: "jonny77",
-    role: "driver",
-    status: "active",
-    joined_at: "2023-03-12T09:00:00Z",
-    last_active_at: new Date(Date.now() - 14 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "u3",
-    avatar_url: null,
-    full_name: "Daniel Warren",
-    email: "d*****@gmail.com",
-    username: "dwarren3",
-    role: "driver",
-    status: "suspended",
-    joined_at: "2024-01-08T09:00:00Z",
-    last_active_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "u2",
-    avatar_url: null,
-    full_name: "Olivia Bennett",
-    email: "o****@gmail.com",
-    username: "olly659",
-    role: "driver",
-    status: "pending",
-    joined_at: "2022-06-27T09:00:00Z",
-    last_active_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-];
 
 /* ============================== SHARED ============================== */
 const CELL_PX = 10;
@@ -163,12 +125,11 @@ function ActionBtn({
 
 /* ============================== COLUMN LAYOUT ============================== */
 const COLW = {
-  name: 180,
-  email: 220,
-  username: 120,
+  name: 200,
+  email: 250,
   status: 110,
   joined: 130,
-  actions: 240,
+  actions: 200,
 };
 
 /* ============================== BADGE BUTTON ============================== */
@@ -209,22 +170,14 @@ const LabeledInput = ({
   </View>
 );
 
-/* ============================== VIEW MODAL HELPERS (match shop modal) ============================== */
+/* ============================== VIEW MODAL HELPERS ============================== */
 const VIEW_MAX_W = 600;
 const VIEW_IMG = { w: 260, h: 200 };
 
-/** Prefer provided uri, else seed picsum by name (same pattern as shops page) */
+/** Prefer provided uri, else seed picsum by name */
 function getUserImage(name: string, uri?: string | null) {
   if (uri && String(uri).trim()) return uri;
   return `https://picsum.photos/seed/${encodeURIComponent(name)}/320/320`;
-}
-
-function HLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <Text style={{ fontSize: 13, color: "#475569", fontWeight: "700", letterSpacing: 0.2, marginBottom: 6 }}>
-      {children}
-    </Text>
-  );
 }
 function Divider() {
   return <View style={{ height: 1, backgroundColor: "#EEF2F6", marginVertical: 10 }} />;
@@ -260,7 +213,7 @@ const styles = StyleSheet.create({
 export default function AdminUsersPage() {
   const router = useRouter();
 
-  const [rows, setRows] = useState<UserRow[]>(SAMPLE);
+  const [rows, setRows] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   const [q, setQ] = useState("");
@@ -272,7 +225,6 @@ export default function AdminUsersPage() {
   const [openAdd, setOpenAdd] = useState(false);
   const [addFullName, setAddFullName] = useState("");
   const [addEmail, setAddEmail] = useState("");
-  const [addUsername, setAddUsername] = useState("");
 
   // Dialog state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -295,8 +247,29 @@ export default function AdminUsersPage() {
     const fetchUsers = async () => {
       setLoading(true);
       try {
-        // wire Supabase here later
-        setRows((prev) => prev);
+        const { data, error } = await supabase
+          .from("app_user")
+          .select("user_id, full_name, email, photo_url, role, created_at")
+          .eq("role", "Driver")
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        const mapped: UserRow[] = (data ?? []).map((r: any) => ({
+          id: r.user_id,
+          avatar_url: r.photo_url ?? null,
+          full_name: r.full_name,
+          email: maskEmail(r.email),
+          role: "Driver",
+          status: "active",                    // not in schema; display-only
+          joined_at: r.created_at,
+          last_active_at: r.created_at,
+        }));
+
+        setRows(mapped);
+      } catch (err: any) {
+        console.error("[adminusers] fetch error", err);
+        Alert.alert("Load failed", err?.message ?? "Unable to load users.");
       } finally {
         setLoading(false);
       }
@@ -311,7 +284,6 @@ export default function AdminUsersPage() {
       list = list.filter(
         (r) =>
           r.full_name.toLowerCase().includes(t) ||
-          (r.username ?? "").toLowerCase().includes(t) ||
           r.email.toLowerCase().includes(t)
       );
     }
@@ -396,8 +368,7 @@ export default function AdminUsersPage() {
       avatar_url: null,
       full_name: addFullName.trim(),
       email: maskEmail(addEmail.trim()),
-      username: addUsername.trim() || undefined,
-      role: "driver",
+      role: "Driver",
       status: "active",
       joined_at: new Date().toISOString(),
       last_active_at: new Date().toISOString(),
@@ -406,7 +377,6 @@ export default function AdminUsersPage() {
     setOpenAdd(false);
     setAddFullName("");
     setAddEmail("");
-    setAddUsername("");
     setSuccessMsg({ title: "Added", message: "New driver has been created." });
     setSuccessOpen(true);
   };
@@ -485,9 +455,9 @@ export default function AdminUsersPage() {
               <View className="flex-row items-center gap-2">
                 <Pressable
                   onPress={() => {
-                    const headers = ["Full Name", "Email (masked)", "Username", "Status", "Joined"];
+                    const headers = ["Full Name", "Email (masked)", "Status", "Joined"];
                     const lines = filtered.map((r) =>
-                      [r.full_name, r.email, r.username ?? "", r.status, r.joined_at]
+                      [r.full_name, r.email, r.status, r.joined_at]
                         .map((x) => `"${String(x).replace(/"/g, '""')}"`)
                         .join(",")
                     );
@@ -497,10 +467,10 @@ export default function AdminUsersPage() {
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement("a");
                       a.href = url;
-                      a.download = "users.csv";
+                      a.download = "drivers.csv";
                       a.click();
                       URL.revokeObjectURL(url);
-                      setSuccessMsg({ title: "Exported", message: "users.csv downloaded." });
+                      setSuccessMsg({ title: "Exported", message: "drivers.csv downloaded." });
                       setSuccessOpen(true);
                     } else {
                       Alert.alert("Export", "CSV export is available on web.");
@@ -525,7 +495,6 @@ export default function AdminUsersPage() {
               <View className="flex-row items-center justify-center px-2 pb-2">
                 <TableHeaderCell label="Full Name"   widthPx={COLW.name} />
                 <TableHeaderCell label="Email"       widthPx={COLW.email} />
-                <TableHeaderCell label="Username"    widthPx={COLW.username} />
                 <TableHeaderCell label="Status"      widthPx={COLW.status} />
                 <TableHeaderCell label="Joined Date" widthPx={COLW.joined} />
                 <TableHeaderCell label="Actions"     widthPx={COLW.actions} />
@@ -563,13 +532,6 @@ export default function AdminUsersPage() {
                       <View style={{ width: COLW.email, paddingHorizontal: CELL_PX, alignItems: "center", justifyContent: "center" }}>
                         <Text className="text-[13px]" style={{ color: COLORS.text, textAlign: "center", maxWidth: COLW.email - CELL_PX * 2 }} numberOfLines={1}>
                           {u.email}
-                        </Text>
-                      </View>
-
-                      {/* username */}
-                      <View style={{ width: COLW.username, paddingHorizontal: CELL_PX, alignItems: "center", justifyContent: "center" }}>
-                        <Text className="text-[13px]" style={{ color: COLORS.text, textAlign: "center", maxWidth: COLW.username - CELL_PX * 2 }} numberOfLines={1}>
-                          {u.username ?? "—"}
                         </Text>
                       </View>
 
@@ -615,7 +577,6 @@ export default function AdminUsersPage() {
             <View className="mt-4 gap-3">
               <LabeledInput label="Full name" value={addFullName} onChangeText={setAddFullName} />
               <LabeledInput label="Email" value={addEmail} onChangeText={setAddEmail} keyboardType="email-address" />
-              <LabeledInput label="Username (optional)" value={addUsername} onChangeText={setAddUsername} />
             </View>
 
             <View className="mt-6 flex-row items-center justify-end gap-2">
@@ -634,7 +595,7 @@ export default function AdminUsersPage() {
         </Pressable>
       </Modal>
 
-      {/* ===== View Summary Modal (shop-style card) ===== */}
+      {/* ===== View Summary Modal ===== */}
       <Modal visible={viewOpen} animationType="fade" transparent onRequestClose={() => setViewOpen(false)}>
         <View style={styles.backdrop}>
           <View className="w-full rounded-2xl bg-white" style={[{ maxWidth: VIEW_MAX_W }, cardShadow as any]}>
@@ -652,7 +613,6 @@ export default function AdminUsersPage() {
 
             {/* Content */}
             <ScrollView contentContainerStyle={{ padding: 14, rowGap: 12, maxHeight: 580 }}>
-              {/* Top row: big image + key info */}
               <View style={{ flexDirection: "row", columnGap: 14, rowGap: 12, alignItems: "flex-start", flexWrap: "wrap" as any }}>
                 <Image
                   source={{ uri: getUserImage(selectedUser?.full_name ?? "User", selectedUser?.avatar_url ?? undefined) }}
@@ -672,7 +632,6 @@ export default function AdminUsersPage() {
                   <View style={{ height: 10 }} />
                   <View style={{ rowGap: 8 }}>
                     <Field label="Email (masked)" value={selectedUser?.email} style={{ width: "100%", minWidth: 0 }} />
-                    <Field label="Username" value={selectedUser?.username ?? "—"} style={{ width: "100%", minWidth: 0 }} />
                     <Field label="Role" value={selectedUser?.role ?? "—"} style={{ width: "100%", minWidth: 0 }} />
                   </View>
                 </View>

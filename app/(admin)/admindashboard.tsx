@@ -1,15 +1,15 @@
+// app/(admin)/admindashboard.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, Pressable, ScrollView, Platform, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-
 import AdminSideDrawer from "../../components/adminSidedrawer";
 import AdminTopHeader from "../../components/AdminTopHeader";
 import { supabase } from "../../utils/supabase";
 
 /* =============================== THEME =============================== */
 const COLORS = {
-  bg: "#F4F6F8",
+  bg: "#F7F9FB",
   surface: "#FFFFFF",
   border: "#E5E9F0",
   text: "#0F172A",
@@ -18,13 +18,22 @@ const COLORS = {
   brand: "#0F2547",
   positiveBlue: "#2563EB",
   negativeBlue: "#93C5FD",
-  trackBlue: "#E8F0FE",
+  trackBlue: "#EEF2FF",
+
+  // status colors
+  wait: "#F59E0B",       // amber
+  process: "#3B82F6",    // blue
+  done: "#10B981",       // emerald
+  cancel: "#EF4444",     // red
+
+  // soft fills
+  waitSoft: "#FEF3C7",
+  processSoft: "#DBEAFE",
+  doneSoft: "#D1FAE5",
+  cancelSoft: "#FEE2E2",
 };
 const SIDEBAR_W = 240;
-
-/* how far to nudge the Total Users donut to the RIGHT on desktop */
-const NUDGE_PX = 240;
-
+const NUDGE_PX = 240; // nudge donut on desktop
 const PIE_COLORS = { morning: "#FDE68A", afternoon: "#93C5FD", evening: "#1E3A8A" };
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
 
@@ -104,14 +113,12 @@ function DonutChart({
     if (prefersReducedMotion) return setProgress(1);
     let raf: number;
     const start = performance.now();
-    a: {
-      const tick = (now: number) => {
-        const t = Math.min(1, (now - start) / sweepDuration);
-        setProgress(easeOutCubic(t));
-        if (t < 1) raf = requestAnimationFrame(tick);
-      };
-      raf = requestAnimationFrame(tick);
-    }
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / sweepDuration);
+      setProgress(easeOutCubic(t));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [prefersReducedMotion, sweepDuration, data]);
 
@@ -310,7 +317,7 @@ function ServiceDonut({
   );
 }
 
-/* ========================= DATA (demo; swap to Supabase) ========================= */
+/* ========================= DATA (demo for charts) ========================= */
 type RangeKey = "all" | "30d" | "7d";
 const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "all", label: "All time" },
@@ -319,7 +326,6 @@ const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
 ];
 
 function useDashboardData(range: RangeKey) {
-  // demo-derived values for charts (unchanged)
   const factor = range === "all" ? 1 : range === "30d" ? 0.35 : 0.18;
   const composition = { active: 0.61, inactive: 0.26, returning: 0.13 };
   const requestTime = [
@@ -331,14 +337,7 @@ function useDashboardData(range: RangeKey) {
   const trendNow = [8, 6, 10, 14, 12, 9, 16].map((n) => Math.round(n * (0.6 + factor)));
   const trendPrev = [6, 7, 8, 12, 9, 11, 10].map((n) => Math.round(n * (0.55 + factor)));
 
-  // live counts (default to 0 while loading)
-  const [totals, setTotals] = useState({
-    totalUsers: 0,
-    totalDrivers: 0,
-    totalShops: 0,
-    totalEmergencies: 0,
-  });
-
+  const [totals, setTotals] = useState({ totalUsers: 0, totalDrivers: 0, totalShops: 0 });
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -347,33 +346,194 @@ function useDashboardData(range: RangeKey) {
         console.warn("[dashboard] counts rpc error:", error.message);
         return;
       }
-
-      // supabase-js returns an array for set-returning funcs
       const row = Array.isArray(data) ? data[0] : data;
-
       if (!cancelled && row) {
         setTotals({
           totalUsers: Number(row.total_users ?? 0),
           totalDrivers: Number(row.total_drivers ?? 0),
           totalShops: Number(row.total_shops ?? 0),
-          totalEmergencies: Number(row.total_emergencies ?? 0),
         });
       }
     })();
     return () => { cancelled = true; };
-  }, [range]); // you can remove [range] if you don’t want to refetch on range change
+  }, [range]);
 
-  return {
-    totalUsers: totals.totalUsers,
-    composition,
-    totalDrivers: totals.totalDrivers,
-    totalShops: totals.totalShops,
-    totalEmergencies: totals.totalEmergencies,
-    requestTime,
-    trendLabels,
-    trendNow,
-    trendPrev,
-  };
+  return { totalUsers: totals.totalUsers, composition, totalDrivers: totals.totalDrivers, totalShops: totals.totalShops, requestTime, trendLabels, trendNow, trendPrev };
+}
+
+/* ======== Emergency counts (waiting | in_process | completed | canceled) ======== */
+function useEmergencyCounts() {
+  const [state, setState] = useState({ loading: true, total: 0, waiting: 0, in_process: 0, completed: 0, canceled: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const statuses = ["waiting", "in_process", "completed", "canceled"] as const;
+        const results = await Promise.all(
+          statuses.map((s) =>
+            supabase.from("emergency").select("*", { count: "exact", head: true }).eq("emergency_status", s)
+          )
+        );
+        const byStatus: Record<string, number> = {};
+        statuses.forEach((s, i) => {
+          const { error, count } = results[i];
+          if (error) console.warn(`[emergency] count error for ${s}:`, error.message);
+          byStatus[s] = Number(count ?? 0);
+        });
+        const total = statuses.reduce((acc, s) => acc + (byStatus[s] ?? 0), 0);
+        if (!cancelled) {
+          setState({
+            loading: false,
+            total,
+            waiting: byStatus.waiting ?? 0,
+            in_process: byStatus.in_process ?? 0,
+            completed: byStatus.completed ?? 0,
+            canceled: byStatus.canceled ?? 0,
+          });
+        }
+      } catch (e: any) {
+        console.warn("[emergency] unexpected error:", e?.message ?? e);
+        if (!cancelled) setState((v) => ({ ...v, loading: false }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return state;
+}
+
+/* ============================== SMALL UI HELPERS ============================== */
+function SectionCard({
+  title,
+  children,
+  right,
+  className,
+  subtle = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  right?: React.ReactNode;
+  className?: string;
+  subtle?: boolean;
+}) {
+  return (
+    <View
+      className={[
+        "rounded-2xl mb-4 border shadow-md",
+        subtle ? "bg-white/90 backdrop-blur-sm border-slate-200/60" : "bg-white border-slate-200",
+        className ?? "",
+      ].join(" ")}
+      style={{ overflow: "hidden" }}
+    >
+      <View className="px-3 py-2 bg-gradient-to-r from-white to-slate-50">
+        <View className="flex-row items-center justify-between">
+          <Text className="text-[14px] font-extrabold text-slate-900">{title}</Text>
+          {right}
+        </View>
+      </View>
+      <View className="h-[1px] bg-slate-200/60" />
+      <View className="p-2.5">{children}</View>
+    </View>
+  );
+}
+
+function FilterPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      className={[
+        "px-2.5 py-1.5 rounded-full ml-1.5 border transition-all",
+        active ? "bg-blue-600 border-transparent shadow-sm" : "bg-slate-100/80 border-slate-200 hover:bg-slate-100",
+      ].join(" ")}
+    >
+      <Text className={active ? "text-white text-[11px] font-bold" : "text-slate-900 text-[11px] font-bold"}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function LegendItemRow({ color, label, valueText }: { color: string; label: string; valueText?: string }) {
+  return (
+    <View className="w-full flex-row items-center">
+      <View className="flex-row items-center min-w-0 shrink">
+        <View style={{ backgroundColor: color }} className="w-[10px] h-[10px] rounded-full" />
+        <Text numberOfLines={1} className="ml-2 text-[12px] text-slate-700">{label}</Text>
+        {valueText ? <Text className="ml-2 text-[12px] font-bold text-slate-900">{valueText}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <View className="flex-row items-center">
+      <View style={{ backgroundColor: color }} className="w-[10px] h-[10px] rounded-full" />
+      <Text className="ml-2 text-[12px] text-slate-700">{label}</Text>
+    </View>
+  );
+}
+
+function InlineStat({ title, value, className, icon, tint }: { title: string; value: number; className?: string; icon?: keyof typeof Ionicons.glyphMap; tint?: string }) {
+  return (
+    <View className={["", className ?? ""].join(" ")}>
+      <View className="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <View className="p-3">
+          <View className="flex-row items-center justify-center">
+            {icon ? <Ionicons name={icon} size={16} color={tint ?? COLORS.primary} /> : null}
+            <Text className="ml-1 text-[12px] font-bold text-slate-600 text-center">{title}</Text>
+          </View>
+          <Text className="mt-1.5 text-[24px] font-extrabold text-slate-900 text-center">{value.toLocaleString()}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function StatChip({
+  color,
+  soft,
+  label,
+  count,
+  icon,
+  pct,
+}: {
+  color: string;
+  soft: string;
+  label: string;
+  count: number;
+  icon: keyof typeof Ionicons.glyphMap;
+  pct?: number; // 0..1
+}) {
+  const pctSafe = Math.max(0, Math.min(1, pct ?? 0));
+  return (
+    <View className="flex-1 min-w-[220px] px-1.5">
+      <View className="rounded-xl border shadow-sm" style={{ backgroundColor: soft, borderColor: `${color}33` }}>
+        <View className="px-3 pt-2 pb-2.5">
+          <View className="flex-row items-center justify-between">
+            <View className="flex-row items-center">
+              <View className="w-[22px] h-[22px] rounded-full items-center justify-center" style={{ backgroundColor: color }}>
+                <Ionicons name={icon} size={14} color="#fff" />
+              </View>
+              <Text className="ml-2 text-[12px] font-bold" style={{ color }}>{label}</Text>
+            </View>
+            <Text className="text-[18px] font-extrabold text-slate-900">{count.toLocaleString()}</Text>
+          </View>
+          {/* tiny progress bar */}
+          <View className="mt-2 h-[7px] rounded-full overflow-hidden" style={{ backgroundColor: "#ffffff66" }}>
+            <View className="h-full" style={{ width: `${pctSafe * 100}%`, backgroundColor: color, borderRadius: 999 }} />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function Shimmer({ height = 90, rounded = 16 }: { height?: number; rounded?: number }) {
+  // simple skeleton shimmer using animated gradient substitute
+  return (
+    <View
+      className="w-full bg-slate-200/60 overflow-hidden"
+      style={{ height, borderRadius: rounded }}
+    />
+  );
 }
 
 /* ================================ PAGE ================================ */
@@ -396,30 +556,30 @@ export default function AdminDashboard() {
   const isNarrow = viewportW <= 1366;
   const contentAreaW = Math.max(320, viewportW - SIDEBAR_W);
 
-  // Donut canvas geometry
-  const PIE_SIZE = 148;
-  const PIE_SAFE_PAD = Math.round(PIE_SIZE * (isNarrow ? 0.12 : 0.1));
-  const PIE_CANVAS_W = PIE_SIZE + PIE_SAFE_PAD;
-  const PIE_CANVAS_H = PIE_SIZE;
-  const PIE_CENTER_SHIFT = Math.round(PIE_SAFE_PAD * 0.4);
-  const PIE_CX = Math.round(PIE_CANVAS_W / 2 + PIE_CENTER_SHIFT);
-  const PIE_CY = Math.round(PIE_CANVAS_H / 2);
-
   const [range, setRange] = useState<RangeKey>("all");
   const data = useDashboardData(range);
   const RT_TOTAL = data.requestTime.reduce((s, d) => s + d.value, 0);
+
+  const em = useEmergencyCounts();
+  const total = em.total || 1; // for % calc
+
+  // compose donut for emergencies
+  const emDonut = [
+    { label: "Waiting", value: em.waiting, color: COLORS.wait },
+    { label: "In Process", value: em.in_process, color: COLORS.process },
+    { label: "Completed", value: em.completed, color: COLORS.done },
+    { label: "Canceled", value: em.canceled, color: COLORS.cancel },
+  ];
 
   return (
     <View className="flex-1 flex-row" style={{ backgroundColor: COLORS.bg }}>
       <AdminSideDrawer width={SIDEBAR_W} />
       <View style={{ width: contentAreaW }} className="flex-1">
         <AdminTopHeader />
-
-        {/* cap and center the content */}
         <ScrollView contentContainerStyle={{ padding: 12 }}>
           <View className="w-full max-w-[1280px] mx-auto">
 
-            {/* ===== Row A: Total Users WITH inline KPIs ===== */}
+            {/* ===== Row A: Total Users (clean + airy) ===== */}
             <View className="-mx-2">
               <View className="w-full px-2">
                 <SectionCard
@@ -433,18 +593,8 @@ export default function AdminDashboard() {
                   }
                 >
                   <View className="flex-row flex-wrap items-center -mx-2 justify-between">
-                    {/* Left cluster: donut + legend (left-aligned; slightly nudged right) */}
-                    <View
-                      className={
-                        isNarrow
-                          ? "px-2 w-full flex-row items-center justify-center mb-3"
-                          : "px-2 basis-[58%] flex-row items-center justify-start"
-                      }
-                    >
-                      <View
-                        className="w-[152px] h-[152px] items-center justify-center mr-2"
-                        style={{ marginLeft: isNarrow ? 0 : NUDGE_PX }}
-                      >
+                    <View className={isNarrow ? "px-2 w-full flex-row items-center justify-center mb-3" : "px-2 basis-[58%] flex-row items-center justify-start"}>
+                      <View className="w-[152px] h-[152px] items-center justify-center mr-2" style={{ marginLeft: isNarrow ? 0 : NUDGE_PX }}>
                         <DonutChart
                           data={[
                             { label: "Active", value: data.composition.active * 100, color: "#3B82F6" },
@@ -455,23 +605,70 @@ export default function AdminDashboard() {
                           centerOverride={data.totalUsers.toLocaleString()}
                         />
                       </View>
-                      {/* compact legend; no flex-1 so it stays tight */}
                       <View className="space-y-2 min-w-[160px]">
                         <LegendItemRow color="#3B82F6" label="Active" valueText={`${Math.round(data.composition.active * 100)}%`} />
                         <LegendItemRow color="#9CA3AF" label="Inactive" valueText={`${Math.round(data.composition.inactive * 100)}%`} />
                         <LegendItemRow color="#C7D2FE" label="Returning" valueText={`${Math.round(data.composition.returning * 100)}%`} />
                       </View>
                     </View>
-
-                    {/* Right: inline KPI cards */}
                     <View className={isNarrow ? "px-2 w-full" : "px-2 basis-[42%]"}>
                       <View className="flex-row flex-wrap -mx-1.5 justify-start">
-                        <InlineStat title="Total Drivers" value={data.totalDrivers} className="px-1.5 basis-1/3 min-w-[140px]" />
-                        <InlineStat title="Mechanics & Shops" value={data.totalShops} className="px-1.5 basis-1/3 min-w-[140px]" />
-                        <InlineStat title="Total Emergencies" value={data.totalEmergencies} className="px-1.5 basis-1/3 min-w-[140px]" />
+                        <InlineStat title="Total Drivers" value={data.totalDrivers} icon="car-outline" tint={COLORS.brand} className="px-1.5 basis-1/3 min-w-[160px]" />
+                        <InlineStat title="Mechanics & Shops" value={data.totalShops} icon="construct-outline" tint={COLORS.primary} className="px-1.5 basis-1/3 min-w-[160px]" />
                       </View>
                     </View>
                   </View>
+                </SectionCard>
+              </View>
+            </View>
+
+            {/* ===== Row A.2: Total Emergencies — elevated design ===== */}
+            <View className="-mx-2">
+              <View className="w-full px-2">
+                <SectionCard title="Total Emergencies" subtle>
+                  {/* Loading skeleton */}
+                  {em.loading ? (
+                    <View>
+                      <Shimmer height={160} />
+                      <View className="mt-3 flex-row -mx-1.5">
+                        <View className="flex-1 px-1.5"><Shimmer height={72} rounded={12} /></View>
+                        <View className="flex-1 px-1.5"><Shimmer height={72} rounded={12} /></View>
+                        <View className="flex-1 px-1.5"><Shimmer height={72} rounded={12} /></View>
+                        <View className="flex-1 px-1.5"><Shimmer height={72} rounded={12} /></View>
+                      </View>
+                    </View>
+                  ) : (
+                    <>
+                      <View className="flex-row flex-wrap items-center justify-between">
+                        {/* Left: donut + legend */}
+                        <View className="flex-row items-center">
+                          <View className="w-[156px] h-[156px] items-center justify-center mr-4">
+                            <DonutChart
+                              data={emDonut}
+                              size={152}
+                              centerOverride={em.total.toLocaleString()}
+                            />
+                          </View>
+                          <View className="space-y-2 min-w-[180px]">
+                            <LegendItemRow color={COLORS.wait} label="Waiting" valueText={`${Math.round((em.waiting / total) * 100)}%`} />
+                            <LegendItemRow color={COLORS.process} label="In Process" valueText={`${Math.round((em.in_process / total) * 100)}%`} />
+                            <LegendItemRow color={COLORS.done} label="Completed" valueText={`${Math.round((em.completed / total) * 100)}%`} />
+                            <LegendItemRow color={COLORS.cancel} label="Canceled" valueText={`${Math.round((em.canceled / total) * 100)}%`} />
+                          </View>
+                        </View>
+
+                        {/* Right: chips with tiny progress */}
+                        <View className="flex-1">
+                          <View className="flex-row flex-wrap -mx-1.5">
+                            <StatChip color={COLORS.wait} soft={COLORS.waitSoft} label="Waiting" count={em.waiting} icon="time-outline" pct={em.waiting / total} />
+                            <StatChip color={COLORS.process} soft={COLORS.processSoft} label="In Process" count={em.in_process} icon="cog-outline" pct={em.in_process / total} />
+                            <StatChip color={COLORS.done} soft={COLORS.doneSoft} label="Completed" count={em.completed} icon="checkmark-done-outline" pct={em.completed / total} />
+                            <StatChip color={COLORS.cancel} soft={COLORS.cancelSoft} label="Canceled" count={em.canceled} icon="close-outline" pct={em.canceled / total} />
+                          </View>
+                        </View>
+                      </View>
+                    </>
+                  )}
                 </SectionCard>
               </View>
             </View>
@@ -495,7 +692,6 @@ export default function AdminDashboard() {
             <View className="flex-row flex-wrap -mx-2">
               <View className={isNarrow ? "w-full px-2" : "flex-1 px-2"}>
                 <SectionCard title="Request Time">
-                  {/* centered pair: donut + compact legend */}
                   <View className="w-full flex-row items-center justify-center">
                     <View style={{ width: 148 + Math.round(148 * (isNarrow ? 0.12 : 0.1)), height: 148 }} className="items-center justify-center mr-4">
                       <DonutChart
@@ -514,10 +710,7 @@ export default function AdminDashboard() {
               </View>
 
               <View className={isNarrow ? "w-full px-2" : "flex-1 px-2"}>
-                <SectionCard
-                  title="Service Ratings"
-                  right={<Text className="text-[12px] text-slate-500">Based on recent feedback</Text>}
-                >
+                <SectionCard title="Service Ratings" right={<Text className="text-[12px] text-slate-500">Based on recent feedback</Text>}>
                   <View className="mt-0.5 flex-row flex-wrap items-center justify-evenly">
                     <ServiceDonut name="Vulcanize" positive={90} />
                     <ServiceDonut name="Repair Shop" positive={80} />
@@ -531,86 +724,9 @@ export default function AdminDashboard() {
                 </SectionCard>
               </View>
             </View>
+
           </View>
         </ScrollView>
-      </View>
-    </View>
-  );
-}
-
-/* ============================== UI HELPERS ============================== */
-function SectionCard({
-  title,
-  children,
-  right,
-  className,
-}: {
-  title: string;
-  children: React.ReactNode;
-  right?: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <View className={["bg-white border border-slate-200 rounded-2xl shadow-md mb-4", className ?? ""].join(" ")}>
-      <View className="flex-row items-center justify-between px-3 py-2">
-        <Text className="text-[14px] font-bold text-slate-900">{title}</Text>
-        {right}
-      </View>
-      <View className="h-[1px] bg-slate-200/60" />
-      <View className="p-2.5">{children}</View>
-    </View>
-  );
-}
-
-function FilterPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      className={[
-        "px-2.5 py-1.5 rounded-full ml-1.5 border",
-        active ? "bg-blue-600 border-transparent" : "bg-slate-100 border-slate-200",
-      ].join(" ")}
-    >
-      <Text className={active ? "text-white text-[11px] font-bold" : "text-slate-900 text-[11px] font-bold"}>{label}</Text>
-    </Pressable>
-  );
-}
-
-/** Compact legend: label and value sit close together (no ml-auto). */
-function LegendItemRow({ color, label, valueText }: { color: string; label: string; valueText?: string }) {
-  return (
-    <View className="w-full flex-row items-center">
-      <View className="flex-row items-center min-w-0 shrink">
-        <View style={{ backgroundColor: color }} className="w-[10px] h-[10px] rounded-full" />
-        <Text numberOfLines={1} className="ml-2 text-[12px] text-slate-700">{label}</Text>
-        {valueText ? (
-          <Text className="ml-2 text-[12px] font-bold text-slate-900">{valueText}</Text>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
-function LegendDot({ color, label }: { color: string; label: string }) {
-  return (
-    <View className="flex-row items-center">
-      <View style={{ backgroundColor: color }} className="w-[10px] h-[10px] rounded-full" />
-      <Text className="ml-2 text-[12px] text-slate-700">{label}</Text>
-    </View>
-  );
-}
-
-/** Lightweight stat card meant to live INSIDE another card. */
-function InlineStat({ title, value, className }: { title: string; value: number; className?: string }) {
-  return (
-    <View className={["", className ?? ""].join(" ")}>
-      <View className="bg-white border border-slate-200 rounded-xl shadow-sm">
-        <View className="p-3 items-center">
-          <Text className="text-[12px] font-bold text-slate-600 text-center">{title}</Text>
-          <Text className="mt-1.5 text-[24px] font-extrabold text-slate-900 text-center">
-            {value.toLocaleString()}
-          </Text>
-        </View>
       </View>
     </View>
   );

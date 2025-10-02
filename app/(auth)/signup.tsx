@@ -898,7 +898,11 @@ export default function Signup() {
         const lng = coords?.lng ?? null;
         const newPlacePayload: any = {
           name: null,
-          category: shopType ? (shopType.includes("Vulcanizing") ? "vulcanizing" : "repair_shop") : null,
+          category: shopType
+            ? shopType.includes("Vulcanizing")
+              ? "vulcanizing"
+              : "repair_shop"
+            : null,
           address: shopAddress || null,
           plus_code: null,
           latitude: lat,
@@ -918,7 +922,7 @@ export default function Signup() {
         if (!placeIdToUse) throw new Error("Failed to obtain new place_id.");
       }
 
-      // 4) Upsert shop_details INCLUDING place_id now
+      // 4) Upsert shop_details INCLUDING place_id now (and set is_verified=false)
       const { data: upsertShop, error: upsertShopErr } = await supabase
         .from("shop_details")
         .upsert(
@@ -930,8 +934,8 @@ export default function Signup() {
               time_open: openTime,
               time_close: closeTime,
               days: JSON.stringify(days),
-              // ✅ write the new column here (assumed name: place_id)
               place_id: placeIdToUse,
+              is_verified: false, // <-- important: pending admin approval
             },
           ],
           { onConflict: "user_id" }
@@ -951,7 +955,14 @@ export default function Signup() {
         if (updPlaceErr) throw updPlaceErr;
       }
 
-      router.replace("/shop/mechanicLandingpage");
+      // 6) Do NOT auto-login. Sign out and return to Login.
+      await supabase.auth.signOut().catch(() => {});
+      Alert.alert(
+        "Submitted!",
+        "Your shop owner account was created and is pending admin verification. You can log in once approved."
+      );
+      router.replace("/login");
+      return;
     } catch (err: any) {
       if (
         err.message?.includes("Network request failed") ||
@@ -1210,7 +1221,7 @@ export default function Signup() {
                               );
                               return;
                             }
-                            // ✅ Wait for session to be set before closing the modal / enabling form
+                            // ✅ Wait for session to be set
                             const session = await waitForSession();
                             if (!session) {
                               setDriverOtpError(

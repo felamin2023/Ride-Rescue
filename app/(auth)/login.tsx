@@ -16,6 +16,13 @@ import { supabase } from "../../utils/supabase";
 
 type LoginErrors = { email?: string; pw?: string };
 
+function isTruthyTrue(v: any) {
+  if (v === true) return true;
+  if (typeof v === "string") return v.trim().toLowerCase() === "true";
+  if (typeof v === "number") return v === 1;
+  return false;
+}
+
 export default function Login() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -41,7 +48,6 @@ export default function Login() {
     if (r.includes("driver")) return "/driver/driverLandingpage";
     if (r.includes("shop")) return "/shop/mechanicLandingpage";
     if (r.includes("admin")) return "/admindashboard/admin";
-    // Fallback (adjust if you have a general home)
     return "/driver/driverLandingpage";
   }
 
@@ -63,7 +69,7 @@ export default function Login() {
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
-      // 1) Sign in with email+password
+      // 1) Sign in
       const { data: signInData, error: signInErr } =
         await supabase.auth.signInWithPassword({
           email: normalizedEmail,
@@ -71,11 +77,7 @@ export default function Login() {
         });
 
       if (signInErr) {
-        // Common Supabase error: "Invalid login credentials"
-        setErrors({
-          email: undefined,
-          pw: "Invalid email or password.",
-        });
+        setErrors({ pw: "Invalid email or password." });
         return;
       }
 
@@ -85,7 +87,7 @@ export default function Login() {
         return;
       }
 
-      // 2) Fetch role from app_user
+      // 2) Role
       const { data: profile, error: profErr } = await supabase
         .from("app_user")
         .select("role")
@@ -93,17 +95,44 @@ export default function Login() {
         .maybeSingle();
 
       if (profErr) {
-        // RLS or network error
-        Alert.alert(
-          "Login error",
-          profErr.message || "Could not load your profile."
-        );
+        Alert.alert("Login error", profErr.message || "Could not load profile.");
         return;
       }
 
       const role = profile?.role ?? null;
-      const dest = landingPathFor(role);
-      router.replace(dest);
+
+      // 3) Gate: Shop owner must be verified
+      const isShopOwner = (role || "").trim().toLowerCase() === "shop owner";
+      if (isShopOwner) {
+        const { data: shop, error: shopErr } = await supabase
+          .from("shop_details")
+          .select("is_verified")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (shopErr) {
+          await supabase.auth.signOut();
+          Alert.alert(
+            "Verification check failed",
+            shopErr.message ||
+              "We couldn't confirm your shop verification. Please try again."
+          );
+          return;
+        }
+
+        const verified = isTruthyTrue(shop?.is_verified);
+        if (!verified) {
+          await supabase.auth.signOut();
+          Alert.alert(
+            "Account pending verification",
+            "Your shop owner account was created, but you can’t log in until an admin verifies your shop details."
+          );
+          return;
+        }
+      }
+
+      // 4) Proceed
+      router.replace(landingPathFor(role));
     } catch (err: any) {
       Alert.alert("Login error", err?.message ?? "Something went wrong.");
     } finally {
@@ -122,7 +151,6 @@ export default function Login() {
     }
     try {
       setLoading(true);
-      // If you have a custom deep link, add { redirectTo: "<your-app-url-scheme://callback>" }
       const { error } = await supabase.auth.resetPasswordForEmail(
         normalizedEmail
       );
@@ -130,10 +158,7 @@ export default function Login() {
         Alert.alert("Reset failed", error.message);
         return;
       }
-      Alert.alert(
-        "Check your email",
-        "We sent a password reset link to your inbox."
-      );
+      Alert.alert("Check your email", "We sent a password reset link.");
     } catch (err: any) {
       Alert.alert("Reset failed", err?.message ?? "Something went wrong.");
     } finally {
@@ -151,9 +176,7 @@ export default function Login() {
             resizeMode="contain"
             className="h-40 w-40 mb-2"
           />
-          <Text className="text-2xl font-semibold text-[#0F2547]">
-            Welcome back
-          </Text>
+        <Text className="text-2xl font-semibold text-[#0F2547]">Welcome back</Text>
           <Text className="text-sm text-gray-600 mt-1">
             Enter your credentials to access your account
           </Text>
@@ -162,17 +185,14 @@ export default function Login() {
         {/* Card */}
         <View className="w-full self-center rounded-2xl bg-white p-5 shadow-md">
           {/* Email */}
-          <Text className="mb-2 text-[13px] font-medium text-[#0F2547]">
-            Email
-          </Text>
+          <Text className="mb-2 text-[13px] font-medium text-[#0F2547]">Email</Text>
           <View className="flex-row items-center rounded-xl border border-[#21499F]/40 bg-white px-3 py-2.5 mb-1">
             <Ionicons name="mail-outline" size={20} color="#21499F" />
             <TextInput
               value={email}
               onChangeText={(t) => {
                 setEmail(t);
-                if (errors.email)
-                  setErrors((e) => ({ ...e, email: undefined }));
+                if (errors.email) setErrors((e) => ({ ...e, email: undefined }));
               }}
               placeholder="name@example.com"
               placeholderTextColor="#8A8A8A"
@@ -189,9 +209,7 @@ export default function Login() {
           ) : null}
 
           {/* Password */}
-          <Text className="mb-2 text-[13px] font-medium text-[#0F2547]">
-            Password
-          </Text>
+          <Text className="mb-2 text-[13px] font-medium text-[#0F2547]">Password</Text>
           <View className="flex-row items-center rounded-xl border border-[#21499F]/40 bg-white px-3 py-2.5">
             <Ionicons name="lock-closed-outline" size={20} color="#21499F" />
             <TextInput
@@ -226,10 +244,7 @@ export default function Login() {
 
           {/* Forgot */}
           <View className="mt-2 mb-4">
-            <Text
-              className="text-right text-xs text-[#21499F]"
-              onPress={handleForgotPassword}
-            >
+            <Text className="text-right text-xs text-[#21499F]" onPress={handleForgotPassword}>
               Forgot password?
             </Text>
           </View>
@@ -244,53 +259,22 @@ export default function Login() {
               canLogin ? "bg-[#2563EB]" : "bg-[#93C5FD]"
             }`}
           >
-            <Text className="mr-2 text-base font-semibold text-white">
-              Login
-            </Text>
+            <Text className="mr-2 text-base font-semibold text-white">Login</Text>
             <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
           </Pressable>
 
-          {/* Divider */}
-          {/* <View className="my-5 flex-row items-center">
-            <View className="h-px flex-1 bg-gray-300" />
-            <Text className="mx-3 text-[12px] tracking-widest text-gray-500">
-              OR CONTINUE WITH
-            </Text>
-            <View className="h-px flex-1 bg-gray-300" />
-          </View> */}
           {/* Bottom link */}
           <View className="mt-4 items-center">
             <Text className="text-sm text-gray-700">
               Don’t have an account{" "}
-              <Text
-                className="text-[#2563EB]"
-                onPress={() => router.push("/signup")}
-              >
+              <Text className="text-[#2563EB]" onPress={() => router.push("/signup")}>
                 Sign up
               </Text>
             </Text>
           </View>
-          {/* Google (disabled for now) */}
-          {/* <Pressable
-            accessibilityRole="button"
-            onPress={() =>
-              Alert.alert(
-                "Coming soon",
-                "Google sign-in is temporarily disabled. Please use email and password."
-              )
-            }
-            android_ripple={{ color: "rgba(0,0,0,0.05)" }}
-            className="mb-2 flex-row items-center justify-center rounded-2xl border border-[#4285F4] bg-white py-3 opacity-60"
-          >
-            <Ionicons name="logo-google" size={18} color="#4285F4" />
-            <Text className="ml-2 text-base font-semibold text-[#4285F4]">
-              Sign in with Google
-            </Text>
-          </Pressable> */}
         </View>
       </View>
 
-      {/* Loading overlay */}
       <LoadingScreen visible={loading} message="Logging in please wait.." />
     </View>
   );

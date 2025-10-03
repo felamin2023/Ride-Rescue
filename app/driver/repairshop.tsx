@@ -1,11 +1,10 @@
 // app/(driver)/repairshop.tsx
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   TextInput,
   FlatList,
-  TouchableOpacity,
   Pressable,
   Image as RNImage,
   Linking,
@@ -13,12 +12,14 @@ import {
   Platform,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import * as Location from "expo-location";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
+import { supabase } from "../../utils/supabase";
 
-/* ------------------------------ Design tokens (identical) ------------------------------ */
+/* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
   bg: "#F4F6F8",
   surface: "#FFFFFF",
@@ -28,201 +29,104 @@ const COLORS = {
   muted: "#94A3B8",
   primary: "#2563EB",
   primaryDark: "#1D4ED8",
+  success: "#16A34A",
 };
 
 const cardShadow = Platform.select({
-  ios: {
-    shadowColor: "#000",
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-  },
+  ios: { shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
   android: { elevation: 3 },
 });
-
 const panelShadow = Platform.select({
-  ios: {
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-  },
+  ios: { shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } },
   android: { elevation: 2 },
 });
-
 const buttonShadow = Platform.select({
-  ios: {
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-  },
+  ios: { shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
   android: { elevation: 1 },
 });
 
-/* ----------------------------- Types & Mock Data ---------------------------- */
+/* ---------------------------------- Types ---------------------------------- */
+type PlaceRow = {
+  place_id: string;
+  name: string | null;
+  category: "repair_shop" | "vulcanizing" | "gas_station" | (string & {});
+  address: string | null;
+  plus_code: string | null;
+  latitude: string | number | null;
+  longitude: string | number | null;
+  maps_link: string | null;
+};
+
 type Shop = {
   id: string;
   name: string;
-  category: "repair" | "vulcanize" | "gas" | "hospital" | "police" | "fire" | "mdrrmo";
+  category: "repair_shop";
   address1: string;
-  address2?: string;
   plusCode?: string;
   avatar?: string;
   rating?: number;
   lat?: number;
   lng?: number;
   distanceKm?: number;
+  maps_link?: string;
 };
 
-const MOCK: Shop[] = [
-  {
-    id: "r1",
-    name: "Cebu WrenchWorks",
-    category: "repair",
-    address1: "P. Del Rosario St, Cebu City",
-    rating: 4.7,
-    lat: 10.2966,
-    lng: 123.896,
-    avatar: "https://i.pravatar.cc/100?img=14",
-    distanceKm: 0.6,
-  },
-  {
-    id: "r2",
-    name: "RoadAid Service Center",
-    category: "repair",
-    address1: "Natalio B. Bacalso Hwy, Argao, Cebu",
-    rating: 4.3,
-    lat: 9.8779,
-    lng: 123.5961,
-    avatar: "https://i.pravatar.cc/100?img=31",
-    distanceKm: 1.1,
-  },
-  {
-    id: "r3",
-    name: "AutoFix Argao",
-    category: "repair",
-    address1: "San Miguel St, Argao, Cebu",
-    rating: 4.8,
-    lat: 9.8812,
-    lng: 123.6008,
-    avatar: "https://i.pravatar.cc/100?img=27",
-    distanceKm: 2.0,
-  },
-];
-
-/* --------------------------------- Small UI (identical) -------------------------------- */
+/* --------------------------------- Small UI -------------------------------- */
 const FILTERS: FilterItem[] = [
-  { key: "vulcanize", icon: "trail-sign-outline",  label: "Vulcanize" },
-  { key: "repair",    icon: "construct-outline",   label: "Repair" },
-  { key: "gas",       icon: "flash-outline",       label: "Gas" },
-  { key: "hospital",  icon: "medical-outline",     label: "Hospital" },
-  { key: "police",    icon: "shield-outline",      label: "Police" },
-  { key: "fire",      icon: "flame-outline",       label: "Fire Station" },
-  { key: "mdrrmo",    icon: "megaphone-outline",   label: "MDRRMO" },
+  { key: "repair_shop", icon: "hammer-outline", label: "Repair" },
 ];
 
 function Stars({ rating = 0 }: { rating?: number }) {
-  const full = Math.floor(rating);
-  const half = rating - full >= 0.5;
+  const r = Math.max(0, Math.min(5, rating));
+  const full = Math.floor(r);
+  const half = r - full >= 0.5;
   return (
     <View className="flex-row items-center">
       {Array.from({ length: 5 }).map((_, i) => {
         const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
-        return (
-          <Ionicons
-            key={i}
-            name={name as any}
-            size={14}
-            color={"#F59E0B"}
-            style={{ marginRight: i === 4 ? 0 : 2 }}
-            accessibilityLabel={i < full ? "full star" : i === full && half ? "half star" : "empty star"}
-            accessible
-          />
-        );
+        return <Ionicons key={i} name={name as any} size={14} color={"#F59E0B"} style={{ marginRight: i === 4 ? 0 : 2 }} />;
       })}
     </View>
   );
 }
 
 function PrimaryButton({
-  label,
-  onPress,
-  variant = "primary",
-  icon,
-}: {
-  label: string;
-  onPress: () => void;
-  variant?: "primary" | "secondary";
-  icon?: any;
-}) {
+  label, onPress, variant = "primary", icon,
+}: { label: string; onPress: () => void; variant?: "primary" | "secondary"; icon?: keyof typeof Ionicons.glyphMap; }) {
   const isPrimary = variant === "primary";
   return (
-    <TouchableOpacity
+    <Pressable
       onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${isPrimary ? "" : "border"}`}
+      android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
       style={[
-        isPrimary
-          ? { backgroundColor: COLORS.primary }
-          : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
+        { flexDirection: "row", alignItems: "center", justifyContent: "center", borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+        isPrimary ? { backgroundColor: COLORS.primary } : { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: COLORS.border },
         buttonShadow,
       ]}
-      {...(Platform.OS === "android"
-        ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } }
-        : {})}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      {icon ? (
-        <Ionicons
-          name={icon}
-          size={16}
-          color={isPrimary ? "#FFFFFF" : COLORS.text}
-          style={{ marginRight: 6 }}
-        />
-      ) : null}
+      {icon ? <Ionicons name={icon} size={16} color={isPrimary ? "#FFFFFF" : COLORS.text} style={{ marginRight: 6 }} /> : null}
       <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>{label}</Text>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
-/* ----------------------- Bottom Sheet (identical) ---------------------- */
+/* ----------------------- Bottom Sheet ---------------------- */
 function QuickActions({
-  visible,
-  onClose,
-  shop,
-  onOpenMaps,
-  onMessage,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  shop?: Shop | null;
-  onOpenMaps: (s: Shop) => void;
-  onMessage: (s: Shop) => void;
-}) {
+  visible, onClose, shop, onOpenMaps, onMessage,
+}: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   const insets = useSafeAreaInsets();
   if (!shop) return null;
-
   return (
     <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
         <View
           style={[
-            {
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              backgroundColor: "#FFFFFF",
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
-              padding: 16,
-              paddingBottom: 16 + insets.bottom,
-              borderTopWidth: 1,
-              borderColor: COLORS.border,
-            },
+            { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "#FFFFFF",
+              borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 16 + insets.bottom,
+              borderTopWidth: 1, borderColor: COLORS.border, },
             panelShadow,
           ]}
         >
@@ -232,21 +136,12 @@ function QuickActions({
 
           <View className="flex-row items-center gap-3 pb-3">
             <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-              {shop.avatar ? (
-                <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
-              ) : (
-                <View className="h-full w-full items-center justify-center">
-                  <Ionicons name="storefront-outline" size={20} color="#475569" />
-                </View>
-              )}
+              {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} /> :
+                <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={20} color="#475569" /></View>}
             </View>
             <View className="flex-1">
-              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
-                {shop.name}
-              </Text>
-              <Text className="text-[12px] text-slate-500" numberOfLines={1}>
-                {shop.address1}
-              </Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{shop.name}</Text>
+              <Text className="text-[12px] text-slate-500" numberOfLines={1}>{shop.address1}</Text>
             </View>
             <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close quick actions">
               <Ionicons name="close" size={20} color={COLORS.text} />
@@ -256,32 +151,13 @@ function QuickActions({
           <View className="h-[1px] bg-slate-200" />
 
           <View className="mt-3 gap-3">
-            <PrimaryButton
-              label="Location"
-              icon="navigate-outline"
-              onPress={() => {
-                onOpenMaps(shop!);
-                onClose();
-              }}
-            />
-            <PrimaryButton
-              label="Message Shop"
-              variant="secondary"
-              icon="chatbubble-ellipses-outline"
-              onPress={() => {
-                onMessage(shop!);
-                onClose();
-              }}
-            />
+            <PrimaryButton label="Location" icon="navigate-outline" onPress={() => { onOpenMaps(shop); onClose(); }} />
+            <PrimaryButton label="Message Shop" variant="secondary" icon="chatbubble-ellipses-outline" onPress={() => { onMessage(shop); onClose(); }} />
             <PrimaryButton
               label={shop.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
-              onPress={() => {
-                const text = shop.plusCode || shop.address1 || shop.name;
-                Clipboard.setStringAsync(text);
-                onClose();
-              }}
+              onPress={() => { Clipboard.setStringAsync(shop.plusCode || shop.address1 || shop.name); onClose(); }}
             />
           </View>
         </View>
@@ -292,43 +168,25 @@ function QuickActions({
   );
 }
 
-/* ------------------------------- Details Modal (identical) ------------------------------ */
+/* ------------------------------- Details Modal ------------------------------ */
 function DetailsModal({
-  visible,
-  shop,
-  onClose,
-  onOpenMaps,
-  onMessage,
-}: {
-  visible: boolean;
-  shop: Shop | null;
-  onClose: () => void;
-  onOpenMaps: (s: Shop) => void;
-  onMessage: (s: Shop) => void;
-}) {
+  visible, shop, onClose, onOpenMaps, onMessage,
+}: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   if (!shop) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
-            {/* Header */}
             <View className="flex-row items-start gap-3">
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-                {shop.avatar ? (
-                  <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
-                ) : (
-                  <View className="h-full w-full items-center justify-center">
-                    <Ionicons name="storefront-outline" size={22} color="#475569" />
-                  </View>
-                )}
+                {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} /> :
+                  <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={22} color="#475569" /></View>}
               </View>
 
               <View className="flex-1">
                 <View className="flex-row items-start justify-between">
-                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>
-                    {shop.name}
-                  </Text>
+                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>{shop.name}</Text>
                   <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
                     <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{shop.category}</Text>
                   </View>
@@ -336,36 +194,22 @@ function DetailsModal({
               </View>
             </View>
 
-            {/* Address FIRST */}
             <View className="mt-3 gap-1">
               <Text className="text-[13px] text-slate-700">{shop.address1}</Text>
-              {shop.address2 ? <Text className="text-[12px] text-slate-500">{shop.address2}</Text> : null}
             </View>
 
-            {/* Divider */}
             <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 12, marginHorizontal: 8 }} />
 
-            {/* Ratings / distance */}
             <View className="mt-2 flex-row items-center gap-2">
               <Stars rating={shop.rating ?? 0} />
               <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
-              {typeof shop.distanceKm === "number" && (
-                <>
-                  <Text className="text-slate-300">•</Text>
-                  <Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text>
-                </>
-              )}
+              {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text></>)}
             </View>
 
-            {/* Actions */}
             <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1">
-                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
-              </View>
+              <View className="flex-1"><PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} /></View>
               <View style={{ width: 10 }} />
-              <View className="flex-1">
-                <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
-              </View>
+              <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} /></View>
             </View>
           </View>
         </Pressable>
@@ -374,18 +218,21 @@ function DetailsModal({
   );
 }
 
-/* --------------------------------- Card (identical sizes) ---------------------------------- */
+/* ------------------------------ Distance utils ------------------------------ */
+const toRad = (deg: number) => (deg * Math.PI) / 180;
+function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const R = 6371;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s1 = Math.sin(dLat / 2) ** 2;
+  const s2 = Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s1 + s2));
+}
+
+/* --------------------------------- Card ---------------------------------- */
 function ShopCard({
-  shop,
-  onLocation,
-  onMessage,
-  onPressCard,
-}: {
-  shop: Shop;
-  onLocation: (s: Shop) => void;
-  onMessage: (s: Shop) => void;
-  onPressCard: (s: Shop) => void;
-}) {
+  shop, onLocation, onMessage, onPressCard, isNearest = false,
+}: { shop: Shop; onLocation: (s: Shop) => void; onMessage: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
   return (
     <Pressable
       onPress={() => onPressCard(shop)}
@@ -394,144 +241,188 @@ function ShopCard({
       accessibilityRole="button"
       accessibilityLabel={`Open actions for ${shop.name}`}
     >
-      {/* Header row with avatar + title/badge */}
       <View className="flex-row items-start gap-3">
-        {/* Circular image — 56x56 exactly */}
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-          {shop.avatar ? (
-            <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-          ) : (
-            <View className="h-full w-full items-center justify-center">
-              <Ionicons name="storefront-outline" size={22} color="#475569" />
-            </View>
-          )}
+          {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> :
+            <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={22} color="#475569" /></View>}
         </View>
 
         <View className="flex-1">
-          {/* Title row: 16px, not bold; badge self-start; tiny badge text */}
           <View className="flex-row items-start justify-between">
-            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>
-              {shop.name}
-            </Text>
-            <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
-              <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{shop.category}</Text>
+            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>{shop.name}</Text>
+            <View className="ml-3 flex-row items-center gap-1 self-start">
+              {isNearest && (
+                <View className="rounded-full bg-emerald-50 px-2 py-[2px]" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
+                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>NEAREST</Text>
+                </View>
+              )}
+              <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
+                <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{shop.category}</Text>
+              </View>
             </View>
           </View>
         </View>
       </View>
 
-      {/* Divider under header — marginTop:8, marginHorizontal:8 */}
       <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
 
-      {/* Body aligned with text column — paddingLeft:68 */}
       <View style={{ paddingTop: 8, paddingLeft: 68 }}>
-        {/* Address first (13px + optional 12px line) */}
-        <Text className="text-[13px] text-slate-700" numberOfLines={2}>
-          {shop.address1}
-        </Text>
-        {shop.address2 ? (
-          <Text className="text-[12px] text-slate-500" numberOfLines={1}>
-            {shop.address2}
-          </Text>
-        ) : null}
+        <Text className="text-[13px] text-slate-700" numberOfLines={2}>{shop.address1}</Text>
 
-        {/* Ratings / distance — 12px */}
         <View className="mt-2 flex-row items-center gap-2">
           <Stars rating={shop.rating ?? 0} />
           <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
-          {typeof shop.distanceKm === "number" && (
-            <>
-              <Text className="text-slate-300">•</Text>
-              <Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text>
-            </>
-          )}
+          {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text></>)}
         </View>
 
-        {/* Actions — Message (secondary) left, Location (primary) right */}
         <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1">
-            <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
-          </View>
+          <View className="flex-1"><PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} /></View>
           <View style={{ width: 12 }} />
-          <View className="flex-1">
-            <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
-          </View>
+          <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} /></View>
         </View>
       </View>
     </Pressable>
   );
 }
 
-/* --------------------------------- Screen (identical header/search) --------------------------------- */
+/* --------------------------------- Screen --------------------------------- */
 export default function RepairShopScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<string[]>(["repair"]);
+  const [filters, setFilters] = useState<string[]>(["repair_shop"]);
+
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [nearest, setNearest] = useState<Shop | null>(null);
+  const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
+
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
 
-  // Inline header search toggle (same)
   const [searchOpen, setSearchOpen] = useState(false);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
-  const data = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return MOCK.filter((s) => {
-      const byFilter = filters.length === 0 || filters.includes(s.category);
-      const byText =
-        q.length === 0 ||
-        s.name.toLowerCase().includes(q) ||
-        s.address1.toLowerCase().includes(q) ||
-        (s.address2 ?? "").toLowerCase().includes(q) ||
-        (s.plusCode ?? "").toLowerCase().includes(q);
-      return byFilter && byText;
-    }).sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
-  }, [filters, query]);
-
+  // open maps (prefer maps_link if present)
   const openMaps = (s: Shop) => {
+    if (s.maps_link) {
+      Linking.openURL(s.maps_link).catch(() => {});
+      return;
+    }
     if (s.lat && s.lng) {
-      const url = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
-      Linking.openURL(url).catch(() => {});
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
     } else if (s.address1) {
-      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`;
-      Linking.openURL(url).catch(() => {});
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
     }
   };
 
-  const goChat = (s: Shop) => {
-    // router.push(`/chat/${s.id}`)
-  };
+  const goChat = (_s: Shop) => { /* router.push(`/chat/${s.id}`) */ };
 
-  const openActions = (s: Shop) => {
-    setSelectedShop(s);
-    setSheetOpen(true);
-  };
+  const openActions = (s: Shop) => { setSelectedShop(s); setSheetOpen(true); };
   const closeActions = () => setSheetOpen(false);
-  const openDetails = (s: Shop) => {
-    setSelectedShop(s);
-    setDetailsOpen(true);
-  };
+  const openDetails = (s: Shop) => { setSelectedShop(s); setDetailsOpen(true); };
   const closeDetails = () => setDetailsOpen(false);
+
+  // fetch repair shops
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("places")
+        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link")
+        .eq("category", "repair_shop")
+        .order("name", { ascending: true });
+
+      if (error) {
+        console.warn("places fetch error:", error.message);
+        if (!cancelled) setShops([]);
+        return;
+      }
+
+      const mapped: Shop[] = (data ?? []).map((p: PlaceRow) => {
+        const lat = p.latitude != null ? Number(p.latitude) : undefined;
+        const lng = p.longitude != null ? Number(p.longitude) : undefined;
+        return {
+          id: p.place_id,
+          name: p.name ?? "Unnamed Repair Shop",
+          category: "repair_shop",
+          address1: p.address ?? "",
+          plusCode: p.plus_code ?? undefined,
+          rating: 0,
+          lat: Number.isFinite(lat) ? (lat as number) : undefined,
+          lng: Number.isFinite(lng) ? (lng as number) : undefined,
+          maps_link: p.maps_link ?? undefined,
+        };
+      });
+
+      if (!cancelled) setShops(mapped);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // get location → compute distances → choose nearest
+  useEffect(() => {
+    let cancelled = false;
+    async function locateAndMeasure() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") { if (!cancelled) setGotLocation("denied"); return; }
+
+        let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+        if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (!pos || cancelled) return;
+
+        const { latitude, longitude } = pos.coords;
+
+        setShops((prev) => {
+          const updated = prev.map((s) =>
+            typeof s.lat === "number" && typeof s.lng === "number"
+              ? { ...s, distanceKm: haversineKm(latitude, longitude, s.lat, s.lng) }
+              : { ...s, distanceKm: undefined }
+          );
+          let n: Shop | null = null;
+          for (const s of updated) {
+            if (typeof s.distanceKm !== "number") continue;
+            if (!n || (n.distanceKm ?? Infinity) > s.distanceKm) n = s;
+          }
+          setNearest(n);
+          return updated;
+        });
+
+        if (!cancelled) setGotLocation("ok");
+      } catch {
+        if (!cancelled) setGotLocation("error");
+      }
+    }
+    if (shops.length) locateAndMeasure();
+    return () => { cancelled = true; };
+  }, [shops.length]);
+
+  // filtered & sorted
+  const data = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return shops
+      .filter((s) => {
+        const byFilter = filters.length === 0 || filters.includes(s.category);
+        const byText = !q || s.name.toLowerCase().includes(q) || s.address1.toLowerCase().includes(q) || (s.plusCode ?? "").toLowerCase().includes(q);
+        return byFilter && byText;
+      })
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+  }, [filters, query, shops]);
 
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
       <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.bg }}>
-        {/* Header is relative so title can be absolutely centered */}
         <View className="relative px-4 py-3">
           <View className="flex-row items-center justify-between">
-            {/* Back button with safe fallback */}
             <Pressable
               onPress={() => {
                 try {
-                  // @ts-ignore expo-router may expose canGoBack
-               	  if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
-               	  else router.replace("/");
-                } catch {
-                  router.replace("/");
-                }
+                  // @ts-ignore
+                  if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
+                  else router.replace("/");
+                } catch { router.replace("/"); }
               }}
               hitSlop={10}
               className="h-9 w-9 items-center justify-center rounded-xl"
@@ -540,30 +431,15 @@ export default function RepairShopScreen() {
               <Ionicons name="arrow-back" size={22} color={COLORS.text} />
             </Pressable>
 
-            {/* Right side: search icon OR expanded search input (same row) */}
             {!searchOpen ? (
-              <Pressable
-                onPress={() => setSearchOpen(true)}
-                hitSlop={10}
-                className="h-9 w-9 items-center justify-center rounded-xl"
-                accessibilityLabel="Open search"
-              >
+              <Pressable onPress={() => setSearchOpen(true)} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Open search">
                 <Ionicons name="search" size={20} color={COLORS.text} />
               </Pressable>
             ) : (
-              // wrapper fills from after the back button to the right edge
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <View
                   className="flex-row items-center rounded-2xl bg-white px-3 py-1"
-                  style={[
-                    {
-                      borderColor: COLORS.border,
-                      borderWidth: 1,
-                      width: "100%",
-                      minWidth: 0, // iOS flexbox quirk
-                    },
-                    panelShadow,
-                  ]}
+                  style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, panelShadow]}
                 >
                   <Ionicons name="search" size={18} color={COLORS.muted} />
                   <TextInput
@@ -581,12 +457,7 @@ export default function RepairShopScreen() {
                       <Ionicons name="close-circle" size={18} color={COLORS.muted} />
                     </Pressable>
                   )}
-                  <Pressable
-                    onPress={() => setSearchOpen(false)}
-                    hitSlop={8}
-                    accessibilityLabel="Close search"
-                    style={{ marginLeft: 6 }}
-                  >
+                  <Pressable onPress={() => setSearchOpen(false)} hitSlop={8} accessibilityLabel="Close search" style={{ marginLeft: 6 }}>
                     <Ionicons name="close" size={18} color={COLORS.text} />
                   </Pressable>
                 </View>
@@ -594,28 +465,37 @@ export default function RepairShopScreen() {
             )}
           </View>
 
-          {/* Absolutely centered title; does NOT intercept touches */}
           {!searchOpen && (
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                top: 12,
-                alignItems: "center",
-              }}
-            >
+            <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, top: 12, alignItems: "center" }}>
               <Text className="text-xl font-bold text-[#0F172A]">Repair Shops</Text>
             </View>
           )}
         </View>
 
-        {/* Full-width divider below the header/title */}
         <View style={{ height: 1, backgroundColor: COLORS.border }} />
       </SafeAreaView>
 
-      {/* Filter chips (same spacing/gap) */}
+      {/* Nearest panel */}
+      {gotLocation === "ok" && nearest && (
+        <View className="mx-4 mt-3 rounded-2xl" style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, panelShadow]}>
+          <View className="flex-row items-center justify-between">
+            <View className="flex-1 pr-3">
+              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>Nearest to you</Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{nearest.name}</Text>
+              {typeof nearest.distanceKm === "number" && <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>}
+            </View>
+            <PrimaryButton label="View" variant="primary" icon="navigate-outline" onPress={() => { setSelectedShop(nearest); setSheetOpen(true); }} />
+          </View>
+        </View>
+      )}
+
+      {(gotLocation === "denied" || gotLocation === "error") && (
+        <View className="mx-4 mt-3 rounded-2xl bg-white p-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, panelShadow]}>
+          <Text className="text-[12px] text-slate-600">We couldn’t access your location. Showing repair shops without distance.</Text>
+        </View>
+      )}
+
+      {/* Filters */}
       <FilterChips
         items={FILTERS}
         selected={filters}
@@ -626,7 +506,7 @@ export default function RepairShopScreen() {
         accessibilityLabel="Service filters"
       />
 
-      {/* List (same paddings) */}
+      {/* List */}
       <FlatList
         data={data}
         keyExtractor={(item) => item.id}
@@ -637,22 +517,21 @@ export default function RepairShopScreen() {
             shop={item}
             onLocation={openMaps}
             onMessage={goChat}
-            onPressCard={openActions} // tap card => quick actions (bottom sheet)
+            onPressCard={(s) => { setSelectedShop(s); setSheetOpen(true); }}
+            isNearest={nearest?.id === item.id}
           />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
         ListEmptyComponent={
           <View className="mt-16 items-center">
             <Ionicons name="search-outline" size={28} color={COLORS.muted} />
-            <Text className="mt-2 text-slate-500">No shops match your filters.</Text>
+            <Text className="mt-2 text-slate-500">No repair shops found.</Text>
           </View>
         }
       />
 
-      {/* Bottom sheet */}
+      {/* Bottom sheet + Details */}
       <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} onMessage={goChat} />
-
-      {/* Details modal (kept if you want to use it somewhere else) */}
       <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} onMessage={goChat} />
     </View>
   );

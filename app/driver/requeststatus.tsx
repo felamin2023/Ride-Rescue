@@ -66,6 +66,7 @@ type EmergencyRow = {
   accepted_at: string | null;
   completed_at: string | null;
   canceled_at: string | null;
+  accepted_by: string | null;
 };
 
 type AppUserRow = { full_name: string | null; photo_url: string | null };
@@ -83,16 +84,20 @@ type ServiceRequestRow = {
   accepted_at?: string | null;
   rejected_at?: string | null;
 };
-type ShopRow = { shop_id: string; user_id: string };
+type ShopRow = { shop_id: string; user_id: string; place_id: string | null };
 type UserRow = {
   user_id: string;
   full_name: string | null;
   photo_url: string | null;
 };
+type PlaceRow = {
+  place_id: string;
+  name: string | null;
+};
 type SRUI = {
   service_id: string;
   user_id?: string; // UUID of shop owner (app_user.user_id)
-  name: string;
+  name: string; // 🔵 Now shows shop name from places table
   avatar: string;
   distanceKm: number;
   status: SRStatus;
@@ -202,6 +207,30 @@ function prettyStatus(s: RequestStatus): string {
     .toLowerCase()
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// 🔵 Helper to open chat for an emergency
+async function openChatForEmergency(emergencyId: string, router: any) {
+  try {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("emergency_id", emergencyId)
+      .single();
+
+    if (error || !data) {
+      Alert.alert(
+        "Chat Not Available",
+        "Conversation will be created shortly. Please try again in a moment."
+      );
+      return;
+    }
+
+    router.push(`/driver/chat/${data.id}`);
+  } catch (err) {
+    console.error("[openChatForEmergency] Error:", err);
+    Alert.alert("Error", "Could not open chat. Please try again.");
+  }
 }
 
 /* ----------------------------- UI helpers ----------------------------- */
@@ -488,7 +517,7 @@ export default function RequestStatus() {
     setReqCounts((prev) => ({ ...prev, ...grp }));
   }, []);
 
-  // service_requests → shop_details → app_user (only PENDING)
+  // 🔵 UPDATED: service_requests → shop_details → places (for shop name) + app_user (for avatar)
   const fetchSRListFor = useCallback(
     async (emergencyId: string, emLat: number, emLon: number) => {
       setReqLoading((m) => ({ ...m, [emergencyId]: true }));
@@ -509,18 +538,21 @@ export default function RequestStatus() {
 
         const srRows = (rows as ServiceRequestRow[]) ?? [];
 
-        // shop_id -> user_id
+        // shop_id -> user_id + place_id
         const shopIds = Array.from(new Set(srRows.map((r) => r.shop_id)));
         const { data: shops } = await supabase
           .from("shop_details")
-          .select("shop_id, user_id")
+          .select("shop_id, user_id, place_id")
           .in("shop_id", shopIds.length ? shopIds : ["shp-void"]);
+        
         const shopToUser: Record<string, string> = {};
-        (shops as ShopRow[] | null)?.forEach(
-          (s) => (shopToUser[s.shop_id] = s.user_id)
-        );
+        const shopToPlace: Record<string, string> = {};
+        (shops as ShopRow[] | null)?.forEach((s) => {
+          shopToUser[s.shop_id] = s.user_id;
+          if (s.place_id) shopToPlace[s.shop_id] = s.place_id;
+        });
 
-        // user_id -> full_name, photo_url
+        // user_id -> photo_url
         const userIds = Array.from(new Set(Object.values(shopToUser)));
         let userMap: Record<string, UserRow> = {};
         if (userIds.length) {
@@ -531,16 +563,31 @@ export default function RequestStatus() {
           (users as UserRow[] | null)?.forEach((u) => (userMap[u.user_id] = u));
         }
 
+        // place_id -> name
+        const placeIds = Array.from(new Set(Object.values(shopToPlace)));
+        let placeMap: Record<string, PlaceRow> = {};
+        if (placeIds.length) {
+          const { data: places } = await supabase
+            .from("places")
+            .select("place_id, name")
+            .in("place_id", placeIds);
+          (places as PlaceRow[] | null)?.forEach((p) => (placeMap[p.place_id] = p));
+        }
+
         const list: SRUI[] = srRows.map((r) => {
           const uid = shopToUser[r.shop_id]; // app_user uuid
           const u = uid ? userMap[uid] : undefined;
+          const placeId = shopToPlace[r.shop_id];
+          const place = placeId ? placeMap[placeId] : undefined;
+          
           const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
-          const name = u?.full_name || "Mechanic";
+          const name = place?.name || u?.full_name || "Mechanic"; // 🔵 Prioritize place name
           const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
 
           dbg(
             `[SR_LIST] em=${emergencyId} service=${r.service_id}`,
             `user_id=${uid ?? "unknown"}`,
+            `place_name=${place?.name ?? "N/A"}`,
             `dist=${distanceKm} km`
           );
 
@@ -831,6 +878,7 @@ export default function RequestStatus() {
 
   const renderItem = ({ item }: { item: RequestItem }) => {
     const waiting = item.status === "WAITING";
+    const inProcess = item.status === "IN_PROCESS";
     const isOpen = !!openCards[item.id];
 
     return (
@@ -839,8 +887,6 @@ export default function RequestStatus() {
         className="bg-white rounded-2xl p-4 mb-4 border border-slate-200 relative"
         style={cardShadow as any}
       >
-        {/* Upper-right badge removed per request */}
-
         <View className="flex-row items-center">
           <Image
             source={{ uri: item.avatar }}
@@ -891,9 +937,23 @@ export default function RequestStatus() {
             </Text>
           </View>
 
-          <Text className="text-[12px] text-slate-400">
-            Sent {item.sentWhen}
-          </Text>
+          {inProcess && (
+            <Pressable
+              onPress={() => openChatForEmergency(item.id, router)}
+              className="flex-row items-center bg-blue-600 rounded-xl px-3 py-1.5"
+            >
+              <Ionicons name="chatbubbles" size={14} color="#FFF" />
+              <Text className="text-white text-[12px] font-semibold ml-1">
+                Message
+              </Text>
+            </Pressable>
+          )}
+
+          {!inProcess && (
+            <Text className="text-[12px] text-slate-400">
+              Sent {item.sentWhen}
+            </Text>
+          )}
         </View>
 
         {waiting && isOpen ? renderSRList(item) : null}

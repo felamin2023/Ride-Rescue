@@ -1,7 +1,15 @@
 // app/(driver)/firestation.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View, Text, TextInput, FlatList, Pressable, Image as RNImage, Linking, Modal, Platform,
+  View,
+  Text,
+  TextInput,
+  FlatList,
+  Pressable,
+  Image as RNImage,
+  Linking,
+  Modal,
+  Platform,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -41,60 +49,106 @@ const buttonShadow = Platform.select({
 type PlaceRow = {
   place_id: string;
   name: string | null;
-  category: "fire" | "fire_station" | "hospital" | "police" | "gas_station" | "repair_shop" | "vulcanizing" | (string & {});
+  category:
+    | "fire"
+    | "fire_station"
+    | "hospital"
+    | "police"
+    | "gas_station"
+    | "repair_shop"
+    | "vulcanizing"
+    | (string & {});
   address: string | null;
   plus_code: string | null;
-  latitude: string | number | null;   // numeric comes as string in JS
+  latitude: string | number | null;
   longitude: string | number | null;
   maps_link: string | null;
-  phones?: string | null;              // optional column
+  phones: string[] | null; // array from DB
 };
 
 type Facility = {
   id: string;
   name: string;
-  category: "fire";                   // we normalize to "fire" in-app
+  category: "fire"; // normalized
   address1: string;
   plusCode?: string;
   avatar?: string;
-  rating?: number;
   lat?: number;
   lng?: number;
   distanceKm?: number;
   maps_link?: string;
-  phones?: string;
+  phones?: string[]; // array in-app
 };
 
 /* --------------------------------- Filters -------------------------------- */
-const FILTERS: FilterItem[] = [
-  { key: "fire", icon: "flame-outline", label: "Fire Station" },
-];
+const FILTERS: FilterItem[] = [{ key: "fire", icon: "flame-outline", label: "Fire Station" }];
 
-/* --------------------------------- Small UI -------------------------------- */
-function Stars({ rating = 0 }: { rating?: number }) {
-  const r = Math.max(0, Math.min(5, rating));
-  const full = Math.floor(r);
-  const half = r - full >= 0.5;
+/* ----------------------- Reusable: Phone chips ---------------------- */
+function PhoneChips({
+  phones,
+  onCall,
+}: {
+  phones?: string[];
+  onCall: (phone: string) => void;
+}) {
+  if (!phones || phones.length === 0) {
+    return <Text className="text-[12px] text-slate-500">No contact numbers available</Text>;
+  }
+
   return (
-    <View className="flex-row items-center">
-      {Array.from({ length: 5 }).map((_, i) => {
-        const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
-        return <Ionicons key={i} name={name as any} size={14} color={"#F59E0B"} style={{ marginRight: i === 4 ? 0 : 2 }} />;
-      })}
+    <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 8 }}>
+      {phones.map((p, idx) => (
+        <Pressable
+          key={`${p}-${idx}`}
+          onPress={() => onCall(p)}
+          onLongPress={() => Clipboard.setStringAsync(p)}
+          android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 999,
+            backgroundColor: "#F8FAFC",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            marginRight: 8,
+            marginBottom: 8,
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`Call ${p}`}
+        >
+          <Text className="text-[12px] text-slate-800">{p}</Text>
+        </Pressable>
+      ))}
     </View>
   );
 }
 
+/* ----------------------- Bottom Sheet ---------------------- */
 function PrimaryButton({
-  label, onPress, variant = "primary", icon,
-}: { label: string; onPress: () => void; variant?: "primary" | "secondary"; icon?: keyof typeof Ionicons.glyphMap; }) {
+  label,
+  onPress,
+  variant = "primary",
+  icon,
+}: {
+  label: string;
+  onPress: () => void;
+  variant?: "primary" | "secondary";
+  icon?: keyof typeof Ionicons.glyphMap;
+}) {
   const isPrimary = variant === "primary";
   return (
     <Pressable
       onPress={onPress}
       android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
       style={[
-        { flexDirection: "row", alignItems: "center", justifyContent: "center", borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+        {
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 999,
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+        },
         isPrimary ? { backgroundColor: COLORS.primary } : { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: COLORS.border },
         buttonShadow,
       ]}
@@ -107,10 +161,17 @@ function PrimaryButton({
   );
 }
 
-/* ----------------------- Bottom Sheet ---------------------- */
 function QuickActions({
-  visible, onClose, facility, onOpenMaps, onCall,
-}: { visible: boolean; onClose: () => void; facility?: Facility | null; onOpenMaps: (s: Facility) => void; onCall: (s: Facility) => void; }) {
+  visible,
+  onClose,
+  facility,
+  onOpenMaps,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  facility?: Facility | null;
+  onOpenMaps: (s: Facility) => void;
+}) {
   const insets = useSafeAreaInsets();
   if (!facility) return null;
 
@@ -120,9 +181,19 @@ function QuickActions({
         <Pressable style={{ flex: 1 }} onPress={onClose} />
         <View
           style={[
-            { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "#FFFFFF",
-              borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 16 + insets.bottom,
-              borderTopWidth: 1, borderColor: COLORS.border, },
+            {
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "#FFFFFF",
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              padding: 16,
+              paddingBottom: 16 + insets.bottom,
+              borderTopWidth: 1,
+              borderColor: COLORS.border,
+            },
             panelShadow,
           ]}
         >
@@ -132,12 +203,21 @@ function QuickActions({
 
           <View className="flex-row items-center gap-3 pb-3">
             <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-              {facility.avatar ? <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} /> :
-                <View className="h-full w-full items-center justify-center"><Ionicons name="flame-outline" size={20} color="#475569" /></View>}
+              {facility.avatar ? (
+                <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
+              ) : (
+                <View className="h-full w-full items-center justify-center">
+                  <Ionicons name="flame-outline" size={20} color="#475569" />
+                </View>
+              )}
             </View>
             <View className="flex-1">
-              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{facility.name}</Text>
-              <Text className="text-[12px] text-slate-500" numberOfLines={1}>{facility.address1}</Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
+                {facility.name}
+              </Text>
+              <Text className="text-[12px] text-slate-500" numberOfLines={1}>
+                {facility.address1}
+              </Text>
             </View>
             <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close quick actions">
               <Ionicons name="close" size={20} color={COLORS.text} />
@@ -148,17 +228,22 @@ function QuickActions({
 
           <View className="mt-3 gap-3">
             <PrimaryButton label="Location" icon="navigate-outline" onPress={() => { onOpenMaps(facility); onClose(); }} />
-            <PrimaryButton label="Call Station" variant="secondary" icon="call-outline" onPress={() => { onCall(facility); onClose(); }} />
             <PrimaryButton
               label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
-              onPress={() => { Clipboard.setStringAsync(facility.plusCode || facility.address1 || facility.name); onClose(); }}
+              onPress={() => {
+                Clipboard.setStringAsync(facility.plusCode || facility.address1 || facility.name);
+                onClose();
+              }}
             />
           </View>
         </View>
 
-        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }} />
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }}
+        />
       </View>
     </Modal>
   );
@@ -166,8 +251,18 @@ function QuickActions({
 
 /* ------------------------------- Details Modal ------------------------------ */
 function DetailsModal({
-  visible, facility, onClose, onOpenMaps, onCall,
-}: { visible: boolean; facility: Facility | null; onClose: () => void; onOpenMaps: (s: Facility) => void; onCall: (s: Facility) => void; }) {
+  visible,
+  facility,
+  onClose,
+  onOpenMaps,
+  onCall,
+}: {
+  visible: boolean;
+  facility: Facility | null;
+  onClose: () => void;
+  onOpenMaps: (s: Facility) => void;
+  onCall: (phone: string) => void;
+}) {
   if (!facility) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
@@ -176,13 +271,20 @@ function DetailsModal({
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
             <View className="flex-row items-start gap-3">
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-                {facility.avatar ? <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} /> :
-                  <View className="h-full w-full items-center justify-center"><Ionicons name="flame-outline" size={22} color="#475569" /></View>}
+                {facility.avatar ? (
+                  <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
+                ) : (
+                  <View className="h-full w-full items-center justify-center">
+                    <Ionicons name="flame-outline" size={22} color="#475569" />
+                  </View>
+                )}
               </View>
 
               <View className="flex-1">
                 <View className="flex-row items-start justify-between">
-                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>{facility.name}</Text>
+                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>
+                    {facility.name}
+                  </Text>
                   <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
                     <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{facility.category}</Text>
                   </View>
@@ -196,16 +298,12 @@ function DetailsModal({
 
             <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 12, marginHorizontal: 8 }} />
 
-            <View className="mt-2 flex-row items-center gap-2">
-              <Stars rating={facility.rating ?? 0} />
-              <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
-              {typeof facility.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km away</Text></>)}
-            </View>
+            {/* Contact numbers */}
+            <Text className="mt-3 text-[12px] font-semibold text-slate-700">Contact numbers</Text>
+            <PhoneChips phones={facility.phones} onCall={onCall} />
 
-            <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1"><PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(facility)} /></View>
-              <View style={{ width: 10 }} />
-              <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(facility)} /></View>
+            <View className="mt-4">
+              <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(facility)} />
             </View>
           </View>
         </Pressable>
@@ -227,8 +325,18 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
 
 /* --------------------------------- Card ---------------------------------- */
 function FacilityCard({
-  facility, onLocation, onCall, onPressCard, isNearest = false,
-}: { facility: Facility; onLocation: (s: Facility) => void; onCall: (s: Facility) => void; onPressCard: (s: Facility) => void; isNearest?: boolean; }) {
+  facility,
+  onLocation,
+  onPressCard,
+  onCall,
+  isNearest = false,
+}: {
+  facility: Facility;
+  onLocation: (s: Facility) => void;
+  onPressCard: (s: Facility) => void;
+  onCall: (phone: string) => void;
+  isNearest?: boolean;
+}) {
   return (
     <Pressable
       onPress={() => onPressCard(facility)}
@@ -239,17 +347,26 @@ function FacilityCard({
     >
       <View className="flex-row items-start gap-3">
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-          {facility.avatar ? <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> :
-            <View className="h-full w-full items-center justify-center"><Ionicons name="flame-outline" size={22} color="#475569" /></View>}
+          {facility.avatar ? (
+            <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+          ) : (
+            <View className="h-full w-full items-center justify-center">
+              <Ionicons name="flame-outline" size={22} color="#475569" />
+            </View>
+          )}
         </View>
 
         <View className="flex-1">
           <View className="flex-row items-start justify-between">
-            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>{facility.name}</Text>
+            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>
+              {facility.name}
+            </Text>
             <View className="ml-3 flex-row items-center gap-1 self-start">
               {isNearest && (
                 <View className="rounded-full bg-emerald-50 px-2 py-[2px]" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
-                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>NEAREST</Text>
+                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>
+                    NEAREST
+                  </Text>
                 </View>
               )}
               <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
@@ -263,16 +380,22 @@ function FacilityCard({
       <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
 
       <View style={{ paddingTop: 8, paddingLeft: 68 }}>
-        <Text className="text-[13px] text-slate-700" numberOfLines={2}>{facility.address1}</Text>
-        <View className="mt-2 flex-row items-center gap-2">
-          <Stars rating={facility.rating ?? 0} />
-          <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
-          {typeof facility.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km</Text></>)}
-        </View>
+        <Text className="text-[13px] text-slate-700" numberOfLines={2}>
+          {facility.address1}
+        </Text>
+
+        {/* Contact numbers (chips) */}
+        <PhoneChips phones={facility.phones} onCall={onCall} />
+
+        {/* Distance + Location button row */}
         <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1"><PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(facility)} /></View>
-          <View style={{ width: 12 }} />
-          <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} /></View>
+          {typeof facility.distanceKm === "number" && (
+            <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km</Text>
+          )}
+          <View style={{ flex: 1 }} />
+          <View style={{ width: 140 }}>
+            <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} />
+          </View>
         </View>
       </View>
     </Pressable>
@@ -293,25 +416,38 @@ export default function FireStationScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
 
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false); // <-- control like hospital.tsx
 
-  const toggleFilter = (k: string) =>
-    setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+  const toggleFilter = (k: string) => setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
   const openMaps = (s: Facility) => {
-    if (s.maps_link) { Linking.openURL(s.maps_link).catch(() => {}); return; }
-    if (s.lat && s.lng) { Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {}); }
-    else if (s.address1) { Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {}); }
+    if (s.maps_link) {
+      Linking.openURL(s.maps_link).catch(() => {});
+      return;
+    }
+    if (s.lat && s.lng) {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
+    } else if (s.address1) {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
+    }
   };
 
-  const callFacility = (s: Facility) => {
-    if (!s.phones) return;
-    Linking.openURL(`tel:${s.phones}`).catch(() => {});
+  const callNumber = (raw: string) => {
+    if (!raw) return;
+    const num = raw.replace(/[^\d+]/g, ""); // keep digits and leading '+'
+    if (!num) return;
+    Linking.openURL(`tel:${num}`).catch(() => {});
   };
 
-  const openActions = useCallback((s: Facility) => { setSelectedFacility(s); setSheetOpen(true); }, []);
+  const openActions = useCallback((s: Facility) => {
+    setSelectedFacility(s);
+    setSheetOpen(true);
+  }, []);
   const closeActions = () => setSheetOpen(false);
-  const openDetails = (s: Facility) => { setSelectedFacility(s); setDetailsOpen(true); };
+  const openDetails = (s: Facility) => {
+    setSelectedFacility(s);
+    setDetailsOpen(true);
+  };
   const closeDetails = () => setDetailsOpen(false);
 
   // fetch fire stations
@@ -321,7 +457,6 @@ export default function FireStationScreen() {
       const { data, error } = await supabase
         .from("places")
         .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones")
-        // Support either 'fire' or 'fire_station' in your DB
         .in("category", ["fire", "fire_station"])
         .order("name", { ascending: true });
 
@@ -340,7 +475,6 @@ export default function FireStationScreen() {
           category: "fire", // normalize
           address1: p.address ?? "",
           plusCode: p.plus_code ?? undefined,
-          rating: 0,
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
           maps_link: p.maps_link ?? undefined,
@@ -350,7 +484,9 @@ export default function FireStationScreen() {
 
       if (!cancelled) setFacilities(mapped);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // get user location → compute distances → choose nearest
@@ -359,7 +495,10 @@ export default function FireStationScreen() {
     async function locateAndMeasure() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") { if (!cancelled) setGotLocation("denied"); return; }
+        if (status !== "granted") {
+          if (!cancelled) setGotLocation("denied");
+          return;
+        }
 
         let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
         if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -388,7 +527,9 @@ export default function FireStationScreen() {
       }
     }
     if (facilities.length) locateAndMeasure();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [facilities.length]);
 
   // filtered + sorted
@@ -397,7 +538,12 @@ export default function FireStationScreen() {
     return facilities
       .filter((s) => {
         const byFilter = filters.length === 0 || filters.includes(s.category);
-        const byText = !q || s.name.toLowerCase().includes(q) || s.address1.toLowerCase().includes(q) || (s.plusCode ?? "").toLowerCase().includes(q);
+        const byText =
+          !q ||
+          s.name.toLowerCase().includes(q) ||
+          s.address1.toLowerCase().includes(q) ||
+          (s.plusCode ?? "").toLowerCase().includes(q) ||
+          (s.phones ?? []).some((ph) => ph.toLowerCase().includes(q));
         return byFilter && byText;
       })
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
@@ -415,7 +561,9 @@ export default function FireStationScreen() {
                   // @ts-ignore
                   if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
                   else router.replace("/");
-                } catch { router.replace("/"); }
+                } catch {
+                  router.replace("/");
+                }
               }}
               hitSlop={10}
               className="h-9 w-9 items-center justify-center rounded-xl"
@@ -425,17 +573,25 @@ export default function FireStationScreen() {
             </Pressable>
 
             {!searchOpen ? (
-              <Pressable onPress={() => setSearchOpen(true)} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Open search">
+              <Pressable
+                onPress={() => setSearchOpen(true)}
+                hitSlop={10}
+                className="h-9 w-9 items-center justify-center rounded-xl"
+                accessibilityLabel="Open search"
+              >
                 <Ionicons name="search" size={20} color={COLORS.text} />
               </Pressable>
             ) : (
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <View className="flex-row items-center rounded-2xl bg-white px-3 py-1" style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, panelShadow]}>
+                <View
+                  className="flex-row items-center rounded-2xl bg-white px-3 py-1"
+                  style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, panelShadow]}
+                >
                   <Ionicons name="search" size={18} color={COLORS.muted} />
                   <TextInput
                     value={query}
                     onChangeText={setQuery}
-                    placeholder="Search by name, address, plus code…"
+                    placeholder="Search by name, address, plus code, phone…"
                     placeholderTextColor={COLORS.muted}
                     className="flex-1 px-2 py-2 text-[15px] text-slate-900"
                     autoCapitalize="none"
@@ -447,7 +603,12 @@ export default function FireStationScreen() {
                       <Ionicons name="close-circle" size={18} color={COLORS.muted} />
                     </Pressable>
                   )}
-                  <Pressable onPress={() => setSearchOpen(false)} hitSlop={8} accessibilityLabel="Close search" style={{ marginLeft: 6 }}>
+                  <Pressable
+                    onPress={() => setSearchOpen(false)}
+                    hitSlop={8}
+                    accessibilityLabel="Close search"
+                    style={{ marginLeft: 6 }}
+                  >
                     <Ionicons name="close" size={18} color={COLORS.text} />
                   </Pressable>
                 </View>
@@ -467,14 +628,31 @@ export default function FireStationScreen() {
 
       {/* Nearest panel */}
       {gotLocation === "ok" && nearest && (
-        <View className="mx-4 mt-3 rounded-2xl" style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, panelShadow]}>
+        <View
+          className="mx-4 mt-3 rounded-2xl"
+          style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, panelShadow]}
+        >
           <View className="flex-row items-center justify-between">
             <View className="flex-1 pr-3">
-              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>Nearest to you</Text>
-              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{nearest.name}</Text>
-              {typeof nearest.distanceKm === "number" && <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>}
+              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>
+                Nearest to you
+              </Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
+                {nearest.name}
+              </Text>
+              {typeof nearest.distanceKm === "number" && (
+                <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>
+              )}
             </View>
-            <PrimaryButton label="View" variant="primary" icon="navigate-outline" onPress={() => { setSelectedFacility(nearest); setSheetOpen(true); }} />
+            <PrimaryButton
+              label="View"
+              variant="primary"
+              icon="navigate-outline"
+              onPress={() => {
+                setSelectedFacility(nearest);
+                setSheetOpen(true);
+              }}
+            />
           </View>
         </View>
       )}
@@ -506,8 +684,11 @@ export default function FireStationScreen() {
           <FacilityCard
             facility={item}
             onLocation={openMaps}
-            onCall={callFacility}
-            onPressCard={(s) => { setSelectedFacility(s); setSheetOpen(true); }}
+            onPressCard={(s) => {
+              setSelectedFacility(s);
+              setSheetOpen(true);
+            }}
+            onCall={callNumber}
             isNearest={nearest?.id === item.id}
           />
         )}
@@ -521,8 +702,14 @@ export default function FireStationScreen() {
       />
 
       {/* Bottom sheet + Details */}
-      <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} onCall={callFacility} />
-      <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callFacility} />
+      <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} />
+      <DetailsModal
+        visible={detailsOpen}
+        facility={selectedFacility}
+        onClose={closeDetails}
+        onOpenMaps={openMaps}
+        onCall={callNumber}
+      />
     </View>
   );
 }

@@ -1,11 +1,10 @@
 // app/(driver)/MDRRMO.tsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   TextInput,
   FlatList,
-  TouchableOpacity,
   Pressable,
   Image as RNImage,
   Linking,
@@ -18,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import LoadingScreen from "../../components/LoadingScreen";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
+import { supabase } from "../../utils/supabase";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -33,194 +33,130 @@ const COLORS = {
 
 /** Softer, minimal shadow for cards & sheets */
 const SOFT_SHADOW = Platform.select({
-  ios: {
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-  },
+  ios: { shadowColor: "#0F172A", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
   android: { elevation: 1 },
 });
 
 /** Light shadow for small controls */
 const MICRO_SHADOW = Platform.select({
-  ios: {
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-  },
+  ios: { shadowColor: "#0F172A", shadowOpacity: 0.03, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
   android: { elevation: 1 },
 });
 
-/* ----------------------------- Types & Mock Data ---------------------------- */
+/* ---------------------------------- Types ---------------------------------- */
+type PlaceRow = {
+  place_id: string;
+  name: string | null;
+  category: "rescue_station" | (string & {});
+  address: string | null;
+  plus_code: string | null;
+  latitude: string | number | null;
+  longitude: string | number | null;
+  maps_link: string | null;
+  phones: string[] | null; // text[] from DB
+};
+
 type Facility = {
   id: string;
   name: string;
-  category: "mdrrmo" | "hospital" | "police" | "gas" | "repair" | "vulcanize";
+  category: "mdrrmo"; // normalized in-app
   address1: string;
   address2?: string;
   plusCode?: string;
   avatar?: string;
-  rating?: number;
   lat?: number;
   lng?: number;
   distanceKm?: number;
-  phone?: string;
+  maps_link?: string;
+  phones?: string[]; // array in-app
 };
-
-const MOCK: Facility[] = [
-  {
-    id: "m1",
-    name: "MDRRMO Argao",
-    category: "mdrrmo",
-    address1: "Argao Municipal Hall, Poblacion, Argao, Cebu",
-    address2: "VJP2+6H7, Argao, Cebu",
-    plusCode: "VJP2+6H7",
-    rating: 4.7,
-    lat: 9.8795,
-    lng: 123.6071,
-    avatar: "https://i.pravatar.cc/100?img=26",
-    distanceKm: 0.6,
-    phone: "+63324886666",
-  },
-  {
-    id: "m2",
-    name: "Taloot MDRRMO Satellite",
-    category: "mdrrmo",
-    address1: "Taloot, Argao, Cebu",
-    rating: 4.3,
-    lat: 9.8752,
-    lng: 123.5962,
-    avatar: "https://i.pravatar.cc/100?img=27",
-    distanceKm: 2.1,
-    phone: "+639178889999",
-  },
-  {
-    id: "m3",
-    name: "Lamacan MDRRMO Post",
-    category: "mdrrmo",
-    address1: "Lamacan, Argao, Cebu",
-    rating: 4.2,
-    lat: 9.8702,
-    lng: 123.5999,
-    avatar: "https://i.pravatar.cc/100?img=28",
-    distanceKm: 3.0,
-    phone: "+639171231111",
-  },
-];
 
 /* --------------------------- Reusable filter items -------------------------- */
 const FILTERS: FilterItem[] = [
-{ key: "vulcanize",icon: "trail-sign-outline",label: "Vulcanize" },
-  { key: "repair",   icon: "construct-outline", label: "Repair" },
-  { key: "gas",      icon: "flash-outline",     label: "Gas" },
-  { key: "hospital", icon: "medical-outline",   label: "Hospital" },
-  { key: "police",   icon: "shield-outline",    label: "Police" },
-  { key: "fire",     icon: "flame-outline",     label: "Fire Station" },
-  { key: "mdrrmo",   icon: "megaphone-outline", label: "MDRRMO" },];
+  { key: "vulcanize", icon: "trail-sign-outline", label: "Vulcanize" },
+  { key: "repair", icon: "construct-outline", label: "Repair" },
+  { key: "gas", icon: "flash-outline", label: "Gas" },
+  { key: "hospital", icon: "medical-outline", label: "Hospital" },
+  { key: "police", icon: "shield-outline", label: "Police" },
+  { key: "fire", icon: "flame-outline", label: "Fire Station" },
+  { key: "mdrrmo", icon: "megaphone-outline", label: "MDRRMO" },
+];
 
-/* --------------------------------- Small UI -------------------------------- */
-function Stars({ rating = 0 }: { rating?: number }) {
-  const full = Math.floor(rating);
-  const half = rating - full >= 0.5;
-  return (
-    <View className="flex-row items-center">
-      {Array.from({ length: 5 }).map((_, i) => {
-        const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
-        return (
-          <Ionicons
-            key={i}
-            name={name as any}
-            size={14}
-            color={"#F59E0B"}
-            style={{ marginRight: i === 4 ? 0 : 2 }}
-          />
-        );
-      })}
-    </View>
-  );
-}
-
-/** Button supports single-/multi-line labels and size variants via `lines` & `size` */
+/* ----------------------- Small UI: Primary Button ---------------------- */
 function PrimaryButton({
   label,
   onPress,
   variant = "primary",
   icon,
-  lines = 1,
-  size = "md", // NEW: "sm" | "md"
 }: {
   label: string;
   onPress: () => void;
   variant?: "primary" | "secondary";
   icon?: any;
-  lines?: 1 | 2;
-  size?: "sm" | "md";
 }) {
   const isPrimary = variant === "primary";
-
-  // sizes:
-  // sm → tighter like Vulcanize bottom sheet
-  // md → current default
-  const sizeStyles =
-    size === "sm"
-      ? { minHeight: 40, paddingVertical: Platform.OS === "ios" ? 8 : 6 }
-      : lines > 1
-      ? { minHeight: 56, paddingVertical: 8 }
-      : { minHeight: 48 };
-
   return (
-    <TouchableOpacity
+    <Pressable
       onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center justify-center rounded-full px-4 ${isPrimary ? "" : "border"}`}
+      android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
+      className={`flex-row items-center justify-center rounded-full px-4`}
       style={[
-        sizeStyles,
-        isPrimary
-          ? { backgroundColor: COLORS.primary }
-          : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
+        { minHeight: 48, borderWidth: isPrimary ? 0 : 1, borderColor: COLORS.border, backgroundColor: isPrimary ? COLORS.primary : "#FFFFFF" },
         MICRO_SHADOW,
       ]}
-      {...(Platform.OS === "android"
-        ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } }
-        : {})}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
-      {icon ? (
-        <Ionicons
-          name={icon}
-          size={16}
-          color={isPrimary ? "#FFFFFF" : COLORS.text}
-          style={{ marginRight: 6 }}
-        />
-      ) : null}
-      <Text
-        numberOfLines={lines}
-        ellipsizeMode="tail"
-        className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}
-        style={{ textAlign: "center" }}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
+      {icon ? <Ionicons name={icon} size={16} color={isPrimary ? "#FFFFFF" : COLORS.text} style={{ marginRight: 6 }} /> : null}
+      <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>{label}</Text>
+    </Pressable>
   );
 }
 
-/* ----------------------- Bottom Sheet (Actions) ---------------------- */
+/* ----------------------- Phone chips (tap = call, long-press = copy) ---------------------- */
+function PhoneChips({ phones, onCall }: { phones?: string[]; onCall: (phone: string) => void }) {
+  if (!phones || phones.length === 0) {
+    return <Text className="text-[12px] text-slate-500">No contact numbers available</Text>;
+  }
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 8 }}>
+      {phones.map((p, idx) => (
+        <Pressable
+          key={`${p}-${idx}`}
+          onPress={() => onCall(p)}
+          onLongPress={() => Clipboard.setStringAsync(p)}
+          android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 999,
+            backgroundColor: "#F8FAFC",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            marginRight: 8,
+            marginBottom: 8,
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`Call ${p}`}
+        >
+          <Text className="text-[12px] text-slate-800">{p}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+/* ----------------------- Bottom Sheet (no Call/Message buttons) ---------------------- */
 function QuickActions({
   visible,
   onClose,
   facility,
   onOpenMaps,
-  onCall,
-  onMessage,
 }: {
   visible: boolean;
   onClose: () => void;
   facility?: Facility | null;
   onOpenMaps: (s: Facility) => void;
-  onCall: (s: Facility) => void;
-  onMessage: (s: Facility) => void;
 }) {
   const insets = useSafeAreaInsets();
   if (!facility) return null;
@@ -276,41 +212,12 @@ function QuickActions({
 
           <View className="h-[1px] bg-slate-200" />
 
-          {/* compact actions like Vulcanize */}
           <View className="mt-3 gap-3">
-            <PrimaryButton
-              label="Call MDRRMO"
-              icon="call-outline"
-              size="sm" // compact
-              onPress={() => {
-                onCall(facility);
-                onClose();
-              }}
-            />
-            <PrimaryButton
-              label="Send SMS"
-              icon="chatbubble-ellipses-outline"
-              size="sm" // compact
-              onPress={() => {
-                onMessage(facility);
-                onClose();
-              }}
-            />
-            <PrimaryButton
-              label="Open in Google Maps"
-              variant="secondary"
-              icon="navigate-outline"
-              size="sm" // compact
-              onPress={() => {
-                onOpenMaps(facility);
-                onClose();
-              }}
-            />
+            <PrimaryButton label="Open in Google Maps" variant="secondary" icon="navigate-outline" onPress={() => { onOpenMaps(facility); onClose(); }} />
             <PrimaryButton
               label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
-              size="sm" // compact
               onPress={() => {
                 const text = facility.plusCode || facility.address1 || facility.name;
                 Clipboard.setStringAsync(text);
@@ -333,23 +240,17 @@ function DetailsModal({
   onClose,
   onOpenMaps,
   onCall,
-  onMessage,
 }: {
   visible: boolean;
   facility: Facility | null;
   onClose: () => void;
   onOpenMaps: (s: Facility) => void;
-  onCall: (s: Facility) => void;
-  onMessage: (s: Facility) => void;
+  onCall: (phone: string) => void;
 }) {
   if (!facility) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable
-        className="flex-1"
-        style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }}
-        onPress={onClose}
-      >
+      <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, SOFT_SHADOW]}>
             <View className="flex-row items-center gap-3">
@@ -370,15 +271,6 @@ function DetailsModal({
                   <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
                     <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{facility.category}</Text>
                   </View>
-                  <Text className="text-slate-300">•</Text>
-                  <Stars rating={facility.rating ?? 0} />
-                  <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
-                  {typeof facility.distanceKm === "number" && (
-                    <>
-                      <Text className="text-slate-300">•</Text>
-                      <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km away</Text>
-                    </>
-                  )}
                 </View>
               </View>
             </View>
@@ -402,31 +294,15 @@ function DetailsModal({
                   </Text>
                 </View>
               ) : null}
-              {facility.phone ? (
-                <View className="flex-row items-center gap-2">
-                  <Ionicons name="call-outline" size={14} color={COLORS.sub} />
-                  <Text className="text-[12px] text-slate-600">{facility.phone}</Text>
-                </View>
-              ) : null}
             </View>
+
+            {/* Contact numbers */}
+            <Text className="mt-3 text-[12px] font-semibold text-slate-700">Contact numbers</Text>
+            <PhoneChips phones={facility.phones} onCall={onCall} />
 
             {/* Buttons */}
-            <View className="mt-4 flex-row items-stretch gap-2">
-              <View className="flex-1">
-                <PrimaryButton label="Call" icon="call-outline" onPress={() => onCall(facility)} />
-              </View>
-              <View className="flex-1">
-                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(facility)} />
-              </View>
-            </View>
-
-            <View className="mt-3">
-              <PrimaryButton
-                label="Open in Maps"
-                icon="navigate-outline"
-                variant="secondary"
-                onPress={() => onOpenMaps(facility)}
-              />
+            <View className="mt-4">
+              <PrimaryButton label="Open in Maps" icon="navigate-outline" variant="secondary" onPress={() => onOpenMaps(facility)} />
             </View>
 
             <View className="mt-3">
@@ -451,15 +327,13 @@ function DetailsModal({
 function FacilityCard({
   facility,
   onLocation,
-  onCall,
-  onMessage,
   onPressCard,
+  onCall,
 }: {
   facility: Facility;
   onLocation: (s: Facility) => void;
-  onCall: (s: Facility) => void;
-  onMessage: (s: Facility) => void;
   onPressCard: (s: Facility) => void;
+  onCall: (phone: string) => void;
 }) {
   return (
     <Pressable
@@ -488,44 +362,16 @@ function FacilityCard({
             </View>
           </View>
 
-          <View className="mt-1 flex-row items-center gap-2">
-            <Stars rating={facility.rating ?? 0} />
-            <Text className="text-[12px] text-slate-500">{(facility.rating ?? 0).toFixed(1)}</Text>
-            {typeof facility.distanceKm === "number" && (
-              <>
-                <Text className="text-slate-300">•</Text>
-                <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km</Text>
-              </>
-            )}
-          </View>
-
           <Text className="mt-2 text-[13px] text-slate-700" numberOfLines={2}>
             {facility.address1}
           </Text>
-          {facility.address2 ? (
-            <Text className="text-[12px] text-slate-500" numberOfLines={1}>
-              {facility.address2}
-            </Text>
-          ) : null}
 
-          <View className="mt-3 flex-row items-stretch gap-2">
-            <View className="flex-1">
-              <PrimaryButton
-                label={"Open\nLocation"}
-                lines={2}
-                icon="navigate-outline"
-                variant="primary"
-                onPress={() => onLocation(facility)}
-              />
-            </View>
-            <View className="flex-1">
-              <PrimaryButton
-                label="Call"
-                icon="call-outline"
-                variant="secondary"
-                onPress={() => onCall(facility)}
-              />
-            </View>
+          {/* Contact numbers (chips) */}
+          <PhoneChips phones={facility.phones} onCall={onCall} />
+
+          {/* Location button */}
+          <View className="mt-3">
+            <PrimaryButton label="Open Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} />
           </View>
         </View>
       </View>
@@ -542,108 +388,151 @@ export default function MDRRMOScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
   const [busy, setBusy] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [facilities, setFacilities] = useState<Facility[]>([]);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
+  // fetch MDRRMO (rescue stations) from Supabase
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("places")
+        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones")
+        .eq("category", "rescue_station")
+        .order("name", { ascending: true });
+
+      if (error) {
+        console.warn("places fetch error:", error.message);
+        if (!cancelled) setFacilities([]);
+        return;
+      }
+
+      const mapped: Facility[] = (data ?? []).map((p: PlaceRow) => {
+        const lat = p.latitude != null ? Number(p.latitude) : undefined;
+        const lng = p.longitude != null ? Number(p.longitude) : undefined;
+        return {
+          id: p.place_id,
+          name: p.name ?? "Unnamed MDRRMO",
+          category: "mdrrmo", // normalize
+          address1: p.address ?? "",
+          plusCode: p.plus_code ?? undefined,
+          lat: Number.isFinite(lat) ? (lat as number) : undefined,
+          lng: Number.isFinite(lng) ? (lng as number) : undefined,
+          maps_link: p.maps_link ?? undefined,
+          phones: p.phones ?? undefined,
+        };
+      });
+
+      if (!cancelled) setFacilities(mapped);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return MOCK.filter((s) => {
-      const byFilter = filters.length === 0 || filters.includes(s.category);
-      const byText =
-        q.length === 0 ||
-        s.name.toLowerCase().includes(q) ||
-        s.address1.toLowerCase().includes(q) ||
-        (s.address2 ?? "").toLowerCase().includes(q) ||
-        (s.plusCode ?? "").toLowerCase().includes(q);
-      return byFilter && byText;
-    }).sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
-  }, [filters, query]);
+    return facilities
+      .filter((s) => {
+        const byFilter = filters.length === 0 || filters.includes(s.category);
+        const byText =
+          q.length === 0 ||
+          s.name.toLowerCase().includes(q) ||
+          s.address1.toLowerCase().includes(q) ||
+          (s.plusCode ?? "").toLowerCase().includes(q) ||
+          (s.phones ?? []).some((ph) => ph.toLowerCase().includes(q));
+        return byFilter && byText;
+      })
+      .sort((a, b) => (a.name.localeCompare(b.name)));
+  }, [filters, query, facilities]);
 
   const openMaps = async (s: Facility) => {
     setBusy(true);
     try {
-      if (s.lat && s.lng) {
-        const url = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
-        await Linking.openURL(url);
+      if (s.maps_link) {
+        await Linking.openURL(s.maps_link);
+      } else if (s.lat && s.lng) {
+        await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`);
       } else if (s.address1) {
-        const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`;
-        await Linking.openURL(url);
+        await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`);
       }
     } finally {
       setBusy(false);
     }
   };
 
-  const callFacility = async (s: Facility) => {
-    if (!s.phone) return;
-    const telUrl = `tel:${s.phone}`;
+  const callNumber = async (raw: string) => {
+    if (!raw) return;
+    const num = raw.replace(/[^\d+]/g, ""); // keep digits and '+'
+    if (!num) return;
     setBusy(true);
     try {
-      await Linking.openURL(telUrl);
+      await Linking.openURL(`tel:${num}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const messageFacility = async (s: Facility) => {
-    setBusy(true);
-    try {
-      if (s.phone) {
-        await Linking.openURL(`sms:${s.phone}`);
-      } else {
-        router.push("/(driver)/message");
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const openActions = (s: Facility) => {
-    setSelectedFacility(s);
-    setSheetOpen(true);
-  };
+  const openActions = (s: Facility) => { setSelectedFacility(s); setSheetOpen(true); };
   const closeActions = () => setSheetOpen(false);
-  const openDetails = (s: Facility) => {
-    setSelectedFacility(s);
-    setDetailsOpen(true);
-  };
+  const openDetails = (s: Facility) => { setSelectedFacility(s); setDetailsOpen(true); };
   const closeDetails = () => setDetailsOpen(false);
 
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
       <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.bg }}>
-        <View className="flex-row items-center justify-between px-4 py-3">
-          <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
-            <Ionicons name="arrow-back" size={22} color={COLORS.text} />
-          </Pressable>
-          <Text className="text-2xl font-extrabold text-slate-900">MDRRMO</Text>
-          <View style={{ width: 36 }} />
-        </View>
-      </SafeAreaView>
-
-      {/* Search */}
-      <View className="px-4">
-        <View className="flex-row items-center rounded-2xl bg-white px-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, MICRO_SHADOW]}>
-          <Ionicons name="search" size={18} color={COLORS.muted} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search by name, address, plus code…"
-            placeholderTextColor={COLORS.muted}
-            className="flex-1 px-2 py-3 text-[15px] text-slate-900"
-            autoCapitalize="none"
-            returnKeyType="search"
-          />
-          {query.length > 0 && (
-            <Pressable onPress={() => setQuery("")} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+        {/* Header with search toggle */}
+        <View className="relative px-4 py-3">
+          <View className="flex-row items-center justify-between">
+            <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
+              <Ionicons name="arrow-back" size={22} color={COLORS.text} />
             </Pressable>
+
+            {!searchOpen ? (
+              <Pressable onPress={() => setSearchOpen(true)} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Open search">
+                <Ionicons name="search" size={20} color={COLORS.text} />
+              </Pressable>
+            ) : (
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <View className="flex-row items-center rounded-2xl bg-white px-3 py-1" style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, MICRO_SHADOW]}>
+                  <Ionicons name="search" size={18} color={COLORS.muted} />
+                  <TextInput
+                    value={query}
+                    onChangeText={setQuery}
+                    placeholder="Search by name, address, plus code, phone…"
+                    placeholderTextColor={COLORS.muted}
+                    className="flex-1 px-2 py-2 text-[15px] text-slate-900"
+                    autoCapitalize="none"
+                    returnKeyType="search"
+                    autoFocus
+                  />
+                  {query.length > 0 && (
+                    <Pressable onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Clear search">
+                      <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+                    </Pressable>
+                  )}
+                  <Pressable onPress={() => setSearchOpen(false)} hitSlop={8} accessibilityLabel="Close search" style={{ marginLeft: 6 }}>
+                    <Ionicons name="close" size={18} color={COLORS.text} />
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          </View>
+
+          {!searchOpen && (
+            <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, top: 12, alignItems: "center" }}>
+              <Text className="text-xl font-bold text-[#0F172A]">MDRRMO</Text>
+            </View>
           )}
         </View>
-      </View>
 
-      {/* Filter chips (reusable component) */}
+        <View style={{ height: 1, backgroundColor: COLORS.border }} />
+      </SafeAreaView>
+
+      {/* Filter chips */}
       <FilterChips
         items={FILTERS}
         selected={filters}
@@ -663,9 +552,8 @@ export default function MDRRMOScreen() {
           <FacilityCard
             facility={item}
             onLocation={openMaps}
-            onCall={callFacility}
-            onMessage={messageFacility}
             onPressCard={openActions}
+            onCall={callNumber}
           />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
@@ -677,25 +565,11 @@ export default function MDRRMOScreen() {
         }
       />
 
-      {/* Bottom sheet actions */}
-      <QuickActions
-        visible={sheetOpen}
-        onClose={closeActions}
-        facility={selectedFacility}
-        onOpenMaps={openMaps}
-        onCall={callFacility}
-        onMessage={messageFacility}
-      />
+      {/* Bottom sheet actions (no call/message) */}
+      <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} />
 
-      {/* Optional details modal */}
-      <DetailsModal
-        visible={detailsOpen}
-        facility={selectedFacility}
-        onClose={closeDetails}
-        onOpenMaps={openMaps}
-        onCall={callFacility}
-        onMessage={messageFacility}
-      />
+      {/* Details modal (shows phone chips) */}
+      <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callNumber} />
 
       {/* Loading overlay */}
       <LoadingScreen visible={busy} message="Please wait…" variant="dots" />

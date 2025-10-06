@@ -1,5 +1,5 @@
 // app/(driver)/police.tsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -17,8 +17,9 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
+import { supabase } from "../../utils/supabase";
 
-/* ------------------------------ Design tokens (match vulcanize) ------------------------------ */
+/* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
   bg: "#F4F6F8",
   surface: "#FFFFFF",
@@ -34,76 +35,44 @@ const cardShadow = Platform.select({
   ios: { shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
   android: { elevation: 3 },
 });
-
 const panelShadow = Platform.select({
   ios: { shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } },
   android: { elevation: 2 },
 });
-
 const buttonShadow = Platform.select({
   ios: { shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
   android: { elevation: 1 },
 });
 
-/* ----------------------------- Types & Mock Data ---------------------------- */
+/* ----------------------------- Types ---------------------------- */
+type PlaceRow = {
+  place_id: string;
+  name: string | null;
+  category: "police_station" | (string & {});
+  address: string | null;
+  plus_code: string | null;
+  latitude: string | number | null;
+  longitude: string | number | null;
+  maps_link: string | null;
+  phones: string[] | null; // text[] in DB
+};
+
 type Station = {
   id: string;
   name: string;
-  category: "police" | "hospital" | "gas" | "repair" | "vulcanize" | "fire" | "mdrrmo";
+  category: "police"; // normalize in-app
   address1: string;
   address2?: string;
   plusCode?: string;
   avatar?: string;
-  rating?: number;
   lat?: number;
   lng?: number;
   distanceKm?: number;
-  phone?: string;
+  maps_link?: string;
+  phones?: string[]; // array of numbers
 };
 
-const MOCK: Station[] = [
-  {
-    id: "p1",
-    name: "Argao Municipal Police Station",
-    category: "police",
-    address1: "Natalio B. Bacalso Ave, Argao, Cebu",
-    address2: "VJR3+9V9, Argao, Cebu",
-    plusCode: "VJR3+9V9",
-    rating: 4.6,
-    lat: 9.8792,
-    lng: 123.6074,
-    avatar: "https://i.pravatar.cc/100?img=5",
-    distanceKm: 0.6,
-    phone: "+63324882111",
-  },
-  {
-    id: "p2",
-    name: "PNP Station – Tulic Outpost",
-    category: "police",
-    address1: "Tulic, Argao, Cebu",
-    plusCode: "VJPX+4C",
-    rating: 4.2,
-    lat: 9.8881,
-    lng: 123.5913,
-    avatar: "https://i.pravatar.cc/100?img=15",
-    distanceKm: 2.1,
-    phone: "+639171234567",
-  },
-  {
-    id: "p3",
-    name: "PNP Checkpoint – Lamacan",
-    category: "police",
-    address1: "Lamacan, Argao, Cebu",
-    rating: 4.0,
-    lat: 9.8702,
-    lng: 123.6002,
-    avatar: "https://i.pravatar.cc/100?img=45",
-    distanceKm: 3.0,
-    phone: "+639176543210",
-  },
-];
-
-/* --------------------------------- Filters (order matches vulcanize) -------------------------------- */
+/* --------------------------------- Filters -------------------------------- */
 const FILTERS: FilterItem[] = [
   { key: "vulcanize", icon: "trail-sign-outline",  label: "Vulcanize" },
   { key: "repair",    icon: "construct-outline",   label: "Repair" },
@@ -114,30 +83,7 @@ const FILTERS: FilterItem[] = [
   { key: "mdrrmo",    icon: "megaphone-outline",   label: "MDRRMO" },
 ];
 
-/* --------------------------------- Small UI (identical to vulcanize) -------------------------------- */
-function Stars({ rating = 0 }: { rating?: number }) {
-  const full = Math.floor(rating);
-  const half = rating - full >= 0.5;
-  return (
-    <View className="flex-row items-center">
-      {Array.from({ length: 5 }).map((_, i) => {
-        const name = i < full ? "star" : i === full && half ? "star-half" : "star-outline";
-        return (
-          <Ionicons
-            key={i}
-            name={name as any}
-            size={14}
-            color={"#F59E0B"}
-            style={{ marginRight: i === 4 ? 0 : 2 }}
-            accessibilityLabel={i < full ? "full star" : i === full && half ? "half star" : "empty star"}
-            accessible
-          />
-        );
-      })}
-    </View>
-  );
-}
-
+/* -------------------------------- UI bits -------------------------------- */
 function PrimaryButton({
   label,
   onPress,
@@ -180,31 +126,56 @@ function PrimaryButton({
   );
 }
 
-/* ----------------------- Bottom Sheet (match vulcanize layout) ---------------------- */
+/* Phone chips (tap = call, long-press = copy) */
+function PhoneChips({ phones, onCall }: { phones?: string[]; onCall: (phone: string) => void }) {
+  if (!phones || phones.length === 0) {
+    return <Text className="text-[12px] text-slate-500">No contact numbers available</Text>;
+  }
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 8 }}>
+      {phones.map((p, idx) => (
+        <Pressable
+          key={`${p}-${idx}`}
+          onPress={() => onCall(p)}
+          onLongPress={() => Clipboard.setStringAsync(p)}
+          android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 999,
+            backgroundColor: "#F8FAFC",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            marginRight: 8,
+            marginBottom: 8,
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`Call ${p}`}
+        >
+          <Text className="text-[12px] text-slate-800">{p}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+/* ----------------------- Bottom Sheet (no Call button) ---------------------- */
 function QuickActions({
   visible,
   onClose,
   station,
   onOpenMaps,
-  onCall,
 }: {
   visible: boolean;
   onClose: () => void;
   station?: Station | null;
   onOpenMaps: (s: Station) => void;
-  onCall: (s: Station) => void;
 }) {
   const insets = useSafeAreaInsets();
   if (!station) return null;
 
   return (
-    <Modal
-      transparent
-      statusBarTranslucent
-      animationType="fade"
-      visible={visible}
-      onRequestClose={onClose}
-    >
+    <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
         <View
@@ -240,19 +211,10 @@ function QuickActions({
               )}
             </View>
             <View className="flex-1">
-              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
-                {station.name}
-              </Text>
-              <Text className="text-[12px] text-slate-500" numberOfLines={1}>
-                {station.address1}
-              </Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{station.name}</Text>
+              <Text className="text-[12px] text-slate-500" numberOfLines={1}>{station.address1}</Text>
             </View>
-            <Pressable
-              onPress={onClose}
-              hitSlop={10}
-              className="h-9 w-9 items-center justify-center rounded-xl"
-              accessibilityLabel="Close quick actions"
-            >
+            <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close quick actions">
               <Ionicons name="close" size={20} color={COLORS.text} />
             </Pressable>
           </View>
@@ -260,23 +222,7 @@ function QuickActions({
           <View className="h-[1px] bg-slate-200" />
 
           <View className="mt-3 gap-3">
-            <PrimaryButton
-              label="Location"
-              icon="navigate-outline"
-              onPress={() => {
-                onOpenMaps(station);
-                onClose();
-              }}
-            />
-            <PrimaryButton
-              label="Call Station"
-              variant="secondary"
-              icon="call-outline"
-              onPress={() => {
-                onCall(station);
-                onClose();
-              }}
-            />
+            <PrimaryButton label="Location" icon="navigate-outline" onPress={() => { onOpenMaps(station); onClose(); }} />
             <PrimaryButton
               label={station.plusCode ? `Copy Plus Code (${station.plusCode})` : "Copy Address"}
               variant="secondary"
@@ -290,17 +236,13 @@ function QuickActions({
           </View>
         </View>
 
-        {/* pad safe-area bottom */}
-        <View
-          pointerEvents="none"
-          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }}
-        />
+        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }} />
       </View>
     </Modal>
   );
 }
 
-/* ------------------------------- Details Modal (match vulcanize) ------------------------------ */
+/* ------------------------------- Details Modal ------------------------------ */
 function DetailsModal({
   visible,
   station,
@@ -312,16 +254,12 @@ function DetailsModal({
   station: Station | null;
   onClose: () => void;
   onOpenMaps: (s: Station) => void;
-  onCall: (s: Station) => void;
+  onCall: (phone: string) => void;
 }) {
   if (!station) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable
-        className="flex-1"
-        style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }}
-        onPress={onClose}
-      >
+      <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
             {/* Header */}
@@ -338,9 +276,7 @@ function DetailsModal({
 
               <View className="flex-1">
                 <View className="flex-row items-start justify-between">
-                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>
-                    {station.name}
-                  </Text>
+                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>{station.name}</Text>
                   <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
                     <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{station.category}</Text>
                   </View>
@@ -348,36 +284,21 @@ function DetailsModal({
               </View>
             </View>
 
-            {/* Address FIRST */}
+            {/* Address */}
             <View className="mt-3 gap-1">
               <Text className="text-[13px] text-slate-700">{station.address1}</Text>
               {station.address2 ? <Text className="text-[12px] text-slate-500">{station.address2}</Text> : null}
             </View>
 
-            {/* Divider */}
             <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 12, marginHorizontal: 8 }} />
 
-            {/* Ratings / distance */}
-            <View className="mt-2 flex-row items-center gap-2">
-              <Stars rating={station.rating ?? 0} />
-              <Text className="text-[12px] text-slate-500">{(station.rating ?? 0).toFixed(1)}</Text>
-              {typeof station.distanceKm === "number" && (
-                <>
-                  <Text className="text-slate-300">•</Text>
-                  <Text className="text-[12px] text-slate-500">{station.distanceKm.toFixed(1)} km away</Text>
-                </>
-              )}
-            </View>
+            {/* Contact numbers */}
+            <Text className="mt-3 text-[12px] font-semibold text-slate-700">Contact numbers</Text>
+            <PhoneChips phones={station.phones} onCall={onCall} />
 
             {/* Actions */}
-            <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1">
-                <PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(station)} />
-              </View>
-              <View style={{ width: 10 }} />
-              <View className="flex-1">
-                <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(station)} />
-              </View>
+            <View className="mt-4">
+              <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(station)} />
             </View>
           </View>
         </Pressable>
@@ -386,17 +307,17 @@ function DetailsModal({
   );
 }
 
-/* --------------------------------- Card (1:1 with vulcanize) ---------------------------------- */
+/* --------------------------------- Card ---------------------------------- */
 function StationCard({
   station,
   onLocation,
-  onCall,
   onPressCard,
+  onCall,
 }: {
   station: Station;
   onLocation: (s: Station) => void;
-  onCall: (s: Station) => void;
   onPressCard: (s: Station) => void;
+  onCall: (phone: string) => void;
 }) {
   return (
     <Pressable
@@ -408,7 +329,6 @@ function StationCard({
     >
       {/* Header row with avatar + title/badge */}
       <View className="flex-row items-start gap-3">
-        {/* Circular image — 56x56 */}
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
           {station.avatar ? (
             <RNImage source={{ uri: station.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
@@ -420,7 +340,6 @@ function StationCard({
         </View>
 
         <View className="flex-1">
-          {/* Title row: 16px (not bold), badge self-start */}
           <View className="flex-row items-start justify-between">
             <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>
               {station.name}
@@ -432,12 +351,11 @@ function StationCard({
         </View>
       </View>
 
-      {/* Divider under header */}
+      {/* Divider */}
       <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
 
-      {/* Body aligned with text column */}
+      {/* Body */}
       <View style={{ paddingTop: 8, paddingLeft: 68 }}>
-        {/* Address */}
         <Text className="text-[13px] text-slate-700" numberOfLines={2}>
           {station.address1}
         </Text>
@@ -447,25 +365,13 @@ function StationCard({
           </Text>
         ) : null}
 
-        {/* Ratings / distance */}
-        <View className="mt-2 flex-row items-center gap-2">
-          <Stars rating={station.rating ?? 0} />
-          <Text className="text-[12px] text-slate-500">{(station.rating ?? 0).toFixed(1)}</Text>
-          {typeof station.distanceKm === "number" && (
-            <>
-              <Text className="text-slate-300">•</Text>
-              <Text className="text-[12px] text-slate-500">{station.distanceKm.toFixed(1)} km</Text>
-            </>
-          )}
-        </View>
+        {/* Contact numbers */}
+        <PhoneChips phones={station.phones} onCall={onCall} />
 
-        {/* Actions — Call (secondary) left, Location (primary) right */}
+        {/* Location button */}
         <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1">
-            <PrimaryButton label="Call" icon="call-outline" variant="secondary" onPress={() => onCall(station)} />
-          </View>
-          <View style={{ width: 12 }} />
-          <View className="flex-1">
+          <View style={{ flex: 1 }} />
+          <View style={{ width: 140 }}>
             <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(station)} />
           </View>
         </View>
@@ -474,7 +380,7 @@ function StationCard({
   );
 }
 
-/* --------------------------------- Screen (vulcanize-style header/search + divider) --------------------------------- */
+/* --------------------------------- Screen --------------------------------- */
 export default function PoliceScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -482,41 +388,85 @@ export default function PoliceScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
-
-  // Inline header search toggle (same as vulcanize)
   const [searchOpen, setSearchOpen] = useState(false);
+
+  const [stations, setStations] = useState<Station[]>([]);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
+  // Fetch police stations from Supabase (phones as array)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("places")
+        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones")
+        .eq("category", "police_station")
+        .order("name", { ascending: true });
+
+      if (error) {
+        console.warn("places fetch error:", error.message);
+        if (!cancelled) setStations([]);
+        return;
+      }
+
+      const mapped: Station[] = (data ?? []).map((p: PlaceRow) => {
+        const lat = p.latitude != null ? Number(p.latitude) : undefined;
+        const lng = p.longitude != null ? Number(p.longitude) : undefined;
+        return {
+          id: p.place_id,
+          name: p.name ?? "Unnamed Police Station",
+          category: "police", // normalize
+          address1: p.address ?? "",
+          plusCode: p.plus_code ?? undefined,
+          lat: Number.isFinite(lat) ? (lat as number) : undefined,
+          lng: Number.isFinite(lng) ? (lng as number) : undefined,
+          maps_link: p.maps_link ?? undefined,
+          phones: p.phones ?? undefined,
+        };
+      });
+
+      if (!cancelled) setStations(mapped);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return MOCK.filter((s) => {
-      const byFilter = filters.length === 0 || filters.includes(s.category);
-      const byText =
-        q.length === 0 ||
-        s.name.toLowerCase().includes(q) ||
-        s.address1.toLowerCase().includes(q) ||
-        (s.address2 ?? "").toLowerCase().includes(q) ||
-        (s.plusCode ?? "").toLowerCase().includes(q);
-      return byFilter && byText;
-    }).sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
-  }, [filters, query]);
+    return stations
+      .filter((s) => {
+        const byFilter = filters.length === 0 || filters.includes(s.category);
+        const byText =
+          q.length === 0 ||
+          s.name.toLowerCase().includes(q) ||
+          s.address1.toLowerCase().includes(q) ||
+          (s.plusCode ?? "").toLowerCase().includes(q) ||
+          (s.phones ?? []).some((ph) => ph.toLowerCase().includes(q));
+        return byFilter && byText;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [filters, query, stations]);
 
   const openMaps = (s: Station) => {
+    if (s.maps_link) {
+      Linking.openURL(s.maps_link).catch(() => {});
+      return;
+    }
     if (s.lat && s.lng) {
-      const url = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
-      Linking.openURL(url).catch(() => {});
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
     } else if (s.address1) {
-      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`;
-      Linking.openURL(url).catch(() => {});
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
     }
   };
 
-  const callStation = (s: Station) => {
-    if (!s.phone) return;
-    const telUrl = `tel:${s.phone}`;
-    Linking.openURL(telUrl).catch(() => {});
+  const callNumber = (raw: string) => {
+    if (!raw) return;
+    const num = raw.replace(/[^\d+]/g, ""); // keep digits and '+'
+    if (!num) return;
+    Linking.openURL(`tel:${num}`).catch(() => {});
   };
 
   const openActions = (s: Station) => {
@@ -533,14 +483,14 @@ export default function PoliceScreen() {
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
       <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.bg }}>
-        {/* Header is relative so title can be absolutely centered */}
+        {/* Header with search toggle */}
         <View className="relative px-4 py-3">
           <View className="flex-row items-center justify-between">
             {/* Back button with safe fallback */}
             <Pressable
               onPress={() => {
                 try {
-                  // @ts-ignore expo-router may expose canGoBack
+                  // @ts-ignore
                   if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
                   else router.replace("/");
                 } catch {
@@ -554,7 +504,6 @@ export default function PoliceScreen() {
               <Ionicons name="arrow-back" size={22} color={COLORS.text} />
             </Pressable>
 
-            {/* Right side: search icon OR expanded search input (same row) */}
             {!searchOpen ? (
               <Pressable
                 onPress={() => setSearchOpen(true)}
@@ -565,7 +514,6 @@ export default function PoliceScreen() {
                 <Ionicons name="search" size={20} color={COLORS.text} />
               </Pressable>
             ) : (
-              // wrapper fills from after the back button to the right edge
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <View
                   className="flex-row items-center rounded-2xl bg-white px-3 py-1"
@@ -574,7 +522,7 @@ export default function PoliceScreen() {
                       borderColor: COLORS.border,
                       borderWidth: 1,
                       width: "100%",
-                      minWidth: 0, // iOS flexbox quirk
+                      minWidth: 0,
                     },
                     panelShadow,
                   ]}
@@ -583,7 +531,7 @@ export default function PoliceScreen() {
                   <TextInput
                     value={query}
                     onChangeText={setQuery}
-                    placeholder="Search by name, address, plus code…"
+                    placeholder="Search by name, address, plus code, phone…"
                     placeholderTextColor={COLORS.muted}
                     className="flex-1 px-2 py-2 text-[15px] text-slate-900"
                     autoCapitalize="none"
@@ -591,20 +539,11 @@ export default function PoliceScreen() {
                     autoFocus
                   />
                   {query.length > 0 && (
-                    <Pressable
-                      onPress={() => setQuery("")}
-                      hitSlop={8}
-                      accessibilityLabel="Clear search"
-                    >
+                    <Pressable onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Clear search">
                       <Ionicons name="close-circle" size={18} color={COLORS.muted} />
                     </Pressable>
                   )}
-                  <Pressable
-                    onPress={() => setSearchOpen(false)}
-                    hitSlop={8}
-                    accessibilityLabel="Close search"
-                    style={{ marginLeft: 6 }}
-                  >
+                  <Pressable onPress={() => setSearchOpen(false)} hitSlop={8} accessibilityLabel="Close search" style={{ marginLeft: 6 }}>
                     <Ionicons name="close" size={18} color={COLORS.text} />
                   </Pressable>
                 </View>
@@ -612,28 +551,17 @@ export default function PoliceScreen() {
             )}
           </View>
 
-          {/* Absolutely centered title; does NOT intercept touches */}
           {!searchOpen && (
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                top: 12,
-                alignItems: "center",
-              }}
-            >
+            <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, top: 12, alignItems: "center" }}>
               <Text className="text-xl font-bold text-[#0F172A]">Police Stations</Text>
             </View>
           )}
         </View>
 
-        {/* Full-width divider under the header */}
         <View style={{ height: 1, backgroundColor: COLORS.border }} />
       </SafeAreaView>
 
-      {/* Filter chips (same spacing/gap as vulcanize) */}
+      {/* Filter chips */}
       <FilterChips
         items={FILTERS}
         selected={filters}
@@ -654,8 +582,8 @@ export default function PoliceScreen() {
           <StationCard
             station={item}
             onLocation={openMaps}
-            onCall={callStation}
-            onPressCard={openActions} // tap card => quick actions (bottom sheet)
+            onPressCard={openActions}
+            onCall={callNumber}
           />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
@@ -667,23 +595,11 @@ export default function PoliceScreen() {
         }
       />
 
-      {/* Bottom sheet */}
-      <QuickActions
-        visible={sheetOpen}
-        onClose={closeActions}
-        station={selectedStation}
-        onOpenMaps={openMaps}
-        onCall={callStation}
-      />
+      {/* Bottom sheet (no call) */}
+      <QuickActions visible={sheetOpen} onClose={closeActions} station={selectedStation} onOpenMaps={openMaps} />
 
-      {/* Details modal */}
-      <DetailsModal
-        visible={detailsOpen}
-        station={selectedStation}
-        onClose={closeDetails}
-        onOpenMaps={openMaps}
-        onCall={callStation}
-      />
+      {/* Details modal (shows phone chips) */}
+      <DetailsModal visible={detailsOpen} station={selectedStation} onClose={closeDetails} onOpenMaps={openMaps} onCall={callNumber} />
     </View>
   );
 }

@@ -16,7 +16,6 @@ import * as Location from "expo-location";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import FilterChips, { type FilterItem } from "../../components/FilterChips";
 import { supabase } from "../../utils/supabase";
 
 /* ------------------------------ Design tokens ------------------------------ */
@@ -55,6 +54,7 @@ type PlaceRow = {
   latitude: string | number | null;   // numeric comes as string in JS
   longitude: string | number | null;
   maps_link: string | null;
+  profile_pic: string | null;         // 👈 image url
 };
 
 type Shop = {
@@ -63,18 +63,13 @@ type Shop = {
   category: "gas_station";
   address1: string;
   plusCode?: string;
-  avatar?: string;
+  avatar?: string;        // 👈 from profile_pic
   rating?: number;
   lat?: number;
   lng?: number;
   distanceKm?: number;
   maps_link?: string;
 };
-
-/* --------------------------------- Filters -------------------------------- */
-const FILTERS: FilterItem[] = [
-  { key: "gas_station", icon: "flash-outline", label: "Gas" },
-];
 
 /* --------------------------------- Small UI -------------------------------- */
 function Stars({ rating = 0 }: { rating?: number }) {
@@ -115,8 +110,8 @@ function PrimaryButton({
 
 /* ----------------------- Bottom Sheet ---------------------- */
 function QuickActions({
-  visible, onClose, shop, onOpenMaps, onMessage,
-}: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
+  visible, onClose, shop, onOpenMaps,
+}: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; }) {
   const insets = useSafeAreaInsets();
   if (!shop) return null;
 
@@ -138,8 +133,13 @@ function QuickActions({
 
           <View className="flex-row items-center gap-3 pb-3">
             <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-              {shop?.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} /> :
-                <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={20} color="#475569" /></View>}
+              {shop?.avatar ? (
+                <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
+              ) : (
+                <View className="h-full w-full items-center justify-center">
+                  <Ionicons name="storefront-outline" size={20} color="#475569" />
+                </View>
+              )}
             </View>
             <View className="flex-1">
               <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{shop?.name}</Text>
@@ -154,7 +154,6 @@ function QuickActions({
 
           <View className="mt-3 gap-3">
             <PrimaryButton label="Location" icon="navigate-outline" onPress={() => { if (shop) onOpenMaps(shop); onClose(); }} />
-            <PrimaryButton label="Message Station" variant="secondary" icon="chatbubble-ellipses-outline" onPress={() => { if (shop) onMessage(shop); onClose(); }} />
             <PrimaryButton
               label={shop?.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"}
               variant="secondary"
@@ -172,8 +171,8 @@ function QuickActions({
 
 /* ------------------------------- Details Modal ------------------------------ */
 function DetailsModal({
-  visible, shop, onClose, onOpenMaps, onMessage,
-}: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
+  visible, shop, onClose, onOpenMaps,
+}: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; }) {
   if (!shop) return null;
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
@@ -182,8 +181,13 @@ function DetailsModal({
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
             <View className="flex-row items-start gap-3">
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-                {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} /> :
-                  <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={22} color="#475569" /></View>}
+                {shop.avatar ? (
+                  <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
+                ) : (
+                  <View className="h-full w-full items-center justify-center">
+                    <Ionicons name="storefront-outline" size={22} color="#475569" />
+                  </View>
+                )}
               </View>
 
               <View className="flex-1">
@@ -208,10 +212,9 @@ function DetailsModal({
               {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text></>)}
             </View>
 
-            <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1"><PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} /></View>
-              <View style={{ width: 10 }} />
-              <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} /></View>
+            {/* Single action: Location */}
+            <View className="mt-4">
+              <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
             </View>
           </View>
         </Pressable>
@@ -233,8 +236,8 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
 
 /* --------------------------------- Card ---------------------------------- */
 function ShopCard({
-  shop, onLocation, onMessage, onPressCard, isNearest = false,
-}: { shop: Shop; onLocation: (s: Shop) => void; onMessage: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
+  shop, onLocation, onPressCard, isNearest = false,
+}: { shop: Shop; onLocation: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
   return (
     <Pressable
       onPress={() => onPressCard(shop)}
@@ -245,8 +248,13 @@ function ShopCard({
     >
       <View className="flex-row items-start gap-3">
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-          {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> :
-            <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={22} color="#475569" /></View>}
+          {shop.avatar ? (
+            <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+          ) : (
+            <View className="h-full w-full items-center justify-center">
+              <Ionicons name="storefront-outline" size={22} color="#475569" />
+            </View>
+          )}
         </View>
 
         <View className="flex-1">
@@ -275,10 +283,9 @@ function ShopCard({
           <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
           {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text></>)}
         </View>
-        <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1"><PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} /></View>
-          <View style={{ width: 12 }} />
-          <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} /></View>
+
+        <View className="mt-3">
+          <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
         </View>
       </View>
     </Pressable>
@@ -289,7 +296,6 @@ function ShopCard({
 export default function GasStationScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<string[]>(["gas_station"]);
 
   const [shops, setShops] = useState<Shop[]>([]);
   const [nearest, setNearest] = useState<Shop | null>(null);
@@ -301,15 +307,9 @@ export default function GasStationScreen() {
 
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const toggleFilter = (k: string) =>
-    setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
-
   // open maps (prefer DB maps_link if present)
   const openMaps = (s: Shop) => {
-    if (s.maps_link) {
-      Linking.openURL(s.maps_link).catch(() => {});
-      return;
-    }
+    if (s.maps_link) { Linking.openURL(s.maps_link).catch(() => {}); return; }
     if (s.lat && s.lng) {
       Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
     } else if (s.address1) {
@@ -317,24 +317,22 @@ export default function GasStationScreen() {
     }
   };
 
-  const goChat = (_s: Shop) => { /* router.push(`/chat/${s.id}`) */ };
-
   const openActions = useCallback((s: Shop) => { setSelectedShop(s); setSheetOpen(true); }, []);
   const closeActions = () => setSheetOpen(false);
   const openDetails = (s: Shop) => { setSelectedShop(s); setDetailsOpen(true); };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch gas stations
+  // fetch gas stations (include profile_pic)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("places")
-        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link")
+        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, profile_pic")
         .eq("category", "gas_station")
         .order("name", { ascending: true });
 
-    if (error) {
+      if (error) {
         console.warn("places fetch error:", error.message);
         if (!cancelled) setShops([]);
         return;
@@ -353,6 +351,7 @@ export default function GasStationScreen() {
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
           maps_link: p.maps_link ?? undefined,
+          avatar: p.profile_pic ?? undefined, // 👈 map image
         };
       });
 
@@ -399,17 +398,20 @@ export default function GasStationScreen() {
     return () => { cancelled = true; };
   }, [shops.length]);
 
-  // filtered + sorted
+  // text search + distance sort
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
     return shops
       .filter((s) => {
-        const byFilter = filters.length === 0 || filters.includes(s.category);
-        const byText = !q || s.name.toLowerCase().includes(q) || s.address1.toLowerCase().includes(q) || (s.plusCode ?? "").toLowerCase().includes(q);
-        return byFilter && byText;
+        const byText =
+          !q ||
+          s.name.toLowerCase().includes(q) ||
+          s.address1.toLowerCase().includes(q) ||
+          (s.plusCode ?? "").toLowerCase().includes(q);
+        return byText;
       })
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
-  }, [filters, query, shops]);
+  }, [query, shops]);
 
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
@@ -493,17 +495,6 @@ export default function GasStationScreen() {
         </View>
       )}
 
-      {/* Filter chips */}
-      <FilterChips
-        items={FILTERS}
-        selected={filters}
-        onToggle={toggleFilter}
-        containerStyle={{ paddingHorizontal: 16, marginTop: 10 }}
-        gap={8}
-        horizontal
-        accessibilityLabel="Service filters"
-      />
-
       {/* List */}
       <FlatList
         data={data}
@@ -514,7 +505,6 @@ export default function GasStationScreen() {
           <ShopCard
             shop={item}
             onLocation={openMaps}
-            onMessage={goChat}
             onPressCard={(s) => { setSelectedShop(s); setSheetOpen(true); }}
             isNearest={nearest?.id === item.id}
           />
@@ -529,8 +519,8 @@ export default function GasStationScreen() {
       />
 
       {/* Bottom sheet + Details */}
-      <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} onMessage={goChat} />
-      <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} onMessage={goChat} />
+      <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} />
+      <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} />
     </View>
   );
 }

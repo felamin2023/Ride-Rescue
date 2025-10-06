@@ -48,13 +48,25 @@ const buttonShadow = Platform.select({
 type PlaceRow = {
   place_id: string;
   name: string | null;
-  category: "vulcanizing" | "repair_shop" | "gas_station" | (string & {});
+  category:
+    | "repair_shop"
+    | "vulcanizing"
+    | "gas_station"
+    | "vulcanizing_repair"
+    | "police_station"
+    | "hospital"
+    | "fire_station"
+    | "rescue_station"
+    | (string & {});
   address: string | null;
   plus_code: string | null;
   latitude: string | number | null;   // numeric comes as string
   longitude: string | number | null;  // numeric comes as string
   maps_link: string | null;
+  phones?: string[] | null;           // text[] in DB
+  service_for: string | null;         // "motorcycle" | "car" | "all_type"
 };
+
 type Shop = {
   id: string;
   name: string;
@@ -66,11 +78,15 @@ type Shop = {
   lat?: number;
   lng?: number;
   distanceKm?: number;
+  phones?: string[];
+  serviceFor?: "motorcycle" | "car" | "all_type" | (string & {});
 };
 
 /* --------------------------------- Small UI -------------------------------- */
 const FILTERS: FilterItem[] = [
-  { key: "vulcanizing", icon: "construct-outline", label: "Vulcanize" },
+  { key: "motorcycle", icon: "construct-outline", label: "Motorcycle only" },
+  { key: "car",        icon: "construct-outline", label: "Cars only" },
+  { key: "all_type",   icon: "construct-outline", label: "All Types" },
 ];
 
 function Stars({ rating = 0 }: { rating?: number }) {
@@ -109,6 +125,27 @@ function PrimaryButton({
   );
 }
 
+/* -------------------------- Phones (call + copy rows) -------------------------- */
+function PhoneRow({ n }: { n: string }) {
+  const dial = () => Linking.openURL(`tel:${n.replace(/\s+/g, "")}`).catch(() => {});
+  const copy = () => Clipboard.setStringAsync(n);
+  return (
+    <View
+      className="flex-row items-center justify-between rounded-xl border px-3 py-2"
+      style={{ borderColor: COLORS.border, marginTop: 6 }}
+    >
+      <Text className="text-[13px] text-slate-800" numberOfLines={1} style={{ flex: 1, marginRight: 8 }}>
+        {n}
+      </Text>
+      <Pressable onPress={copy} hitSlop={8} className="px-2 py-1 rounded-lg" accessibilityLabel="Copy phone">
+        <Ionicons name="copy-outline" size={16} color={COLORS.text} />
+      </Pressable>
+      <View style={{ width: 6 }} />
+      <PrimaryButton label="Call" icon="call-outline" onPress={dial} />
+    </View>
+  );
+}
+
 /* ----------------------- Bottom Sheet (QuickActions) ----------------------- */
 function QuickActions({
   visible, onClose, shop, onOpenMaps, onMessage,
@@ -121,9 +158,19 @@ function QuickActions({
         <Pressable style={{ flex: 1 }} onPress={onClose} />
         <View
           style={[
-            { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "#FFFFFF",
-              borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 16 + insets.bottom,
-              borderTopWidth: 1, borderColor: COLORS.border, },
+            {
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "#FFFFFF",
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              padding: 16,
+              paddingBottom: 16 + insets.bottom,
+              borderTopWidth: 1,
+              borderColor: COLORS.border,
+            },
             panelShadow,
           ]}
         >
@@ -132,12 +179,21 @@ function QuickActions({
           </View>
           <View className="flex-row items-center gap-3 pb-3">
             <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-              {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} /> :
-                <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={20} color="#475569" /></View>}
+              {shop.avatar ? (
+                <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
+              ) : (
+                <View className="h-full w-full items-center justify-center">
+                  <Ionicons name="storefront-outline" size={20} color="#475569" />
+                </View>
+              )}
             </View>
             <View className="flex-1">
-              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{shop.name}</Text>
-              <Text className="text-[12px] text-slate-500" numberOfLines={1}>{shop.address1}</Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
+                {shop.name}
+              </Text>
+              <Text className="text-[12px] text-slate-500" numberOfLines={1}>
+                {shop.address1}
+              </Text>
             </View>
             <Pressable onPress={onClose} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Close quick actions">
               <Ionicons name="close" size={20} color={COLORS.text} />
@@ -145,13 +201,47 @@ function QuickActions({
           </View>
           <View className="h-[1px] bg-slate-200" />
           <View className="mt-3 gap-3">
-            <PrimaryButton label="Location" icon="navigate-outline" onPress={() => { onOpenMaps(shop); onClose(); }} />
-            <PrimaryButton label="Message Shop" variant="secondary" icon="chatbubble-ellipses-outline" onPress={() => { onMessage(shop); onClose(); }} />
-            <PrimaryButton label={shop.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"} variant="secondary" icon="copy-outline"
-              onPress={() => { Clipboard.setStringAsync(shop.plusCode || shop.address1 || shop.name); onClose(); }} />
+            <PrimaryButton
+              label="Location"
+              icon="navigate-outline"
+              onPress={() => {
+                onOpenMaps(shop);
+                onClose();
+              }}
+            />
+            <PrimaryButton
+              label="Message Shop"
+              variant="secondary"
+              icon="chatbubble-ellipses-outline"
+              onPress={() => {
+                onMessage(shop);
+                onClose();
+              }}
+            />
+            <PrimaryButton
+              label={shop.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"}
+              variant="secondary"
+              icon="copy-outline"
+              onPress={() => {
+                Clipboard.setStringAsync(shop.plusCode || shop.address1 || shop.name);
+                onClose();
+              }}
+            />
+
+            {!!shop.phones?.length && (
+              <View style={{ marginTop: 4 }}>
+                <Text className="text-[12px] font-semibold text-slate-700">Phone Numbers</Text>
+                {shop.phones.map((n, i) => (
+                  <PhoneRow key={`${n}-${i}`} n={n} />
+                ))}
+              </View>
+            )}
           </View>
         </View>
-        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }} />
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: "#FFFFFF" }}
+        />
       </View>
     </Modal>
   );
@@ -169,12 +259,19 @@ function DetailsModal({
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
             <View className="flex-row items-start gap-3">
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-                {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} /> :
-                  <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={22} color="#475569" /></View>}
+                {shop.avatar ? (
+                  <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} />
+                ) : (
+                  <View className="h-full w-full items-center justify-center">
+                    <Ionicons name="storefront-outline" size={22} color="#475569" />
+                  </View>
+                )}
               </View>
               <View className="flex-1">
                 <View className="flex-row items-start justify-between">
-                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>{shop.name}</Text>
+                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>
+                    {shop.name}
+                  </Text>
                   <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
                     <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{shop.category}</Text>
                   </View>
@@ -188,12 +285,21 @@ function DetailsModal({
             <View className="mt-2 flex-row items-center gap-2">
               <Stars rating={shop.rating ?? 0} />
               <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
-              {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text></>)}
+              {typeof shop.distanceKm === "number" && (
+                <>
+                  <Text className="text-slate-300">•</Text>
+                  <Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text>
+                </>
+              )}
             </View>
             <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1"><PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} /></View>
+              <View className="flex-1">
+                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+              </View>
               <View style={{ width: 10 }} />
-              <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} /></View>
+              <View className="flex-1">
+                <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
+              </View>
             </View>
           </View>
         </Pressable>
@@ -227,37 +333,68 @@ function ShopCard({
     >
       <View className="flex-row items-start gap-3">
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-          {shop.avatar ? <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> :
-            <View className="h-full w-full items-center justify-center"><Ionicons name="storefront-outline" size={22} color="#475569" /></View>}
+          {shop.avatar ? (
+            <RNImage source={{ uri: shop.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+          ) : (
+            <View className="h-full w-full items-center justify-center">
+              <Ionicons name="storefront-outline" size={22} color="#475569" />
+            </View>
+          )}
         </View>
         <View className="flex-1">
           <View className="flex-row items-start justify-between">
-            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>{shop.name}</Text>
+            <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>
+              {shop.name}
+            </Text>
             <View className="ml-3 flex-row items-center gap-1 self-start">
               {isNearest && (
                 <View className="rounded-full bg-emerald-50 px-2 py-[2px]" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
-                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>NEAREST</Text>
+                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>
+                    NEAREST
+                  </Text>
                 </View>
               )}
               <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
                 <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{shop.category}</Text>
               </View>
+
+              {shop.serviceFor ? (
+                <View
+                  className="rounded-full px-2 py-[2px]"
+                  style={{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", marginLeft: 6 }}
+                >
+                  <Text className="text-[10px] font-semibold" style={{ color: "#047857" }}>
+                    {String(shop.serviceFor).replace("_", " ")}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
         </View>
       </View>
       <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
       <View style={{ paddingTop: 8, paddingLeft: 68 }}>
-        <Text className="text-[13px] text-slate-700" numberOfLines={2}>{shop.address1}</Text>
+        <Text className="text-[13px] text-slate-700" numberOfLines={2}>
+          {shop.address1}
+        </Text>
         <View className="mt-2 flex-row items-center gap-2">
           <Stars rating={shop.rating ?? 0} />
           <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
-          {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text></>)}
+          {typeof shop.distanceKm === "number" && (
+            <>
+              <Text className="text-slate-300">•</Text>
+              <Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text>
+            </>
+          )}
         </View>
         <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1"><PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} /></View>
+          <View className="flex-1">
+            <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+          </View>
           <View style={{ width: 12 }} />
-          <View className="flex-1"><PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} /></View>
+          <View className="flex-1">
+            <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
+          </View>
         </View>
       </View>
     </Pressable>
@@ -268,7 +405,9 @@ function ShopCard({
 export default function VulcanizeScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<string[]>(["vulcanizing"]);
+  // Single-select filter for service_for; [] means "no filter"
+  const [filters, setFilters] = useState<string[]>([]);
+
   const [shops, setShops] = useState<Shop[]>([]);
   const [nearest, setNearest] = useState<Shop | null>(null);
   const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
@@ -278,26 +417,48 @@ export default function VulcanizeScreen() {
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const toggleFilter = (k: string) => setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+  const toggleFilter = (k: string) => {
+    setFilters((prev) => (prev[0] === k ? [] : [k])); // single-select: tap again to clear
+  };
 
   const openMaps = (s: Shop) => {
-    if (s.lat && s.lng) Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
-    else if (s.address1) Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
+    const addr = s.plusCode || s.address1 || s.name;
+    if (s.lat && s.lng) {
+      const q = `${s.lat},${s.lng}`;
+      const android = `geo:${q}?q=${q}`;
+      const universal = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+      Linking.canOpenURL(android)
+        .then((ok) => Linking.openURL(ok ? android : universal))
+        .catch(() => {});
+    } else if (addr) {
+      const universal = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
+      Linking.openURL(universal).catch(() => {});
+    }
   };
-  const goChat = (_s: Shop) => { /* router.push(`/chat/${s.id}`) */ };
+  const goChat = (_s: Shop) => {
+    /* router.push(`/chat/${s.id}`) */
+  };
 
-  const openActions = useCallback((s: Shop) => { setSelectedShop(s); setSheetOpen(true); }, []);
+  const openActions = useCallback((s: Shop) => {
+    setSelectedShop(s);
+    setSheetOpen(true);
+  }, []);
   const closeActions = () => setSheetOpen(false);
-  const openDetails = (s: Shop) => { setSelectedShop(s); setDetailsOpen(true); };
+  const openDetails = (s: Shop) => {
+    setSelectedShop(s);
+    setDetailsOpen(true);
+  };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch vulcanizing places
+  // fetch vulcanizing places (+phones, +service_for)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("places")
-        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link")
+        .select(
+          "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for"
+        )
         .eq("category", "vulcanizing")
         .order("name", { ascending: true });
 
@@ -319,12 +480,16 @@ export default function VulcanizeScreen() {
           rating: 0,
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
+          phones: Array.isArray(p.phones) ? p.phones : [],
+          serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
         };
       });
 
       if (!cancelled) setShops(mapped);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // get user location, compute distances, determine nearest
@@ -333,7 +498,10 @@ export default function VulcanizeScreen() {
     async function locateAndMeasure() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") { if (!cancelled) setGotLocation("denied"); return; }
+        if (status !== "granted") {
+          if (!cancelled) setGotLocation("denied");
+          return;
+        }
 
         let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
         if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -362,16 +530,28 @@ export default function VulcanizeScreen() {
       }
     }
     if (shops.length) locateAndMeasure();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [shops.length]);
 
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const selected = filters[0] ?? null; // "motorcycle" | "car" | "all_type" | null
+
     return shops
       .filter((s) => {
-        const byFilter = filters.length === 0 || filters.includes(s.category);
-        const byText = !q || s.name.toLowerCase().includes(q) || s.address1.toLowerCase().includes(q) || (s.plusCode ?? "").toLowerCase().includes(q);
-        return byFilter && byText;
+        // text search
+        const byText =
+          !q ||
+          s.name.toLowerCase().includes(q) ||
+          s.address1.toLowerCase().includes(q) ||
+          (s.plusCode ?? "").toLowerCase().includes(q);
+
+        // service filter: strict equality. (If you want "motorcycle" to include "all_type", tell me and we’ll switch logic.)
+        const byService = !selected || (s.serviceFor ?? "").toLowerCase() === selected;
+
+        return byText && byService;
       })
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
   }, [filters, query, shops]);
@@ -387,7 +567,9 @@ export default function VulcanizeScreen() {
                   // @ts-ignore (expo-router)
                   if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
                   else router.replace("/");
-                } catch { router.replace("/"); }
+                } catch {
+                  router.replace("/");
+                }
               }}
               hitSlop={10}
               className="h-9 w-9 items-center justify-center rounded-xl"
@@ -402,7 +584,10 @@ export default function VulcanizeScreen() {
               </Pressable>
             ) : (
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <View className="flex-row items-center rounded-2xl bg-white px-3 py-1" style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, panelShadow]}>
+                <View
+                  className="flex-row items-center rounded-2xl bg-white px-3 py-1"
+                  style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, panelShadow]}
+                >
                   <Ionicons name="search" size={18} color={COLORS.muted} />
                   <TextInput
                     value={query}
@@ -437,25 +622,52 @@ export default function VulcanizeScreen() {
       </SafeAreaView>
 
       {gotLocation === "ok" && nearest && (
-        <View className="mx-4 mt-3 rounded-2xl" style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, panelShadow]}>
+        <View
+          className="mx-4 mt-3 rounded-2xl"
+          style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, panelShadow]}
+        >
           <View className="flex-row items-center justify-between">
             <View className="flex-1 pr-3">
-              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>Nearest to you</Text>
-              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{nearest.name}</Text>
-              {typeof nearest.distanceKm === "number" && <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>}
+              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>
+                Nearest to you
+              </Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
+                {nearest.name}
+              </Text>
+              {typeof nearest.distanceKm === "number" && (
+                <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>
+              )}
             </View>
-            <PrimaryButton label="View" variant="primary" icon="navigate-outline" onPress={() => { setSelectedShop(nearest); setSheetOpen(true); }} />
+            <PrimaryButton
+              label="View"
+              variant="primary"
+              icon="navigate-outline"
+              onPress={() => {
+                setSelectedShop(nearest);
+                setSheetOpen(true);
+              }}
+            />
           </View>
         </View>
       )}
 
       {(gotLocation === "denied" || gotLocation === "error") && (
         <View className="mx-4 mt-3 rounded-2xl bg-white p-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, panelShadow]}>
-          <Text className="text-[12px] text-slate-600">We couldn’t access your location. Showing vulcanizing shops without distance. Enable location in Settings to see what’s nearest.</Text>
+          <Text className="text-[12px] text-slate-600">
+            We couldn’t access your location. Showing vulcanizing shops without distance. Enable location in Settings to see what’s nearest.
+          </Text>
         </View>
       )}
 
-      <FilterChips items={FILTERS} selected={filters} onToggle={toggleFilter} containerStyle={{ paddingHorizontal: 16, marginTop: 10 }} gap={8} horizontal accessibilityLabel="Service filters" />
+      <FilterChips
+        items={FILTERS}
+        selected={filters}
+        onToggle={toggleFilter}
+        containerStyle={{ paddingHorizontal: 16, marginTop: 10 }}
+        gap={8}
+        horizontal
+        accessibilityLabel="Service filters"
+      />
 
       <FlatList
         data={data}
@@ -463,13 +675,7 @@ export default function VulcanizeScreen() {
         contentContainerStyle={{ paddingVertical: 10, paddingBottom: 24 }}
         keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => (
-          <ShopCard
-            shop={item}
-            onLocation={openMaps}
-            onMessage={goChat}
-            onPressCard={openActions}
-            isNearest={nearest?.id === item.id}
-          />
+          <ShopCard shop={item} onLocation={openMaps} onMessage={goChat} onPressCard={openActions} isNearest={nearest?.id === item.id} />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
         ListEmptyComponent={

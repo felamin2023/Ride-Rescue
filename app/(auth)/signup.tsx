@@ -1,3 +1,4 @@
+
 // app/(auth)/signup.tsx
 import { router } from "expo-router";
 import * as Crypto from "expo-crypto";
@@ -64,6 +65,13 @@ const SERVICES = [
   "Wheel Repair",
   "Vulcanizing/Tire Patching",
 ];
+
+// NEW: service_for choices shown to the user (maps to DB values)
+const SERVICE_FOR_CHOICES = [
+  { label: "All types of vehicles", value: "all_type" },
+  { label: "Motorcycles only", value: "motorcycle" },
+  { label: "Cars or four wheeled only", value: "car" },
+] as const;
 
 const DAY_LABELS = ["M", "T", "W", "Th", "F", "Sat", "Sun"];
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -402,6 +410,11 @@ export default function Signup() {
   >([]);
   const [shopListLoading, setShopListLoading] = useState(false);
   const [shopListError, setShopListError] = useState<string | null>(null);
+
+  // NEW: fields for unlisted shop
+  const [unlistedName, setUnlistedName] = useState(""); // Shop Name
+  const [serviceFor, setServiceFor] = useState<string | null>(null); // 'motorcycle' | 'car' | 'all_type'
+
   const [shopAddress, setShopAddress] = useState("");
 
   const [locationPromptShown, setLocationPromptShown] = useState(false);
@@ -409,6 +422,8 @@ export default function Signup() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
     null
   );
+  // NEW: hold plus code (optional; see note in requestLocation)
+  const [plusCode, setPlusCode] = useState<string | null>(null);
 
   const [sFullname, setSFullname] = useState("");
   const [sEmail, setSEmail] = useState("");
@@ -584,12 +599,25 @@ export default function Signup() {
     } catch {}
   };
 
+  // Helper to (optionally) compute Plus Code. You can swap this with a real
+  // OLC lib later (e.g., 'open-location-code' → encode(lat, lng)).
+  function tryComputePlusCode(lat: number, lng: number): string | null {
+    try {
+      // Lightweight fallback: leave null if you don't have a local OLC encoder.
+      // (Keeps the app stable; DB column can be NULL.)
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   const requestLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
       Alert.alert("Permission needed", "Location permission was denied.");
       setLocationEnabled(false);
       setCoords(null);
+      setPlusCode(null);
       return;
     }
     setLocationEnabled(true);
@@ -610,6 +638,9 @@ export default function Signup() {
         markTouchedS("shopAddress");
       }
     } catch {}
+
+    // NEW: attempt to compute plus code (optional)
+    setPlusCode(tryComputePlusCode(latitude, longitude));
   };
 
   const driverValid = useMemo(() => {
@@ -629,6 +660,8 @@ export default function Signup() {
     if (!shopName) e.shopName = "Select your shop.";
     if (shopName === "Shop not Listed") {
       if (!shopType) e.shopType = "Select a shop type.";
+      if (!hasMin(unlistedName, 2)) e.unlistedName = "Shop name is required.";
+      if (!serviceFor) e.serviceFor = "Select service coverage.";
       if (!locationEnabled)
         e.shopName = "Enable location to register 'Shop not Listed'.";
       if (!hasMin(shopAddress, 2)) e.shopAddress = "Shop address is required.";
@@ -658,6 +691,8 @@ export default function Signup() {
   }, [
     shopName,
     shopType,
+    unlistedName, // NEW
+    serviceFor, // NEW
     locationEnabled,
     sFullname,
     sEmail,
@@ -792,6 +827,20 @@ export default function Signup() {
     }
   };
 
+  // Helper to force sign out & route to login (extra robust)
+  const forceLogoutAndGoLogin = async () => {
+    try {
+      // Global ensures refresh token is revoked; helpful if another listener auto-restores.
+      await supabase.auth.signOut({ scope: "global" as any });
+    } catch {}
+    try {
+      await supabase.auth.signOut(); // local fallback
+    } catch {}
+    // Small delay to let any auth listeners settle before navigation
+    await new Promise((r) => setTimeout(r, 150));
+    router.replace("/login");
+  };
+
   const submitShop = async () => {
     if (!shopValid) return;
 
@@ -896,19 +945,29 @@ export default function Signup() {
         // Create a new place first (without owner yet), then use its place_id
         const lat = coords?.lat ?? null;
         const lng = coords?.lng ?? null;
+
+        // Map UI labels → DB category. NOTE:
+        // - If your CHECK allows 'repair_shop', keep it.
+        // - If you change to 'repair', swap the mapping below accordingly.
+        const category =
+          shopType === "Repair and Vulcanizing"
+            ? "vulcanizing_repair"
+            : shopType === "Vulcanizing only"
+            ? "vulcanizing"
+            : "repair_shop"; // "Repair only"
+
         const newPlacePayload: any = {
-          name: null,
-          category: shopType
-            ? shopType.includes("Vulcanizing")
-              ? "vulcanizing"
-              : "repair_shop"
-            : null,
+          name: unlistedName.trim() || null,            // NEW
+          category,                                     // mapped from shopType
+          service_for: serviceFor || null,              // NEW
           address: shopAddress || null,
-          plus_code: null,
+          plus_code: plusCode || null,                  // NEW (optional if null)
           latitude: lat,
           longitude: lng,
           maps_link:
-            lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null,
+            lat && lng
+              ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+              : null,
           owner: null, // set after we know the shop_id
         };
 
@@ -955,13 +1014,12 @@ export default function Signup() {
         if (updPlaceErr) throw updPlaceErr;
       }
 
-      // 6) Do NOT auto-login. Sign out and return to Login.
-      await supabase.auth.signOut().catch(() => {});
+      // 6) Do NOT auto-login. Force sign-out and return to Login.
       Alert.alert(
         "Submitted!",
         "Your shop owner account was created and is pending admin verification. You can log in once approved."
       );
-      router.replace("/login");
+      await forceLogoutAndGoLogin();
       return;
     } catch (err: any) {
       if (
@@ -1002,7 +1060,7 @@ export default function Signup() {
       ).toLowerCase();
       const base = sanitizeFileName(f.name || `file_${i}.${ext}`);
 
-      const path = `shop/${userId}/${Date.now()}_${i}_${base}`;
+    const path = `shop/${userId}/${Date.now()}_${i}_${base}`;
       const fileToUpload: any = {
         uri: f.uri,
         name: base,
@@ -1045,7 +1103,8 @@ export default function Signup() {
       >
         {/* Brand header (centered) */}
         <View className="items-center mb-2">
-          <RNImage className="h-16 w-16 mb-2" resizeMode="contain" />
+          {/* NOTE: Add a source to avoid RN warning (optional) */}
+          {/* <RNImage source={require("../../assets/icon.png")} className="h-16 w-16 mb-2" resizeMode="contain" /> */}
           <Text className="text-3xl font-extrabold text-[#0F2547]">
             Create your account
           </Text>
@@ -1391,10 +1450,14 @@ export default function Signup() {
                   if (v === "Shop not Listed") {
                     setAskLocation(true);
                   } else {
+                    // reset unlisted fields
                     setShopType(null);
+                    setUnlistedName("");
+                    setServiceFor(null);
                     setLocationPromptShown(false);
                     setLocationEnabled(false);
                     setCoords(null);
+                    setPlusCode(null);
                     setShopAddress("");
                   }
                 }}
@@ -1430,6 +1493,43 @@ export default function Signup() {
                     disabled={shopLocked}
                     error={touchedS.shopType ? errorsS.shopType : undefined}
                   />
+
+                  {/* NEW: Shop Name input */}
+                  <View className="mt-3">
+                    <FieldRow
+                      icon="business-outline"
+                      placeholder="Shop Name"
+                      value={unlistedName}
+                      onChangeText={(t) => {
+                        setUnlistedName(t);
+                        markTouchedS("unlistedName");
+                      }}
+                      editable={!shopLocked}
+                      error={
+                        touchedS.unlistedName ? errorsS.unlistedName : undefined
+                      }
+                      onBlur={() => markTouchedS("unlistedName")}
+                    />
+                  </View>
+
+                  {/* NEW: Service offered to */}
+                  <View className="mt-1.5">
+                    <Select
+                      label="Service offered to"
+                      value={serviceFor}
+                      placeholder="Select coverage"
+                      options={SERVICE_FOR_CHOICES as any}
+                      onSelect={(v) => {
+                        if (shopLocked) return;
+                        setServiceFor(v);
+                        markTouchedS("serviceFor");
+                      }}
+                      disabled={shopLocked}
+                      error={
+                        touchedS.serviceFor ? errorsS.serviceFor : undefined
+                      }
+                    />
+                  </View>
                 </View>
               )}
 
@@ -1444,7 +1544,9 @@ export default function Signup() {
                       {coords
                         ? `Lat ${coords.lat.toFixed(
                             5
-                          )}, Lng ${coords.lng.toFixed(5)}`
+                          )}, Lng ${coords.lng.toFixed(5)}${
+                            plusCode ? ` • Plus Code ${plusCode}` : ""
+                          }`
                         : "Your shop will be registered at your current address."}
                     </Text>
                   </View>
@@ -1453,6 +1555,7 @@ export default function Signup() {
                       if (locationEnabled) {
                         setLocationEnabled(false);
                         setCoords(null);
+                        setPlusCode(null);
                         setLocationPromptShown(false);
                         setShopAddress("");
                       } else {
@@ -1493,6 +1596,7 @@ export default function Signup() {
                   <Text className="ml-1 text-[11px] text-gray-500">
                     Based on Lat {coords?.lat.toFixed(5)}, Lng{" "}
                     {coords?.lng.toFixed(5)}
+                    {plusCode ? ` • Plus Code ${plusCode}` : ""}
                   </Text>
                 </View>
               )}
@@ -2210,7 +2314,6 @@ export default function Signup() {
           </View>
         </Pressable>
       </Modal>
-
       <LoadingScreen visible={loading} message="Creating your account..." />
     </View>
   );

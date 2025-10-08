@@ -78,7 +78,17 @@ type Shop = {
 const DAY_LABELS = ["M", "T", "W", "Th", "F", "Sat", "Sun"] as const;
 
 // ✅ Set this to your real Storage bucket for shop proofs
-const SHOP_CERT_BUCKET = "shop-certificates";
+const SHOP_CERT_BUCKET = "certificates";
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif|svg)$/i;
+function isImageUrl(u: string) {
+  const clean = (u || "").split("?")[0];      // ignore query string
+  return IMAGE_EXT_RE.test(clean);
+}
+function fileNameFromUrl(u: string) {
+  const clean = (u || "").split("?")[0];
+  return clean.substring(clean.lastIndexOf("/") + 1) || "file";
+}
 
 function categorize(option: string): BroadService {
   if (/battery/i.test(option)) return "Battery";
@@ -133,12 +143,12 @@ function parseProofs(raw?: string | null): string[] {
 function toPublicUrl(maybePath: string): string {
   const s = String(maybePath || "").trim();
   if (!s) return s;
-  if (/^https?:\/\//i.test(s)) return s;                                       // already a URL
-  if (s.includes("/storage/v1/object/public/")) return s;                       // already a public storage URL
-  // assume it's a storage path inside SHOP_CERT_BUCKET
+  if (/^https?:\/\//i.test(s)) return s;                             // already a full URL
+  if (s.includes("/storage/v1/object/public/")) return s;             // already a public storage URL
   const { data } = supabase.storage.from(SHOP_CERT_BUCKET).getPublicUrl(s);
-  return data?.publicUrl || s;
+  return data?.publicUrl || s;                                        // fallback: return original
 }
+
 
 // Fetch { owner(shop_id) -> { name, address } }
 async function fetchPlaceMapByOwner(shopIds: string[]) {
@@ -807,28 +817,42 @@ useEffect(() => {
                 </Text>
               </View>
 
-              {/* ✅ Business proofs — show images from certificate_url */}
+              {/* ✅ Business proofs — supports both full URLs and storage paths; images & PDFs */}
               <View>
                 <HLabel>Business proofs</HLabel>
                 {selected?.proofs?.length ? (
                   <View style={{ flexDirection: "row", flexWrap: "wrap" as any, gap: 10 }}>
                     {selected.proofs.map((p, idx) => {
                       const url = toPublicUrl(p);
+                      const isImg = isImageUrl(url);
+                      const name  = fileNameFromUrl(url);
+
+                      const open = () => {
+                        if (Platform.OS === "web") window.open(url, "_blank");
+                        else Linking.openURL(url).catch(() => {});
+                      };
+
                       return (
                         <Pressable
                           key={`${p}-${idx}`}
-                          onPress={() => {
-                            if (Platform.OS === "web") window.open(url, "_blank");
-                            else Linking.openURL(url).catch(() => {});
-                          }}
+                          onPress={open}
                           style={{ borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 12, overflow: "hidden" }}
                         >
-                          <Image
-                            source={{ uri: url }}
-                            style={{ width: 160, height: 120, backgroundColor: "#F1F5F9" }}
-                            onError={() => {}}
-                            resizeMode="cover"
-                          />
+                          {isImg ? (
+                            <Image
+                              source={{ uri: url }}
+                              style={{ width: 160, height: 120, backgroundColor: "#F1F5F9" }}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <View style={{ width: 160, height: 120, backgroundColor: "#F8FAFC", alignItems: "center", justifyContent: "center", padding: 10 }}>
+                              <Ionicons name="document-text-outline" size={28} color="#334155" />
+                              <Text numberOfLines={2} style={{ fontSize: 11, color: "#334155", marginTop: 6, textAlign: "center" }}>
+                                {name}
+                              </Text>
+                              <Text style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>Tap to open</Text>
+                            </View>
+                          )}
                         </Pressable>
                       );
                     })}
@@ -839,6 +863,7 @@ useEffect(() => {
                   <Text className="text-[13px] text-slate-700">—</Text>
                 )}
               </View>
+
             </ScrollView>
 
             <View className="h-[1px] bg-slate-100" />

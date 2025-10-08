@@ -1,4 +1,3 @@
-
 // app/(auth)/signup.tsx
 import { router } from "expo-router";
 import * as Crypto from "expo-crypto";
@@ -20,6 +19,8 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as Location from "expo-location";
+import * as FileSystem from "expo-file-system"; // ⬅️ NEW
+import { Buffer } from "buffer"; // ⬅️ NEW (fallback if atob is unavailable)
 import CheckboxRow from "../../components/CheckboxRow";
 import DayCheck from "../../components/DayCheck";
 import Section from "../../components/Section";
@@ -91,6 +92,56 @@ async function waitForSession(maxMs = 4000) {
     await new Promise((r) => setTimeout(r, 150));
   }
   return null;
+}
+
+/* -------------------- File helpers (match emergency flow) -------------------- */
+// Best-effort ext/mime guesser
+function guessExtAndMime(name?: string, mime?: string | null) {
+  const lower = (name ?? "").toLowerCase();
+  const extFromName = lower.split(".").pop() || "";
+  const cleanExt = extFromName.replace(/[^\w]+/g, "");
+
+  if (mime && mime.includes("/")) {
+    const mext = mime.split("/")[1]?.toLowerCase() || cleanExt || "bin";
+    return { ext: mext === "jpeg" ? "jpg" : mext, mime };
+  }
+
+  // derive from extension
+  const map: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+    bmp: "image/bmp",
+    heic: "image/heic",
+    heif: "image/heif",
+    pdf: "application/pdf",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  };
+  const ext = cleanExt || "jpg";
+  const m = map[ext] || "application/octet-stream";
+  return { ext: ext === "jpeg" ? "jpg" : ext, mime: m };
+}
+
+// Base64 → ArrayBuffer (works on Expo)
+// Tries atob first; falls back to Buffer if needed.
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  try {
+    // @ts-ignore
+    const bin = typeof atob === "function" ? atob(base64) : null;
+    if (bin != null) {
+      const len = bin.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes.buffer;
+    }
+    // eslint-disable-next-line no-empty
+  } catch {}
+  const buf = Buffer.from(base64, "base64");
+  // Slice to get a proper standalone ArrayBuffer view
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
 /* ------------------------- Reusable tiny components ------------------------- */
@@ -436,7 +487,7 @@ export default function Signup() {
   const [sPw, setSPw] = useState("");
   const [sCpw, setSCpw] = useState("");
 
-  type CertFile = { uri: string; name: string; mime: string | null };
+  type CertFile = { uri: string; name: string; mime: string | null; size?: number };
   const [certs, setCerts] = useState<CertFile[]>([]);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
@@ -931,8 +982,8 @@ export default function Signup() {
         .upsert([appUserRow], { onConflict: "user_id" });
       if (upsertUserErr) throw upsertUserErr;
 
-      // 2) Upload certificates
-      const { urls: certificateUrls, paths: certificatePaths } =
+      // 2) Upload certificates (EMERGENCY-STYLE)
+      const { urls: certificateUrls /*, paths: certificatePaths */ } =
         await uploadCertificatesAndGetUrls(authUserId, certs);
 
       // 3) Decide or create place_id BEFORE writing shop_details
@@ -946,9 +997,7 @@ export default function Signup() {
         const lat = coords?.lat ?? null;
         const lng = coords?.lng ?? null;
 
-        // Map UI labels → DB category. NOTE:
-        // - If your CHECK allows 'repair_shop', keep it.
-        // - If you change to 'repair', swap the mapping below accordingly.
+        // Map UI labels → DB category.
         const category =
           shopType === "Repair and Vulcanizing"
             ? "vulcanizing_repair"
@@ -957,11 +1006,11 @@ export default function Signup() {
             : "repair_shop"; // "Repair only"
 
         const newPlacePayload: any = {
-          name: unlistedName.trim() || null,            // NEW
-          category,                                     // mapped from shopType
-          service_for: serviceFor || null,              // NEW
+          name: unlistedName.trim() || null, // NEW
+          category, // mapped from shopType
+          service_for: serviceFor || null, // NEW
           address: shopAddress || null,
-          plus_code: plusCode || null,                  // NEW (optional if null)
+          plus_code: plusCode || null, // NEW (optional if null)
           latitude: lat,
           longitude: lng,
           maps_link:
@@ -989,7 +1038,7 @@ export default function Signup() {
             {
               user_id: authUserId,
               services: JSON.stringify(services),
-              certificate_url: JSON.stringify(certificatePaths),
+              certificate_url: JSON.stringify(certificateUrls), // <-- store full public URLs
               time_open: openTime,
               time_close: closeTime,
               days: JSON.stringify(days),
@@ -1045,6 +1094,7 @@ export default function Signup() {
 
   const sanitizeFileName = (name: string) => name.replace(/[^\w.-]+/g, "_");
 
+  // ⬇️ UPDATED: mirror emergency flow (Base64 -> ArrayBuffer -> Storage.upload -> Public URL)
   async function uploadCertificatesAndGetUrls(
     userId: string,
     files: Array<{ uri: string; name: string; mime: string | null }>
@@ -1052,36 +1102,44 @@ export default function Signup() {
     const urls: string[] = [];
     const paths: string[] = [];
 
+    // Group all selected proofs under one folder (e.g., to inspect easily in Storage)
+    const groupId = `grp_${Date.now()}`;
+
+    const bucket = supabase.storage.from("certificates");
+
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      const ext = (
-        f.name?.split(".").pop() ||
-        (f.mime?.split("/")[1] ?? "bin")
-      ).toLowerCase();
-      const base = sanitizeFileName(f.name || `file_${i}.${ext}`);
 
-    const path = `shop/${userId}/${Date.now()}_${i}_${base}`;
-      const fileToUpload: any = {
-        uri: f.uri,
-        name: base,
-        type: f.mime ?? "application/octet-stream",
-      };
+      const guessed = guessExtAndMime(f.name, f.mime);
+      const ext = sanitizeFileName(guessed.ext);
+      const contentType = guessed.mime;
 
-      const { error: upErr } = await supabase.storage
-        .from("certificates")
-        .upload(path, fileToUpload, {
-          contentType: fileToUpload.type,
-          upsert: false,
-        });
-      if (upErr)
+      const baseName = sanitizeFileName(
+        (f.name || `certificate_${i}.${ext}`).trim()
+      );
+
+      // Path pattern mirrors emergency style: certificates/shop/<userId>/<groupId>/cert-<ts>-<i>.<ext>
+      const ts = Date.now();
+      const path = `shop/${userId}/${groupId}/cert-${ts}-${i}.${ext}`;
+
+      // Read local file → Base64 → ArrayBuffer
+      const base64 = await FileSystem.readAsStringAsync(f.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = base64ToArrayBuffer(base64);
+
+      // Try direct upload (RN-compatible body)
+      const { error: upErr } = await bucket.upload(path, arrayBuffer, {
+        contentType,
+        upsert: true,
+      });
+      if (upErr) {
         throw new Error(`Failed to upload certificate: ${upErr.message}`);
+      }
 
-      const { data: signed, error: signErr } = await supabase.storage
-        .from("certificates")
-        .createSignedUrl(path, 60 * 60 * 24);
-      if (signErr) throw new Error(`Failed to sign URL: ${signErr.message}`);
-
-      urls.push(signed.signedUrl);
+      // Turn into public URL (since bucket is public)
+      const { data: pub } = await bucket.getPublicUrl(path);
+      urls.push(pub.publicUrl);
       paths.push(path);
     }
 

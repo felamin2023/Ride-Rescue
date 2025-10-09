@@ -83,6 +83,22 @@ const isPhone = (v: string) => /^[0-9+\-\s]{7,15}$/.test(v);
 const hasMin = (v: string, n: number) => v.trim().length >= n;
 const isTime = (v: string) => /^([01]\d|2[0-3]):([0-5]\d)$/.test(v);
 
+// ── Password policy (shared with Login) ──────────────────────────────────
+const PASSWORD_MIN = 8;
+const UPPER_RE = /[A-Z]/;
+const SPECIAL_RE = /[^A-Za-z0-9]/;
+/** Returns a human message if password is weak; otherwise null */
+function passwordIssue(pw: string): string | null {
+  if (!pw.trim()) return "Password is required.";
+  if (pw.length < PASSWORD_MIN)
+    return `Password must be at least ${PASSWORD_MIN} characters.`;
+  if (!UPPER_RE.test(pw))
+    return "Password must contain at least one uppercase letter.";
+  if (!SPECIAL_RE.test(pw))
+    return "Password must contain at least one special character.";
+  return null;
+}
+
 /* -------------------- Session helper (CRITICAL) -------------------- */
 async function waitForSession(maxMs = 4000) {
   const start = Date.now();
@@ -700,7 +716,10 @@ export default function Signup() {
     if (!isEmail(dEmail)) e.dEmail = "Enter a valid email.";
     if (!isPhone(dPhone)) e.dPhone = "Enter a valid phone (7–15 digits).";
     if (!hasMin(dAddress, 2)) e.dAddress = "Address is required.";
-    if (!hasMin(dPw, 6)) e.dPw = "Min 6 characters.";
+
+    const dPwIssue = passwordIssue(dPw);
+    if (dPwIssue) e.dPw = dPwIssue;
+
     if (dCpw !== dPw) e.dCpw = "Passwords do not match.";
     setErrorsD(e);
     return Object.keys(e).length === 0;
@@ -721,7 +740,10 @@ export default function Signup() {
     if (!isEmail(sEmail)) e.sEmail = "Enter a valid email.";
     if (!isPhone(sPhone)) e.sPhone = "Enter a valid phone (7–15 digits).";
     if (!hasMin(sAddress, 2)) e.sAddress = "Address is required.";
-    if (!hasMin(sPw, 6)) e.sPw = "Min 6 characters.";
+
+    const sPwIssue = passwordIssue(sPw);
+    if (sPwIssue) e.sPw = sPwIssue;
+
     if (sCpw !== sPw) e.sCpw = "Passwords do not match.";
     if (services.length === 0) e.services = "Pick at least 1 service.";
     if (days.length === 0) e.days = "Pick at least 1 operating day.";
@@ -742,8 +764,8 @@ export default function Signup() {
   }, [
     shopName,
     shopType,
-    unlistedName, // NEW
-    serviceFor, // NEW
+    unlistedName,
+    serviceFor,
     locationEnabled,
     sFullname,
     sEmail,
@@ -1435,7 +1457,7 @@ export default function Signup() {
               />
               <FieldRow
                 icon="lock-closed-outline"
-                placeholder="Password (min 6)"
+                placeholder="Password (min 8, 1 uppercase, 1 special)"
                 value={dPw}
                 onChangeText={(t) => {
                   setDPw(t);
@@ -2043,7 +2065,7 @@ export default function Signup() {
               </View>
               <FieldRow
                 icon="lock-closed-outline"
-                placeholder="Password (min 6)"
+                placeholder="Password (min 8, 1 uppercase, 1 special)"
                 value={sPw}
                 onChangeText={(t) => {
                   setSPw(t);

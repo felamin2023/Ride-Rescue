@@ -39,6 +39,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
+    "supabase": "^2.48.3",
     "typescript": "~5.8.3"
   },
   "private": true

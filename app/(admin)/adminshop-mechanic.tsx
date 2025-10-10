@@ -149,6 +149,37 @@ function toPublicUrl(maybePath: string): string {
   return data?.publicUrl || s;                                        // fallback: return original
 }
 
+// 🔔 Send the custom verified message via your Edge Function (uses Resend/Gmail/etc.)
+async function sendVerifiedNotice(to?: string, name?: string, shopName?: string) {
+  try {
+    if (!to) return;
+    await supabase.functions.invoke("notify-verified", {
+      body: {
+        to,
+        name: name || "there",
+        shopName: shopName || "your shop",
+      },
+    });
+  } catch (err) {
+    console.warn("[notify-verified] failed:", err);
+  }
+}
+
+// 🔑 Also trigger a brand-new OTP email from Supabase so the owner can log in
+// (uses your project's global Email OTP template; does not include shopName)
+async function sendLoginOtp(to?: string) {
+  try {
+    if (!to) return;
+    await supabase.auth.signInWithOtp({
+      email: to,
+      options: {
+        shouldCreateUser: false, // don't create if it somehow doesn't exist
+      },
+    });
+  } catch (err) {
+    console.warn("[sendLoginOtp] failed:", err);
+  }
+}
 
 // Fetch { owner(shop_id) -> { name, address } }
 async function fetchPlaceMapByOwner(shopIds: string[]) {
@@ -692,14 +723,24 @@ useEffect(() => {
                               cancelText: "Cancel",
                               icon: "checkmark-circle-outline",
                               onConfirm: async () => {
-                                setConfirmOpen(false);
-                                const ok = await updateVerification(s, true);
-                                if (ok) {
-                                  setShops(prev => prev.map(x => x.id === s.id ? { ...x, status: "Active" } : x));
-                                  setSuccessCfg({ title: "Approved", message: `${s.name || "Shop"} is now active.` });
-                                  setSuccessOpen(true);
-                                }
-                              },
+                              setConfirmOpen(false);
+                              const ok = await updateVerification(s, true);
+                              if (ok) {
+                                // update UI
+                                setShops(prev => prev.map(x => x.id === s.id ? { ...x, status: "Active" } : x));
+
+                                // ✅ send the custom message that includes the shop name
+                                //    (we already have the shop name as s.name from the places map)
+                                await sendVerifiedNotice(s.email, s.owner, s.name);
+
+                                // ✅ also send a new OTP so they can log in right away
+                                await sendLoginOtp(s.email);
+
+                                setSuccessCfg({ title: "Approved", message: `${s.name || "Shop"} is now active.` });
+                                setSuccessOpen(true);
+                              }
+                            }
+
                             })
                           }
                         />

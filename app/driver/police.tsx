@@ -13,6 +13,7 @@ import {
   Platform,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import * as Location from "expo-location";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -29,6 +30,7 @@ const COLORS = {
   muted: "#94A3B8",
   primary: "#2563EB",
   primaryDark: "#1D4ED8",
+  success: "#16A34A",
 };
 
 const cardShadow = Platform.select({
@@ -54,79 +56,27 @@ type PlaceRow = {
   latitude: string | number | null;
   longitude: string | number | null;
   maps_link: string | null;
-  phones: string[] | null; // text[] in DB
+  phones: string[] | null;
 };
 
 type Station = {
   id: string;
   name: string;
-  category: "police"; // normalize in-app
+  category: "police";
   address1: string;
-  address2?: string;
   plusCode?: string;
   avatar?: string;
   lat?: number;
   lng?: number;
   distanceKm?: number;
   maps_link?: string;
-  phones?: string[]; // array of numbers
+  phones?: string[];
 };
 
 /* --------------------------------- Filters -------------------------------- */
-const FILTERS: FilterItem[] = [
-  { key: "vulcanize", icon: "trail-sign-outline",  label: "Vulcanize" },
-  { key: "repair",    icon: "construct-outline",   label: "Repair" },
-  { key: "gas",       icon: "flash-outline",       label: "Gas" },
-  { key: "hospital",  icon: "medical-outline",     label: "Hospital" },
-  { key: "police",    icon: "shield-outline",      label: "Police" },
-  { key: "fire",      icon: "flame-outline",       label: "Fire Station" },
-  { key: "mdrrmo",    icon: "megaphone-outline",   label: "MDRRMO" },
-];
+const FILTERS: FilterItem[] = [{ key: "police", icon: "shield-outline", label: "Police" }];
 
-/* -------------------------------- UI bits -------------------------------- */
-function PrimaryButton({
-  label,
-  onPress,
-  variant = "primary",
-  icon,
-}: {
-  label: string;
-  onPress: () => void;
-  variant?: "primary" | "secondary";
-  icon?: any;
-}) {
-  const isPrimary = variant === "primary";
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.9}
-      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${isPrimary ? "" : "border"}`}
-      style={[
-        isPrimary
-          ? { backgroundColor: COLORS.primary }
-          : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
-        buttonShadow,
-      ]}
-      {...(Platform.OS === "android"
-        ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } }
-        : {})}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-    >
-      {icon ? (
-        <Ionicons
-          name={icon}
-          size={16}
-          color={isPrimary ? "#FFFFFF" : COLORS.text}
-          style={{ marginRight: 6 }}
-        />
-      ) : null}
-      <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-/* Phone chips (tap = call, long-press = copy) */
+/* ----------------------- Phone chips (tap to call, long-press copy) ---------------------- */
 function PhoneChips({ phones, onCall }: { phones?: string[]; onCall: (phone: string) => void }) {
   if (!phones || phones.length === 0) {
     return <Text className="text-[12px] text-slate-500">No contact numbers available</Text>;
@@ -156,6 +106,44 @@ function PhoneChips({ phones, onCall }: { phones?: string[]; onCall: (phone: str
         </Pressable>
       ))}
     </View>
+  );
+}
+
+/* -------------------------------- Buttons -------------------------------- */
+function PrimaryButton({
+  label,
+  onPress,
+  variant = "primary",
+  icon,
+}: {
+  label: string;
+  onPress: () => void;
+  variant?: "primary" | "secondary";
+  icon?: keyof typeof Ionicons.glyphMap;
+}) {
+  const isPrimary = variant === "primary";
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.9}
+      className={`flex-row items-center justify-center rounded-full px-4 py-2 ${isPrimary ? "" : "border"}`}
+      style={[
+        isPrimary
+          ? { backgroundColor: COLORS.primary }
+          : { backgroundColor: "#FFFFFF", borderColor: COLORS.border },
+        buttonShadow,
+      ]}
+      {...(Platform.OS === "android"
+        ? { android_ripple: { color: "rgba(0,0,0,0.06)", borderless: false } }
+        : {})}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      {icon ? (
+        <Ionicons name={icon} size={16} color={isPrimary ? "#FFFFFF" : COLORS.text} style={{ marginRight: 6 }} />
+      ) : null}
+      <Text className={`text-[13px] font-semibold ${isPrimary ? "text-white" : "text-slate-800"}`}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -228,8 +216,7 @@ function QuickActions({
               variant="secondary"
               icon="copy-outline"
               onPress={() => {
-                const text = station.plusCode || station.address1 || station.name;
-                Clipboard.setStringAsync(text);
+                Clipboard.setStringAsync(station.plusCode || station.address1 || station.name);
                 onClose();
               }}
             />
@@ -262,7 +249,6 @@ function DetailsModal({
       <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
-            {/* Header */}
             <View className="flex-row items-start gap-3">
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
                 {station.avatar ? (
@@ -284,19 +270,15 @@ function DetailsModal({
               </View>
             </View>
 
-            {/* Address */}
             <View className="mt-3 gap-1">
               <Text className="text-[13px] text-slate-700">{station.address1}</Text>
-              {station.address2 ? <Text className="text-[12px] text-slate-500">{station.address2}</Text> : null}
             </View>
 
             <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 12, marginHorizontal: 8 }} />
 
-            {/* Contact numbers */}
             <Text className="mt-3 text-[12px] font-semibold text-slate-700">Contact numbers</Text>
             <PhoneChips phones={station.phones} onCall={onCall} />
 
-            {/* Actions */}
             <View className="mt-4">
               <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(station)} />
             </View>
@@ -307,17 +289,30 @@ function DetailsModal({
   );
 }
 
+/* ------------------------------ Distance utils ------------------------------ */
+const toRad = (deg: number) => (deg * Math.PI) / 180;
+function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const R = 6371;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s1 = Math.sin(dLat / 2) ** 2;
+  const s2 = Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s1 + s2));
+}
+
 /* --------------------------------- Card ---------------------------------- */
 function StationCard({
   station,
   onLocation,
   onPressCard,
   onCall,
+  isNearest = false,
 }: {
   station: Station;
   onLocation: (s: Station) => void;
   onPressCard: (s: Station) => void;
   onCall: (phone: string) => void;
+  isNearest?: boolean;
 }) {
   return (
     <Pressable
@@ -327,7 +322,6 @@ function StationCard({
       accessibilityRole="button"
       accessibilityLabel={`Open actions for ${station.name}`}
     >
-      {/* Header row with avatar + title/badge */}
       <View className="flex-row items-start gap-3">
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
           {station.avatar ? (
@@ -344,32 +338,33 @@ function StationCard({
             <Text className="text-[16px] text-slate-900 flex-1" numberOfLines={2}>
               {station.name}
             </Text>
-            <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
-              <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{station.category}</Text>
+            <View className="ml-3 flex-row items-center gap-1 self-start">
+              {isNearest && (
+                <View className="rounded-full px-2 py-[2px]" style={{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0" }}>
+                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>NEAREST</Text>
+                </View>
+              )}
+              <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
+                <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{station.category}</Text>
+              </View>
             </View>
           </View>
         </View>
       </View>
 
-      {/* Divider */}
       <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
 
-      {/* Body */}
       <View style={{ paddingTop: 8, paddingLeft: 68 }}>
         <Text className="text-[13px] text-slate-700" numberOfLines={2}>
           {station.address1}
         </Text>
-        {station.address2 ? (
-          <Text className="text-[12px] text-slate-500" numberOfLines={1}>
-            {station.address2}
-          </Text>
-        ) : null}
 
-        {/* Contact numbers */}
         <PhoneChips phones={station.phones} onCall={onCall} />
 
-        {/* Location button */}
         <View className="mt-3 flex-row items-center gap-2">
+          {typeof station.distanceKm === "number" && (
+            <Text className="text-[12px] text-slate-500">{station.distanceKm.toFixed(1)} km</Text>
+          )}
           <View style={{ flex: 1 }} />
           <View style={{ width: 140 }}>
             <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(station)} />
@@ -385,17 +380,39 @@ export default function PoliceScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<string[]>(["police"]);
+
+  const [stations, setStations] = useState<Station[]>([]);
+  const [nearest, setNearest] = useState<Station | null>(null);
+  const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
+
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const [stations, setStations] = useState<Station[]>([]);
-
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
-  // Fetch police stations from Supabase (phones as array)
+  const openMaps = (s: Station) => {
+    if (s.maps_link) {
+      Linking.openURL(s.maps_link).catch(() => {});
+      return;
+    }
+    if (s.lat && s.lng) {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
+    } else if (s.address1) {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
+    }
+  };
+
+  const callNumber = (raw: string) => {
+    if (!raw) return;
+    const num = raw.replace(/[^\d+]/g, "");
+    if (!num) return;
+    Linking.openURL(`tel:${num}`).catch(() => {});
+  };
+
+  // Fetch stations (with phones[])
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -417,7 +434,7 @@ export default function PoliceScreen() {
         return {
           id: p.place_id,
           name: p.name ?? "Unnamed Police Station",
-          category: "police", // normalize
+          category: "police",
           address1: p.address ?? "",
           plusCode: p.plus_code ?? undefined,
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
@@ -434,40 +451,65 @@ export default function PoliceScreen() {
     };
   }, []);
 
+  // Get location → compute distances → pick nearest (same as hospital.tsx)
+  useEffect(() => {
+    let cancelled = false;
+    async function locateAndMeasure() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          if (!cancelled) setGotLocation("denied");
+          return;
+        }
+
+        let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+        if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (!pos || cancelled) return;
+
+        const { latitude, longitude } = pos.coords;
+
+        setStations((prev) => {
+          const updated = prev.map((s) =>
+            typeof s.lat === "number" && typeof s.lng === "number"
+              ? { ...s, distanceKm: haversineKm(latitude, longitude, s.lat, s.lng) }
+              : { ...s, distanceKm: undefined }
+          );
+          let n: Station | null = null;
+          for (const s of updated) {
+            if (typeof s.distanceKm !== "number") continue;
+            if (!n || (n.distanceKm ?? Infinity) > s.distanceKm) n = s;
+          }
+          setNearest(n);
+          return updated;
+        });
+
+        if (!cancelled) setGotLocation("ok");
+      } catch {
+        if (!cancelled) setGotLocation("error");
+      }
+    }
+    if (stations.length) locateAndMeasure();
+    return () => {
+      cancelled = true;
+    };
+  }, [stations.length]);
+
+  // Search + sort (distance asc like hospital)
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
     return stations
       .filter((s) => {
         const byFilter = filters.length === 0 || filters.includes(s.category);
         const byText =
-          q.length === 0 ||
+          !q ||
           s.name.toLowerCase().includes(q) ||
           s.address1.toLowerCase().includes(q) ||
           (s.plusCode ?? "").toLowerCase().includes(q) ||
           (s.phones ?? []).some((ph) => ph.toLowerCase().includes(q));
         return byFilter && byText;
       })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
   }, [filters, query, stations]);
-
-  const openMaps = (s: Station) => {
-    if (s.maps_link) {
-      Linking.openURL(s.maps_link).catch(() => {});
-      return;
-    }
-    if (s.lat && s.lng) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
-    } else if (s.address1) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
-    }
-  };
-
-  const callNumber = (raw: string) => {
-    if (!raw) return;
-    const num = raw.replace(/[^\d+]/g, ""); // keep digits and '+'
-    if (!num) return;
-    Linking.openURL(`tel:${num}`).catch(() => {});
-  };
 
   const openActions = (s: Station) => {
     setSelectedStation(s);
@@ -483,10 +525,9 @@ export default function PoliceScreen() {
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
       <SafeAreaView edges={["top"]} style={{ backgroundColor: COLORS.bg }}>
-        {/* Header with search toggle */}
+        {/* Header */}
         <View className="relative px-4 py-3">
           <View className="flex-row items-center justify-between">
-            {/* Back button with safe fallback */}
             <Pressable
               onPress={() => {
                 try {
@@ -517,15 +558,7 @@ export default function PoliceScreen() {
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <View
                   className="flex-row items-center rounded-2xl bg-white px-3 py-1"
-                  style={[
-                    {
-                      borderColor: COLORS.border,
-                      borderWidth: 1,
-                      width: "100%",
-                      minWidth: 0,
-                    },
-                    panelShadow,
-                  ]}
+                  style={[{ borderColor: COLORS.border, borderWidth: 1, width: "100%", minWidth: 0 }, panelShadow]}
                 >
                   <Ionicons name="search" size={18} color={COLORS.muted} />
                   <TextInput
@@ -561,6 +594,40 @@ export default function PoliceScreen() {
         <View style={{ height: 1, backgroundColor: COLORS.border }} />
       </SafeAreaView>
 
+      {/* Nearest panel */}
+      {gotLocation === "ok" && nearest && (
+        <View className="mx-4 mt-3 rounded-2xl" style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, panelShadow]}>
+          <View className="flex-row items-center justify-between">
+            <View className="flex-1 pr-3">
+              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>
+                Nearest to you
+              </Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
+                {nearest.name}
+              </Text>
+              {typeof nearest.distanceKm === "number" && (
+                <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>
+              )}
+            </View>
+            <PrimaryButton
+              label="View"
+              variant="primary"
+              icon="navigate-outline"
+              onPress={() => {
+                setSelectedStation(nearest);
+                setSheetOpen(true);
+              }}
+            />
+          </View>
+        </View>
+      )}
+
+      {(gotLocation === "denied" || gotLocation === "error") && (
+        <View className="mx-4 mt-3 rounded-2xl bg-white p-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, panelShadow]}>
+          <Text className="text-[12px] text-slate-600">We couldn’t access your location. Showing police stations without distance.</Text>
+        </View>
+      )}
+
       {/* Filter chips */}
       <FilterChips
         items={FILTERS}
@@ -584,6 +651,7 @@ export default function PoliceScreen() {
             onLocation={openMaps}
             onPressCard={openActions}
             onCall={callNumber}
+            isNearest={nearest?.id === item.id}
           />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}

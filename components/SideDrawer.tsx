@@ -40,14 +40,13 @@ const DEFAULT_ITEMS: Item[] = [
     href: "/driver/driverprofile",
     icon: "person-circle-outline",
   },
+    { label: "Notification", href: "/driver/inbox", icon: "notifications-outline" },
   {
     label: "Messages",
     href: "/driver/message",
     icon: "chatbubble-ellipses-outline",
   },
-  { label: "Reviews", href: "/driver/reviews", icon: "star-outline" },
-  { label: "Inbox", href: "/driver/inbox", icon: "notifications-outline" },
-  {
+    {
     label: "Request Status",
     href: "/driver/requeststatus",
     icon: "document-text-outline",
@@ -57,6 +56,7 @@ const DEFAULT_ITEMS: Item[] = [
     href: "/driver/transactionhistory",
     icon: "receipt-outline",
   },
+  { label: "Reviews", href: "/driver/reviews", icon: "star-outline" },
 ];
 
 export default function SideDrawer({

@@ -66,6 +66,7 @@ type PlaceRow = {
   maps_link: string | null;
   phones?: string[] | null;     // text[] in DB
   service_for: string | null;   // "motorcycle" | "car" | "all_type"
+  owner?: string | null;        // ✅ FK to shop owner (e.g., app_user.user_id)
 };
 
 type Shop = {
@@ -82,6 +83,7 @@ type Shop = {
   maps_link?: string;
   phones?: string[];
   serviceFor?: "motorcycle" | "car" | "all_type" | (string & {});
+  ownerId?: string | null;      // ✅ present if shop has an owner
 };
 
 /* --------------------------------- Small UI -------------------------------- */
@@ -151,6 +153,8 @@ function QuickActions({
 }: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   const insets = useSafeAreaInsets();
   if (!shop) return null;
+  const canMessage = !!shop.ownerId; // ✅ only show if there's an owner
+
   return (
     <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
@@ -200,7 +204,7 @@ function QuickActions({
             </Pressable>
           </View>
 
-          <View className="h-[1px] bg-slate-200" />
+          <View className="h/[1px] bg-slate-200" />
 
           <View className="mt-3 gap-3">
             <PrimaryButton
@@ -211,15 +215,17 @@ function QuickActions({
                 onClose();
               }}
             />
-            <PrimaryButton
-              label="Message Shop"
-              variant="secondary"
-              icon="chatbubble-ellipses-outline"
-              onPress={() => {
-                onMessage(shop);
-                onClose();
-              }}
-            />
+            {canMessage && (
+              <PrimaryButton
+                label="Message Shop"
+                variant="secondary"
+                icon="chatbubble-ellipses-outline"
+                onPress={() => {
+                  onMessage(shop);
+                  onClose();
+                }}
+              />
+            )}
             <PrimaryButton
               label={shop.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"}
               variant="secondary"
@@ -252,6 +258,8 @@ function DetailsModal({
   visible, shop, onClose, onOpenMaps, onMessage,
 }: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   if (!shop) return null;
+  const canMessage = !!shop.ownerId; // ✅
+
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
@@ -298,10 +306,14 @@ function DetailsModal({
             </View>
 
             <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1">
-                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
-              </View>
-              <View style={{ width: 10 }} />
+              {canMessage && (
+                <>
+                  <View className="flex-1">
+                    <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+                  </View>
+                  <View style={{ width: 10 }} />
+                </>
+              )}
               <View className="flex-1">
                 <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
               </View>
@@ -328,6 +340,8 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
 function ShopCard({
   shop, onLocation, onMessage, onPressCard, isNearest = false,
 }: { shop: Shop; onLocation: (s: Shop) => void; onMessage: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
+  const canMessage = !!shop.ownerId; // ✅
+
   return (
     <Pressable
       onPress={() => onPressCard(shop)}
@@ -395,10 +409,14 @@ function ShopCard({
         </View>
 
         <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1">
-            <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
-          </View>
-          <View style={{ width: 12 }} />
+          {canMessage && (
+            <>
+              <View className="flex-1">
+                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+              </View>
+              <View style={{ width: 12 }} />
+            </>
+          )}
           <View className="flex-1">
             <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
           </View>
@@ -431,7 +449,7 @@ export default function RepairShopScreen() {
 
   // open maps (prefer maps_link if present; fallback to geo: or universal)
   const openMaps = (s: Shop) => {
-    if ( s.maps_link ) {
+    if (s.maps_link) {
       Linking.openURL(s.maps_link).catch(() => {});
       return;
     }
@@ -454,13 +472,13 @@ export default function RepairShopScreen() {
   const openDetails = (s: Shop) => { setSelectedShop(s); setDetailsOpen(true); };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch repair shops (+phones, +service_for)
+  // fetch repair shops (+phones, +service_for, +owner)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("places")
-        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for")
+        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, owner") // ✅ include owner
         .eq("category", "repair_shop")
         .order("name", { ascending: true });
 
@@ -485,6 +503,7 @@ export default function RepairShopScreen() {
           maps_link: p.maps_link ?? undefined,
           phones: Array.isArray(p.phones) ? p.phones : [],
           serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
+          ownerId: p.owner ?? null, // ✅ set owner id (or null)
         };
       });
 
@@ -538,14 +557,12 @@ export default function RepairShopScreen() {
 
     return shops
       .filter((s) => {
-        // text search
         const byText =
           !q ||
           s.name.toLowerCase().includes(q) ||
           s.address1.toLowerCase().includes(q) ||
           (s.plusCode ?? "").toLowerCase().includes(q);
 
-        // service filter: strict equal to selected key
         const byService = !selected || (s.serviceFor ?? "").toLowerCase() === selected;
 
         return byText && byService;

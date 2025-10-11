@@ -65,6 +65,7 @@ type PlaceRow = {
   maps_link: string | null;
   phones?: string[] | null;           // text[] in DB
   service_for: string | null;         // "motorcycle" | "car" | "all_type"
+  owner?: string | null;              // ✅ add this (FK to app_user or similar)
 };
 
 type Shop = {
@@ -80,6 +81,7 @@ type Shop = {
   distanceKm?: number;
   phones?: string[];
   serviceFor?: "motorcycle" | "car" | "all_type" | (string & {});
+  ownerId?: string | null;            // ✅ track if shop has owner
 };
 
 /* --------------------------------- Small UI -------------------------------- */
@@ -152,6 +154,8 @@ function QuickActions({
 }: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   const insets = useSafeAreaInsets();
   if (!shop) return null;
+  const canMessage = !!shop.ownerId; // ✅ only if there's an owner
+
   return (
     <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}>
@@ -209,15 +213,17 @@ function QuickActions({
                 onClose();
               }}
             />
-            <PrimaryButton
-              label="Message Shop"
-              variant="secondary"
-              icon="chatbubble-ellipses-outline"
-              onPress={() => {
-                onMessage(shop);
-                onClose();
-              }}
-            />
+            {canMessage && (
+              <PrimaryButton
+                label="Message Shop"
+                variant="secondary"
+                icon="chatbubble-ellipses-outline"
+                onPress={() => {
+                  onMessage(shop);
+                  onClose();
+                }}
+              />
+            )}
             <PrimaryButton
               label={shop.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"}
               variant="secondary"
@@ -252,6 +258,8 @@ function DetailsModal({
   visible, shop, onClose, onOpenMaps, onMessage,
 }: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   if (!shop) return null;
+  const canMessage = !!shop.ownerId; // ✅
+
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
@@ -293,10 +301,14 @@ function DetailsModal({
               )}
             </View>
             <View className="mt-4 flex-row items-center gap-2">
-              <View className="flex-1">
-                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
-              </View>
-              <View style={{ width: 10 }} />
+              {canMessage && (
+                <>
+                  <View className="flex-1">
+                    <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+                  </View>
+                  <View style={{ width: 10 }} />
+                </>
+              )}
               <View className="flex-1">
                 <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
               </View>
@@ -323,6 +335,7 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
 function ShopCard({
   shop, onLocation, onMessage, onPressCard, isNearest = false,
 }: { shop: Shop; onLocation: (s: Shop) => void; onMessage: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
+  const canMessage = !!shop.ownerId; // ✅
   return (
     <Pressable
       onPress={() => onPressCard(shop)}
@@ -388,10 +401,14 @@ function ShopCard({
           )}
         </View>
         <View className="mt-3 flex-row items-center gap-2">
-          <View className="flex-1">
-            <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
-          </View>
-          <View style={{ width: 12 }} />
+          {canMessage && (
+            <>
+              <View className="flex-1">
+                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+              </View>
+              <View style={{ width: 12 }} />
+            </>
+          )}
           <View className="flex-1">
             <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
           </View>
@@ -450,14 +467,14 @@ export default function VulcanizeScreen() {
   };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch vulcanizing places (+phones, +service_for)
+  // fetch vulcanizing places (+phones, +service_for, +owner)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("places")
         .select(
-          "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for"
+          "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, owner" // ✅ include owner
         )
         .eq("category", "vulcanizing")
         .order("name", { ascending: true });
@@ -482,6 +499,7 @@ export default function VulcanizeScreen() {
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
           phones: Array.isArray(p.phones) ? p.phones : [],
           serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
+          ownerId: p.owner ?? null, // ✅ set owner id (or null)
         };
       });
 
@@ -548,7 +566,7 @@ export default function VulcanizeScreen() {
           s.address1.toLowerCase().includes(q) ||
           (s.plusCode ?? "").toLowerCase().includes(q);
 
-        // service filter: strict equality. (If you want "motorcycle" to include "all_type", tell me and we’ll switch logic.)
+        // service filter: strict equality.
         const byService = !selected || (s.serviceFor ?? "").toLowerCase() === selected;
 
         return byText && byService;
@@ -686,7 +704,7 @@ export default function VulcanizeScreen() {
         }
       />
 
-      <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} onMessage={goChat} />
+      <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop!} onOpenMaps={openMaps} onMessage={goChat} />
       <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} onMessage={goChat} />
     </View>
   );

@@ -521,37 +521,46 @@ export default function Signup() {
   const [touchedD, setTouchedD] = useState<{ [k: string]: boolean }>({});
   const [touchedS, setTouchedS] = useState<{ [k: string]: boolean }>({});
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        setShopListLoading(true);
-        setShopListError(null);
-        const { data, error } = await supabase
-          .from("places")
-          .select("place_id, name, address")
-          .or("owner.is.null,owner.eq.")
-          .order("name", { ascending: true });
-        if (error) throw error;
+useEffect(() => {
+  let mounted = true;
+  (async () => {
+    try {
+      setShopListLoading(true);
+      setShopListError(null);
 
-        const opts = (data ?? [])
+      const ALLOWED = ["vulcanizing", "repair_shop", "vulcanizing_repair"] as const;
+
+      const { data, error } = await supabase
+        .from("places")
+        .select("place_id, name, address, category")
+        .in("category", ALLOWED as unknown as string[]) // Postgrest .in requires string[]
+        .or("owner.is.null,owner.eq.")                  // keep your original owner filter
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+
+      const opts =
+        (data ?? [])
+          // (extra safety if old rows slip through)
+          .filter((r: any) => ALLOWED.includes(r.category))
           .filter((r: any) => (r?.name ?? "").trim().length > 0)
           .map((r: any) => ({
             label: r.address ? `${r.name} — ${r.address}` : r.name,
             value: r.place_id,
           }));
 
-        if (mounted) setShopOptions(opts);
-      } catch (e: any) {
-        if (mounted) setShopListError(e?.message ?? "Failed to load shops");
-      } finally {
-        if (mounted) setShopListLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+      if (mounted) setShopOptions(opts);
+    } catch (e: any) {
+      if (mounted) setShopListError(e?.message ?? "Failed to load shops");
+    } finally {
+      if (mounted) setShopListLoading(false);
+    }
+  })();
+  return () => {
+    mounted = false;
+  };
+}, []);
+
 
   function markTouchedD(field: string) {
     setTouchedD((prev) => ({ ...prev, [field]: true }));

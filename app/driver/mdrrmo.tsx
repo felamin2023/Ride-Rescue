@@ -12,6 +12,7 @@ import {
   Platform,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import * as Location from "expo-location";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -29,6 +30,7 @@ const COLORS = {
   muted: "#94A3B8",
   primary: "#2563EB",
   primaryDark: "#1D4ED8",
+  success: "#16A34A",
 };
 
 /** Softer, minimal shadow for cards & sheets */
@@ -71,16 +73,8 @@ type Facility = {
   phones?: string[]; // array in-app
 };
 
-/* --------------------------- Reusable filter items -------------------------- */
-const FILTERS: FilterItem[] = [
-  { key: "vulcanize", icon: "trail-sign-outline", label: "Vulcanize" },
-  { key: "repair", icon: "construct-outline", label: "Repair" },
-  { key: "gas", icon: "flash-outline", label: "Gas" },
-  { key: "hospital", icon: "medical-outline", label: "Hospital" },
-  { key: "police", icon: "shield-outline", label: "Police" },
-  { key: "fire", icon: "flame-outline", label: "Fire Station" },
-  { key: "mdrrmo", icon: "megaphone-outline", label: "MDRRMO" },
-];
+/* --------------------------- Filters (like hospital) -------------------------- */
+const FILTERS: FilterItem[] = [{ key: "mdrrmo", icon: "megaphone-outline", label: "MDRRMO" }];
 
 /* ----------------------- Small UI: Primary Button ---------------------- */
 function PrimaryButton({
@@ -99,7 +93,7 @@ function PrimaryButton({
     <Pressable
       onPress={onPress}
       android_ripple={{ color: "rgba(0,0,0,0.06)", borderless: false }}
-      className={`flex-row items-center justify-center rounded-full px-4`}
+      className="flex-row items-center justify-center rounded-full px-4"
       style={[
         { minHeight: 48, borderWidth: isPrimary ? 0 : 1, borderColor: COLORS.border, backgroundColor: isPrimary ? COLORS.primary : "#FFFFFF" },
         MICRO_SHADOW,
@@ -213,7 +207,7 @@ function QuickActions({
           <View className="h-[1px] bg-slate-200" />
 
           <View className="mt-3 gap-3">
-            <PrimaryButton label="Open in Google Maps" variant="secondary" icon="navigate-outline" onPress={() => { onOpenMaps(facility); onClose(); }} />
+            <PrimaryButton label="Location" variant="primary" icon="navigate-outline" onPress={() => { onOpenMaps(facility); onClose(); }} />
             <PrimaryButton
               label={facility.plusCode ? `Copy Plus Code (${facility.plusCode})` : "Copy Address"}
               variant="secondary"
@@ -286,7 +280,7 @@ function DetailsModal({
                   <Text className="text-[12px] text-slate-600">Plus Code: {facility.plusCode}</Text>
                 </View>
               ) : null}
-              {facility.lat && facility.lng ? (
+              {typeof facility.lat === "number" && typeof facility.lng === "number" ? (
                 <View className="flex-row items-center gap-2">
                   <Ionicons name="pin-outline" size={14} color={COLORS.sub} />
                   <Text className="text-[12px] text-slate-600">
@@ -296,13 +290,11 @@ function DetailsModal({
               ) : null}
             </View>
 
-            {/* Contact numbers */}
             <Text className="mt-3 text-[12px] font-semibold text-slate-700">Contact numbers</Text>
             <PhoneChips phones={facility.phones} onCall={onCall} />
 
-            {/* Buttons */}
             <View className="mt-4">
-              <PrimaryButton label="Open in Maps" icon="navigate-outline" variant="secondary" onPress={() => onOpenMaps(facility)} />
+              <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onOpenMaps(facility)} />
             </View>
 
             <View className="mt-3">
@@ -323,23 +315,38 @@ function DetailsModal({
   );
 }
 
+/* ------------------------------ Distance utils ------------------------------ */
+const toRad = (deg: number) => (deg * Math.PI) / 180;
+function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const R = 6371;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s1 = Math.sin(dLat / 2) ** 2;
+  const s2 = Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s1 + s2));
+}
+
 /* --------------------------------- Card ---------------------------------- */
 function FacilityCard({
   facility,
   onLocation,
   onPressCard,
   onCall,
+  isNearest = false,
 }: {
   facility: Facility;
   onLocation: (s: Facility) => void;
   onPressCard: (s: Facility) => void;
   onCall: (phone: string) => void;
+  isNearest?: boolean;
 }) {
   return (
     <Pressable
       onPress={() => onPressCard(facility)}
       className="mx-4 my-2 rounded-2xl bg-white p-4"
       style={[{ borderColor: COLORS.border, borderWidth: 1 }, SOFT_SHADOW]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open actions for ${facility.name}`}
     >
       <View className="flex-row items-start gap-3">
         <View className="overflow-hidden rounded-xl" style={{ width: 64, height: 64, backgroundColor: "#F1F5F9" }}>
@@ -357,8 +364,15 @@ function FacilityCard({
             <Text className="flex-1 text-[16px] font-extrabold text-slate-900" numberOfLines={2}>
               {facility.name}
             </Text>
-            <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-1">
-              <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{facility.category}</Text>
+            <View className="ml-3 flex-row items-center gap-1 self-start">
+              {isNearest && (
+                <View className="rounded-full px-2 py-[2px]" style={{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0" }}>
+                  <Text className="text-[10px] font-bold" style={{ color: COLORS.success }}>NEAREST</Text>
+                </View>
+              )}
+              <View className="rounded-full bg-[#F1F5FF] px-2 py-1">
+                <Text className="text-[11px] font-semibold text-[#1E3A8A] capitalize">{facility.category}</Text>
+              </View>
             </View>
           </View>
 
@@ -366,12 +380,16 @@ function FacilityCard({
             {facility.address1}
           </Text>
 
-          {/* Contact numbers (chips) */}
           <PhoneChips phones={facility.phones} onCall={onCall} />
 
-          {/* Location button */}
-          <View className="mt-3">
-            <PrimaryButton label="Open Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} />
+          <View className="mt-3 flex-row items-center gap-2">
+            {typeof facility.distanceKm === "number" && (
+              <Text className="text-[12px] text-slate-500">{facility.distanceKm.toFixed(1)} km</Text>
+            )}
+            <View style={{ flex: 1 }} />
+            <View style={{ width: 160 }}>
+              <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(facility)} />
+            </View>
           </View>
         </View>
       </View>
@@ -384,12 +402,16 @@ export default function MDRRMOScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<string[]>(["mdrrmo"]);
+
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
   const [busy, setBusy] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+
   const [facilities, setFacilities] = useState<Facility[]>([]);
+  const [nearest, setNearest] = useState<Facility | null>(null);
+  const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
@@ -416,7 +438,7 @@ export default function MDRRMOScreen() {
         return {
           id: p.place_id,
           name: p.name ?? "Unnamed MDRRMO",
-          category: "mdrrmo", // normalize
+          category: "mdrrmo",
           address1: p.address ?? "",
           plusCode: p.plus_code ?? undefined,
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
@@ -433,20 +455,64 @@ export default function MDRRMOScreen() {
     };
   }, []);
 
+  // get location → compute distances → pick nearest (match hospital flow)
+  useEffect(() => {
+    let cancelled = false;
+    async function locateAndMeasure() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          if (!cancelled) setGotLocation("denied");
+          return;
+        }
+
+        let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+        if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (!pos || cancelled) return;
+
+        const { latitude, longitude } = pos.coords;
+
+        setFacilities((prev) => {
+          const updated = prev.map((s) =>
+            typeof s.lat === "number" && typeof s.lng === "number"
+              ? { ...s, distanceKm: haversineKm(latitude, longitude, s.lat, s.lng) }
+              : { ...s, distanceKm: undefined }
+          );
+          let n: Facility | null = null;
+          for (const s of updated) {
+            if (typeof s.distanceKm !== "number") continue;
+            if (!n || (n.distanceKm ?? Infinity) > s.distanceKm) n = s;
+          }
+          setNearest(n);
+          return updated;
+        });
+
+        if (!cancelled) setGotLocation("ok");
+      } catch {
+        if (!cancelled) setGotLocation("error");
+      }
+    }
+    if (facilities.length) locateAndMeasure();
+    return () => {
+      cancelled = true;
+    };
+  }, [facilities.length]);
+
+  // filtered + sorted (nearest first like hospital)
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
     return facilities
       .filter((s) => {
         const byFilter = filters.length === 0 || filters.includes(s.category);
         const byText =
-          q.length === 0 ||
+          !q ||
           s.name.toLowerCase().includes(q) ||
           s.address1.toLowerCase().includes(q) ||
           (s.plusCode ?? "").toLowerCase().includes(q) ||
           (s.phones ?? []).some((ph) => ph.toLowerCase().includes(q));
         return byFilter && byText;
       })
-      .sort((a, b) => (a.name.localeCompare(b.name)));
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
   }, [filters, query, facilities]);
 
   const openMaps = async (s: Facility) => {
@@ -487,7 +553,21 @@ export default function MDRRMOScreen() {
         {/* Header with search toggle */}
         <View className="relative px-4 py-3">
           <View className="flex-row items-center justify-between">
-            <Pressable onPress={() => router.back()} hitSlop={10} className="h-9 w-9 items-center justify-center rounded-xl" accessibilityLabel="Go back">
+            {/* safer back with fallback like hospital */}
+            <Pressable
+              onPress={() => {
+                try {
+                  // @ts-ignore
+                  if ((router as any).canGoBack && (router as any).canGoBack()) router.back();
+                  else router.replace("/");
+                } catch {
+                  router.replace("/");
+                }
+              }}
+              hitSlop={10}
+              className="h-9 w-9 items-center justify-center rounded-xl"
+              accessibilityLabel="Go back"
+            >
               <Ionicons name="arrow-back" size={22} color={COLORS.text} />
             </Pressable>
 
@@ -532,6 +612,40 @@ export default function MDRRMOScreen() {
         <View style={{ height: 1, backgroundColor: COLORS.border }} />
       </SafeAreaView>
 
+      {/* Nearest panel */}
+      {gotLocation === "ok" && nearest && (
+        <View className="mx-4 mt-3 rounded-2xl" style={[{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", padding: 12 }, SOFT_SHADOW]}>
+          <View className="flex-row items-center justify-between">
+            <View className="flex-1 pr-3">
+              <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>
+                Nearest to you
+              </Text>
+              <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
+                {nearest.name}
+              </Text>
+              {typeof nearest.distanceKm === "number" && (
+                <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>
+              )}
+            </View>
+            <PrimaryButton
+              label="View"
+              variant="primary"
+              icon="navigate-outline"
+              onPress={() => {
+                setSelectedFacility(nearest);
+                setSheetOpen(true);
+              }}
+            />
+          </View>
+        </View>
+      )}
+
+      {(gotLocation === "denied" || gotLocation === "error") && (
+        <View className="mx-4 mt-3 rounded-2xl bg-white p-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, SOFT_SHADOW]}>
+          <Text className="text-[12px] text-slate-600">We couldn’t access your location. Showing MDRRMO stations without distance.</Text>
+        </View>
+      )}
+
       {/* Filter chips */}
       <FilterChips
         items={FILTERS}
@@ -552,8 +666,9 @@ export default function MDRRMOScreen() {
           <FacilityCard
             facility={item}
             onLocation={openMaps}
-            onPressCard={openActions}
+            onPressCard={(s) => { setSelectedFacility(s); setSheetOpen(true); }}
             onCall={callNumber}
+            isNearest={nearest?.id === item.id}
           />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
@@ -566,10 +681,16 @@ export default function MDRRMOScreen() {
       />
 
       {/* Bottom sheet actions (no call/message) */}
-      <QuickActions visible={sheetOpen} onClose={closeActions} facility={selectedFacility} onOpenMaps={openMaps} />
+      <QuickActions visible={sheetOpen} onClose={() => setSheetOpen(false)} facility={selectedFacility} onOpenMaps={openMaps} />
 
       {/* Details modal (shows phone chips) */}
-      <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={closeDetails} onOpenMaps={openMaps} onCall={callNumber} />
+      <DetailsModal
+        visible={detailsOpen}
+        facility={selectedFacility}
+        onClose={() => setDetailsOpen(false)}
+        onOpenMaps={openMaps}
+        onCall={callNumber}
+      />
 
       {/* Loading overlay */}
       <LoadingScreen visible={busy} message="Please wait…" variant="dots" />

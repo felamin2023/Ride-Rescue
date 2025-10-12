@@ -101,6 +101,13 @@ type SRUI = {
   avatar: string;
   distanceKm: number;
   status: SRStatus;
+  // 🔵 Updated offer details fields
+  offerDetails?: {
+    distanceFee: string;
+    laborCost: string;
+    totalCost: string;
+    notes?: string;
+  };
 };
 
 /* ----------------------------- Helpers ----------------------------- */
@@ -147,16 +154,22 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
     });
     if (results.length > 0) {
       const p = results[0];
-      return (
-        p.name ||
-        p.street ||
-        `${p.city ?? ""} ${p.region ?? ""} ${p.country ?? ""}`.trim()
-      );
+      // Build full address from all available components
+      const addressParts = [
+        p.name,
+        p.street,
+        p.district,
+        p.city,
+        p.region,
+        p.postalCode,
+        p.country
+      ].filter(Boolean); // Remove any null/undefined parts
+      
+      return addressParts.join(', ') || "Address not available";
     }
   } catch {}
   return "Unknown location";
 }
-
 function mapEmergencyToItem(
   r: EmergencyRow,
   profile?: AppUserRow | null
@@ -405,6 +418,9 @@ export default function RequestStatus() {
     {}
   );
   const [reqLoading, setReqLoading] = useState<Record<string, boolean>>({});
+  const [expandedOffers, setExpandedOffers] = useState<Record<string, boolean>>(
+    {}
+  );
 
   // confirm dialogs
   const [confirmReject, setConfirmReject] = useState<{
@@ -424,6 +440,13 @@ export default function RequestStatus() {
       dbg("open card → fetch list", emId);
       await fetchSRListFor(emId, emLat, emLon);
     }
+  };
+
+  const toggleOfferExpanded = (serviceId: string) => {
+    setExpandedOffers((prev) => ({
+      ...prev,
+      [serviceId]: !prev[serviceId],
+    }));
   };
 
   /* ----------------------------- Data fetchers ----------------------------- */
@@ -581,8 +604,17 @@ export default function RequestStatus() {
           const place = placeId ? placeMap[placeId] : undefined;
           
           const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
-          const name = place?.name || u?.full_name || "Mechanic"; // 🔵 Prioritize place name
+          // 🔵 UPDATED: Use longer shop names with better formatting
+          const name = place?.name || u?.full_name || "Auto Repair Shop";
           const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
+
+          // 🔵 UPDATED: Add placeholder offer details with new fields
+          const offerDetails = {
+            distanceFee: "$25.00",
+            laborCost: "$80.00", 
+            totalCost: "$105.00",
+            notes: "Includes basic diagnostic and repair. Additional parts may incur extra costs."
+          };
 
           dbg(
             `[SR_LIST] em=${emergencyId} service=${r.service_id}`,
@@ -598,6 +630,7 @@ export default function RequestStatus() {
             avatar,
             distanceKm,
             status: r.status,
+            offerDetails, // 🔵 Added offer details
           };
         });
 
@@ -749,52 +782,115 @@ export default function RequestStatus() {
   /* -------------------------- Render helpers -------------------------- */
   const renderSRItem = (emId: string, it: SRUI) => {
     const blurred = !!revealedReject[it.service_id];
+    const isExpanded = !!expandedOffers[it.service_id];
+
     return (
-      <Pressable
+      <View
         key={it.service_id}
-        onLongPress={() =>
-          setRevealedReject((m) => ({ ...m, [it.service_id]: true }))
-        }
-        onPress={() => {
-          if (blurred)
-            setRevealedReject((m) => ({ ...m, [it.service_id]: false }));
-        }}
-        className="relative py-3"
-        style={{ borderBottomWidth: 1, borderBottomColor: "#E5E7EB" }}
+        className="relative py-3 border-b border-slate-200"
       >
-        <View
-          className="flex-row items-center px-3"
+        <Pressable
+          onLongPress={() =>
+            setRevealedReject((m) => ({ ...m, [it.service_id]: true }))
+          }
+          onPress={() => {
+            if (blurred) {
+              setRevealedReject((m) => ({ ...m, [it.service_id]: false }));
+            } else {
+              toggleOfferExpanded(it.service_id);
+            }
+          }}
           style={{ opacity: blurred ? 0.05 : 1 }}
         >
-          <Image
-            source={{ uri: it.avatar }}
-            className="w-10 h-10 rounded-full"
-          />
-          <View className="ml-3 flex-1">
-            <Text
-              className="text-[14px] font-semibold text-slate-900"
-              numberOfLines={1}
-            >
-              {it.name}
-            </Text>
-            <Text className="text-[12px] text-slate-500">
-              {fmtDistance(it.distanceKm)} away
-            </Text>
+          <View className="flex-row items-start px-3">
+            <Image
+              source={{ uri: it.avatar }}
+              className="w-10 h-10 rounded-full mt-1"
+            />
+            <View className="ml-3 flex-1">
+              <View className="flex-row justify-between items-start">
+                <View className="flex-1">
+                  {/* 🔵 UPDATED: Shop name with better spacing and full name support */}
+                  <Text
+                    className="text-[15px] font-semibold text-slate-900 leading-5"
+                    numberOfLines={2}
+                  >
+                    {it.name}
+                  </Text>
+                  <Text className="text-[13px] text-slate-500 mt-1">
+                    {fmtDistance(it.distanceKm)} away
+                  </Text>
+                </View>
+                <View className="flex-row items-center">
+                  <Ionicons
+                    name={isExpanded ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color="#64748B"
+                    className="mr-2"
+                  />
+                  <Pressable
+                    onPress={() =>
+                      setConfirmAccept({
+                        serviceId: it.service_id,
+                        emergencyId: emId,
+                        userId: it.user_id,
+                      })
+                    }
+                    disabled={blurred}
+                    className="rounded-xl py-2 px-4 bg-blue-600"
+                  >
+                    <Text className="text-white text-[13px] font-semibold">
+                      Accept
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Offer Details - Collapsible */}
+              {isExpanded && it.offerDetails && (
+                <View className="mt-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  {/* Notes at the top */}
+                  {it.offerDetails.notes && (
+                    <View className="mb-3 pb-3 border-b border-slate-200">
+                      <Text className="text-slate-600 text-xs font-medium mb-1">
+                        Notes
+                      </Text>
+                      <Text className="text-slate-700 text-sm leading-5">
+                        {it.offerDetails.notes}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Cost Breakdown */}
+                  <View className="space-y-2">
+                    <View className="flex-row justify-between items-center">
+                      <Text className="text-slate-600 text-sm">Distance Fee</Text>
+                      <Text className="text-slate-900 text-sm font-medium">
+                        {it.offerDetails.distanceFee}
+                      </Text>
+                    </View>
+
+                    <View className="flex-row justify-between items-center">
+                      <Text className="text-slate-600 text-sm">Labor Cost</Text>
+                      <Text className="text-slate-900 text-sm font-medium">
+                        {it.offerDetails.laborCost}
+                      </Text>
+                    </View>
+
+                    <View className="flex-row justify-between items-center pt-2 border-t border-slate-300">
+                      <Text className="text-slate-800 text-sm font-semibold">
+                        Total Cost
+                      </Text>
+                      <Text className="text-slate-900 text-sm font-bold">
+                        {it.offerDetails.totalCost}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
           </View>
-          <Pressable
-            onPress={() =>
-              setConfirmAccept({
-                serviceId: it.service_id,
-                emergencyId: emId,
-                userId: it.user_id,
-              })
-            }
-            disabled={blurred}
-            className="rounded-xl py-1.5 px-3 bg-blue-600"
-          >
-            <Text className="text-white text-[12px] font-semibold">Accept</Text>
-          </Pressable>
-        </View>
+        </Pressable>
 
         {blurred && (
           <View className="absolute inset-0 items-center justify-center">
@@ -813,7 +909,7 @@ export default function RequestStatus() {
             </Pressable>
           </View>
         )}
-      </Pressable>
+      </View>
     );
   };
 
@@ -843,9 +939,9 @@ export default function RequestStatus() {
 
     return (
       <View className="mt-3 rounded-2xl border border-slate-200 overflow-hidden bg-white">
-        <View className="px-3 py-2 bg-slate-50 border-b border-slate-200">
-          <Text className="text-[12px] text-slate-600">
-            Service requests {reqCounts[em.id] ? `(${reqCounts[em.id]})` : ""}
+        <View className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+          <Text className="text-[13px] font-medium text-slate-700">
+            Service Requests {reqCounts[em.id] ? `(${reqCounts[em.id]})` : ""}
           </Text>
         </View>
 
@@ -858,16 +954,17 @@ export default function RequestStatus() {
             </View>
           ) : real.length > 0 ? (
             <ScrollView
-              contentContainerStyle={{ paddingVertical: 6 }}
+              contentContainerStyle={{ paddingVertical: 8 }}
               nestedScrollEnabled
               showsVerticalScrollIndicator
             >
               {real.map((row) => renderSRItem(em.id, row))}
             </ScrollView>
           ) : (
-            <View className="flex-1 items-center justify-center">
-              <Text className="text-[13px] text-slate-500">
-                No requests yet.
+            <View className="flex-1 items-center justify-center py-8">
+              <Ionicons name="build-outline" size={32} color="#94A3B8" />
+              <Text className="text-[14px] text-slate-500 mt-2">
+                No requests yet
               </Text>
             </View>
           )}
@@ -884,7 +981,7 @@ export default function RequestStatus() {
     return (
       <Pressable
         onPress={() => toggleCard(item.id, item.lat, item.lon)}
-        className="bg-white rounded-2xl p-4 mb-4 border border-slate-200 relative"
+        className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
         style={cardShadow as any}
       >
         <View className="flex-row items-center">
@@ -894,32 +991,74 @@ export default function RequestStatus() {
           />
           <View className="ml-3 flex-1">
             <Text
-              className="text-[16px] font-semibold text-slate-900"
+              className="text-[17px] font-semibold text-slate-900"
               numberOfLines={1}
             >
               {item.name}
             </Text>
-            <Text className="text-[12px] text-slate-500">
+            <Text className="text-[13px] text-slate-500 mt-0.5">
               Emergency Request • {item.vehicleType}
             </Text>
-            <View className="flex-row items-center mt-1">
-              <View className="w-2 h-2 rounded-full mr-1 bg-emerald-500" />
-              <Text className="text-[12px] text-slate-600">{item.info}</Text>
+            {/* 🔵 REMOVED: Green dot and info section */}
+          </View>
+        </View>
+
+        <View className="h-px bg-slate-200 my-4" />
+
+        {/* 🔵 UPDATED: Driver Info with Correct Order */}
+        <View className="space-y-3">
+          {/* Notes (using the info field) */}
+          {item.info && item.info !== "—" && (
+            <View className="flex-row items-start">
+              <Ionicons name="document-text-outline" size={16} color="#64748B" className="mt-0.5" />
+              <View className="ml-3 flex-1">
+                <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
+                <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                  {item.info}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Landmark */}
+          <View className="flex-row items-start">
+            <Ionicons name="location-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Landmark</Text>
+              <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                {item.landmark}
+              </Text>
+            </View>
+          </View>
+
+          {/* Location */}
+          <View className="flex-row items-start">
+            <Ionicons name="map-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Location</Text>
+              <Text className="text-slate-800 text-sm mt-0.5">
+                {item.location}
+              </Text>
+            </View>
+          </View>
+
+          {/* Date & Time */}
+          <View className="flex-row items-start">
+            <Ionicons name="calendar-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Date & Time</Text>
+              <Text className="text-slate-800 text-sm mt-0.5">
+                {item.dateTime}
+              </Text>
             </View>
           </View>
         </View>
 
         <View className="h-px bg-slate-200 my-4" />
 
-        <Row label="Landmark/Remarks" value={item.landmark} />
-        <Row label="Location" value={item.location} />
-        <Row label="Date & Time" value={item.dateTime} muted />
-
-        <View className="h-px bg-slate-200 my-4" />
-
         <View className="flex-row items-center justify-between">
           <View
-            className={`rounded-full px-3 py-1 border self-start flex-row items-center ${
+            className={`rounded-full px-3 py-1.5 border self-start flex-row items-center ${
               STATUS_STYLES[item.status].bg ?? ""
             } ${STATUS_STYLES[item.status].border ?? ""}`}
           >
@@ -940,17 +1079,17 @@ export default function RequestStatus() {
           {inProcess && (
             <Pressable
               onPress={() => openChatForEmergency(item.id, router)}
-              className="flex-row items-center bg-blue-600 rounded-xl px-3 py-1.5"
+              className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2"
             >
               <Ionicons name="chatbubbles" size={14} color="#FFF" />
-              <Text className="text-white text-[12px] font-semibold ml-1">
+              <Text className="text-white text-[13px] font-semibold ml-1.5">
                 Message
               </Text>
             </Pressable>
           )}
 
           {!inProcess && (
-            <Text className="text-[12px] text-slate-400">
+            <Text className="text-[13px] text-slate-400">
               Sent {item.sentWhen}
             </Text>
           )}
@@ -963,7 +1102,7 @@ export default function RequestStatus() {
 
   return (
     <SafeAreaView className="flex-1 bg-[#F4F6F8]">
-      <View className="flex-row items-center justify-between px-4 py-3">
+      <View className="flex-row items-center justify-between px-4 py-3 bg-white border-b border-slate-200">
         <Pressable onPress={() => router.back()} hitSlop={8}>
           <Ionicons name="arrow-back" size={26} color="#0F172A" />
         </Pressable>
@@ -977,11 +1116,12 @@ export default function RequestStatus() {
         renderItem={renderItem}
         contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
         ListEmptyComponent={
-          <View className="px-6 pt-10">
-            <Text className="text-center text-slate-500">
+          <View className="px-6 pt-16 items-center">
+            <Ionicons name="document-text-outline" size={48} color="#94A3B8" />
+            <Text className="text-center text-slate-500 mt-4 text-[15px]">
               {emergency_id
                 ? "Loading or no record found."
-                : "No requests to show."}
+                : "No emergency requests to show."}
             </Text>
           </View>
         }
@@ -1031,29 +1171,5 @@ export default function RequestStatus() {
         variant="spinner"
       />
     </SafeAreaView>
-  );
-}
-
-/* ----------------------------- Row Helper ----------------------------- */
-function Row({
-  label,
-  value,
-  muted = false,
-}: {
-  label: string;
-  value: string;
-  muted?: boolean;
-}) {
-  return (
-    <View className="flex-row items-baseline py-0.5">
-      <Text className="w-40 pr-2 text-[13px] text-slate-600">{label}:</Text>
-      <Text
-        className={`flex-1 text-[13px] ${
-          muted ? "text-slate-500" : "text-slate-800"
-        }`}
-      >
-        {value}
-      </Text>
-    </View>
   );
 }

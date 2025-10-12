@@ -19,6 +19,8 @@ import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
+import PaymentModal from "../../components/PaymentModal";
+import CancelRepairModal from "../../components/CancelRepairModal";
 
 /* ----------------------------- Debug helper ----------------------------- */
 const DEBUG_PRINTS = true;
@@ -126,11 +128,17 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
     });
     if (results.length > 0) {
       const p = results[0];
-      return (
-        p.name ||
-        p.street ||
-        `${p.city ?? ""} ${p.region ?? ""} ${p.country ?? ""}`.trim()
-      );
+      // Build full address from all available components (matching driver version)
+      const addressParts = [
+        p.name,
+        p.street,
+        p.district,
+        p.city,
+        p.region,
+        p.postalCode,
+        p.country
+      ].filter(Boolean);
+      return addressParts.join(', ') || "Address not available";
     }
   } catch {}
   return "Unknown location";
@@ -165,40 +173,36 @@ const cardShadow = Platform.select({
   android: { elevation: 2 },
 });
 
-const SR_STYLES: Record<
-  SRStatus,
-  { bg?: string; border?: string; text?: string; dot?: string }
+const STATUS_STYLES: Record<
+  EmergencyStatus,
+  { bg?: string; border?: string; text?: string }
 > = {
-  pending: {
-    bg: "bg-amber-50",
-    border: "border-amber-300/70",
-    text: "text-amber-700",
-    dot: "#f59e0b",
-  },
-  accepted: {
+  in_process: {
     bg: "bg-emerald-50",
     border: "border-emerald-300/70",
     text: "text-emerald-700",
-    dot: "#10b981",
   },
-  rejected: {
+  waiting: {
+    bg: "bg-amber-50",
+    border: "border-amber-300/70",
+    text: "text-amber-700",
+  },
+  completed: {
+    bg: "bg-blue-50",
+    border: "border-blue-300/70",
+    text: "text-blue-700",
+  },
+  canceled: {
     bg: "bg-rose-50",
     border: "border-rose-300/70",
     text: "text-rose-700",
-    dot: "#ef4444",
-  },
-  canceled: {
-    bg: "bg-slate-50",
-    border: "border-slate-300/70",
-    text: "text-slate-700",
-    dot: "#64748b",
   },
 };
 
-function prettyEM(s: EmergencyStatus) {
-  return s === "in_process"
-    ? "In Progress"
-    : s.replace(/^\w/, (c) => c.toUpperCase());
+function prettyStatus(s: EmergencyStatus): string {
+  return s === "in_process" 
+    ? "In Process" 
+    : s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /* ----------------------------- Cute spinner ----------------------------- */
@@ -227,79 +231,6 @@ function SpinningGear({ size = 14, color = "#059669" }) {
   );
 }
 
-/* ----------------------- Centered Confirmation ----------------------- */
-function CenterConfirm({
-  visible,
-  title,
-  message,
-  onCancel,
-  onConfirm,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
-  confirmColor = "#2563EB",
-}: {
-  visible: boolean;
-  title: string;
-  message?: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  confirmColor?: string;
-}) {
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onCancel}
-    >
-      <View
-        className="flex-1 items-center justify-center"
-        style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
-      >
-        <View
-          className="w-11/12 max-w-md rounded-2xl bg-white p-5"
-          style={cardShadow as any}
-        >
-          <View className="items-center mb-2">
-            <Ionicons
-              name="alert-circle-outline"
-              size={28}
-              color={confirmColor}
-            />
-          </View>
-          <Text className="text-lg font-semibold text-slate-900 text-center">
-            {title}
-          </Text>
-          {message ? (
-            <Text className="mt-2 text-[14px] text-slate-600 text-center">
-              {message}
-            </Text>
-          ) : null}
-          <View className="mt-5 flex-row gap-10">
-            <Pressable
-              onPress={onCancel}
-              className="flex-1 rounded-2xl border border-slate-300 py-2.5 items-center"
-            >
-              <Text className="text-[14px] text-slate-900">{cancelLabel}</Text>
-            </Pressable>
-            <Pressable
-              onPress={onConfirm}
-              className="flex-1 rounded-2xl py-2.5 items-center"
-              style={{ backgroundColor: confirmColor }}
-            >
-              <Text className="text-[14px] text-white font-semibold">
-                {confirmLabel}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 /* ----------------------------- Screen ----------------------------- */
 export default function ShopAcceptedRequests() {
   const router = useRouter();
@@ -312,8 +243,11 @@ export default function ShopAcceptedRequests() {
 
   const [items, setItems] = useState<CardItem[]>([]);
   const [openCards, setOpenCards] = useState<Record<string, boolean>>({});
-  const [confirmComplete, setConfirmComplete] = useState<{
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [selectedEmergency, setSelectedEmergency] = useState<{
     emergencyId: string;
+    distanceKm: number;
   } | null>(null);
 
   const toggleCard = (emId: string) => {
@@ -471,27 +405,117 @@ export default function ShopAcceptedRequests() {
     }
   };
 
-  const completeEmergency = useCallback(async (emergencyId: string) => {
+  const handleMarkComplete = (emergencyId: string, distanceKm?: number) => {
+    setSelectedEmergency({
+      emergencyId,
+      distanceKm: distanceKm || 0,
+    });
+    setShowPaymentModal(true);
+  };
+
+  const handleCancelRepair = (emergencyId: string, distanceKm?: number) => {
+    setSelectedEmergency({
+      emergencyId,
+      distanceKm: distanceKm || 0,
+    });
+    setShowCancelModal(true);
+  };
+
+  const handleInvoiceSubmit = async (invoice: {
+    offerId: string;
+    finalLaborCost: number;
+    finalPartsCost: number;
+    finalServices: any[];
+    finalTotal: number;
+  }) => {
     try {
-      setLoading({ visible: true, message: "Marking as completed…" });
+      setLoading({ visible: true, message: "Submitting invoice and completing emergency…" });
+      
+      // First update the emergency status to completed
       const now = new Date().toISOString();
-      const { error } = await supabase
+      const { error: emergencyError } = await supabase
         .from("emergency")
         .update({ emergency_status: "completed", completed_at: now })
-        .eq("emergency_id", emergencyId);
-      if (error) throw error;
+        .eq("emergency_id", invoice.offerId);
+      
+      if (emergencyError) throw emergencyError;
 
+      // Here you would typically save the invoice to your database
+      // For now, we'll just log it and show success
+      console.log("Invoice submitted:", invoice);
+      
+      // Update local state
       setItems((prev) =>
         prev.map((it) =>
-          it.emergencyId === emergencyId ? { ...it, emStatus: "completed" } : it
+          it.emergencyId === invoice.offerId 
+            ? { ...it, emStatus: "completed" } 
+            : it
         )
+      );
+
+      setShowPaymentModal(false);
+      setSelectedEmergency(null);
+      
+      Alert.alert(
+        "Success", 
+        "Invoice submitted successfully! The driver will receive the payment request."
       );
     } catch (e: any) {
       Alert.alert("Update failed", e?.message ?? "Please try again.");
     } finally {
       setLoading({ visible: false });
     }
-  }, []);
+  };
+
+  // 🔵 UPDATED: Changed refundAmount to totalFees to match CancelRepairModal interface
+  const handleCancelSubmit = async (cancelData: {
+    offerId: string;
+    cancelOption: 'incomplete' | 'diagnose_only';
+    reason?: string;
+    totalFees: number; // 🔵 CHANGED: refundAmount → totalFees
+  }) => {
+    try {
+      setLoading({ visible: true, message: "Cancelling repair service…" });
+      
+      // Update the emergency status to canceled
+      const now = new Date().toISOString();
+      const { error: emergencyError } = await supabase
+        .from("emergency")
+        .update({ 
+          emergency_status: "canceled", 
+          canceled_at: now,
+          cancel_reason: cancelData.reason || null
+        })
+        .eq("emergency_id", cancelData.offerId);
+      
+      if (emergencyError) throw emergencyError;
+
+      // Here you would typically process the cancellation and save details
+      console.log("Repair cancelled:", cancelData);
+      
+      // Update local state
+      setItems((prev) =>
+        prev.map((it) =>
+          it.emergencyId === cancelData.offerId 
+            ? { ...it, emStatus: "canceled" } 
+            : it
+        )
+      );
+
+      setShowCancelModal(false);
+      setSelectedEmergency(null);
+      
+      // 🔵 UPDATED: Changed message to reflect total fees instead of refund
+      Alert.alert(
+        "Repair Cancelled", 
+        `The repair has been cancelled successfully. Total fees: ₱${cancelData.totalFees.toFixed(2)}`
+      );
+    } catch (e: any) {
+      Alert.alert("Cancellation failed", e?.message ?? "Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  };
 
   /* ----------------------------- Realtime ----------------------------- */
   useEffect(() => {
@@ -559,18 +583,17 @@ export default function ShopAcceptedRequests() {
 
   /* ----------------------------- Render ----------------------------- */
   const renderItem = ({ item }: { item: CardItem }) => {
-    const ST = SR_STYLES["accepted"];
+    const ST = STATUS_STYLES[item.emStatus];
     const isOpen = !!openCards[item.emergencyId];
-
     const showComplete = item.emStatus === "in_process";
 
     return (
       <Pressable
         onPress={() => toggleCard(item.emergencyId)}
-        className="bg-white rounded-2xl p-4 mb-4 border border-slate-200"
+        className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
         style={cardShadow as any}
       >
-        {/* Header */}
+        {/* Header - Matching driver version */}
         <View className="flex-row items-center">
           <Image
             source={{ uri: item.driverAvatar }}
@@ -578,51 +601,79 @@ export default function ShopAcceptedRequests() {
           />
           <View className="ml-3 flex-1">
             <Text
-              className="text-[16px] font-semibold text-slate-900"
+              className="text-[17px] font-semibold text-slate-900"
               numberOfLines={1}
             >
               {item.driverName}
             </Text>
-            <Text className="text-[12px] text-slate-500">
-              Driver Emergency • {item.vehicleType}
+            <Text className="text-[13px] text-slate-500 mt-0.5">
+              Emergency Request • {item.vehicleType}
             </Text>
-            <View className="flex-row items-center mt-1">
-              <View
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: 4,
-                  marginRight: 6,
-                  backgroundColor: ST.dot,
-                }}
-              />
-              <Text className="text-[12px] text-slate-600" numberOfLines={1}>
-                {item.info}
-              </Text>
-            </View>
           </View>
-          
         </View>
 
         <View className="h-px bg-slate-200 my-4" />
 
-        {/* Body rows */}
-        <Row label="Landmark/Remarks" value={item.landmark} />
-        <Row label="Location" value={item.location} />
-        <Row label="Date & Time" value={item.dateTime} muted />
+        {/* 🔵 UPDATED: Driver Info with Correct Order (Matching Driver Version) */}
+        <View className="space-y-3">
+          {/* Notes (using the info field) */}
+          {item.info && item.info !== "—" && (
+            <View className="flex-row items-start">
+              <Ionicons name="document-text-outline" size={16} color="#64748B" className="mt-0.5" />
+              <View className="ml-3 flex-1">
+                <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
+                <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                  {item.info}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Landmark */}
+          <View className="flex-row items-start">
+            <Ionicons name="location-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Landmark</Text>
+              <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                {item.landmark}
+              </Text>
+            </View>
+          </View>
+
+          {/* Location */}
+          <View className="flex-row items-start">
+            <Ionicons name="map-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Location</Text>
+              <Text className="text-slate-800 text-sm mt-0.5">
+                {item.location}
+              </Text>
+            </View>
+          </View>
+
+          {/* Date & Time */}
+          <View className="flex-row items-start">
+            <Ionicons name="calendar-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Date & Time</Text>
+              <Text className="text-slate-800 text-sm mt-0.5">
+                {item.dateTime}
+              </Text>
+            </View>
+          </View>
+        </View>
 
         <View className="h-px bg-slate-200 my-4" />
 
         {/* Status + meta */}
         <View className="flex-row items-center justify-between">
           <View
-            className={`rounded-full px-3 py-1 border self-start flex-row items-center ${
+            className={`rounded-full px-3 py-1.5 border self-start flex-row items-center ${
               ST.bg ?? ""
             } ${ST.border ?? ""}`}
           >
             {item.emStatus === "in_process" ? (
               <View className="mr-1.5">
-                {/* cog to the LEFT of the label */}
                 <SpinningGear size={12} />
               </View>
             ) : null}
@@ -631,46 +682,39 @@ export default function ShopAcceptedRequests() {
                 ST.text ?? "text-slate-800"
               }`}
             >
-              {item.emStatus === "in_process"
-                ? "In Progress"
-                : prettyEM(item.emStatus)}
+              {prettyStatus(item.emStatus)}
             </Text>
           </View>
 
-          <View className="items-end">
-            <Text className="text-[12px] text-slate-400">
-              {/* make wording simpler: Sent X ago */}
-              Sent {item.sentWhen}
-            </Text>
-          </View>
+          <Text className="text-[13px] text-slate-400">
+            Sent {item.sentWhen}
+          </Text>
         </View>
 
         {/* Expanded actions */}
-        {isOpen ? (
+        {isOpen && (
           <>
             <View className="h-px bg-slate-200 my-4" />
+            
+            {/* Primary action buttons - Matching driver version styling */}
             <View className="flex-row gap-3">
-              {/* Message (white bg) */}
+              {/* Message Button */}
               <Pressable
                 onPress={() => messageDriver(item.emergencyId)}
-                className="flex-1 rounded-2xl py-2.5 items-center border border-slate-300"
+                className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
               >
                 <View className="flex-row items-center gap-1.5">
-                  <Ionicons
-                    name="chatbubbles-outline"
-                    size={16}
-                    color="#0F172A"
-                  />
+                  <Ionicons name="chatbubbles-outline" size={16} color="#0F172A" />
                   <Text className="text-[14px] font-semibold text-slate-900">
                     Message
                   </Text>
                 </View>
               </Pressable>
 
-              {/* Location (match Message style, white bg, icon left) */}
+              {/* Location Button */}
               <Pressable
                 onPress={() => openDirections(item.lat, item.lon)}
-                className="flex-1 rounded-2xl py-2.5 items-center border border-slate-300"
+                className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
               >
                 <View className="flex-row items-center gap-1.5">
                   <Ionicons name="navigate-outline" size={16} color="#0F172A" />
@@ -681,39 +725,46 @@ export default function ShopAcceptedRequests() {
               </Pressable>
             </View>
 
-            {showComplete ? (
-              <Pressable
-                onPress={() =>
-                  setConfirmComplete({ emergencyId: item.emergencyId })
-                }
-                className="mt-3 rounded-2xl py-2.5 items-center bg-blue-600"
-              >
-                <Text className="text-[14px] font-semibold text-white">
-                  Mark as Completed
-                </Text>
-              </Pressable>
-            ) : null}
+            {/* Completion buttons - Only show for in_process status */}
+            {showComplete && (
+              <View className="flex-row gap-3 mt-3">
+                {/* Mark as Completed Button - Matching driver accept button style */}
+                <Pressable
+                  onPress={() => handleMarkComplete(item.emergencyId, item.distanceKm)}
+                  className="flex-1 rounded-xl py-2.5 px-4 bg-blue-600 items-center"
+                >
+                  <Text className="text-white text-[14px] font-semibold">
+                    Complete
+                  </Text>
+                </Pressable>
+
+                {/* Cancel Repair Button - Matching driver reject style */}
+                <Pressable
+                  onPress={() => handleCancelRepair(item.emergencyId, item.distanceKm)}
+                  className="flex-1 rounded-xl py-2.5 px-4 border border-red-600 items-center bg-red-600"
+                >
+                  <Text className="text-white text-[14px] font-semibold">
+                    Cancel Repair
+                  </Text>
+                </Pressable>
+              </View>
+            )}
           </>
-        ) : null}
+        )}
       </Pressable>
     );
   };
 
   return (
     <SafeAreaView className="flex-1 bg-[#F4F6F8]">
-      {/* Top bar */}
-      <View className="flex-row items-center justify-between px-4 py-3">
+      {/* 🔵 UPDATED: Header to match driver version exactly */}
+      <View className="flex-row items-center justify-between px-4 py-3 bg-white border-b border-slate-200">
         <Pressable onPress={() => router.back()} hitSlop={8}>
           <Ionicons name="arrow-back" size={26} color="#0F172A" />
         </Pressable>
-        <Text className="text-xl font-bold text-[#0F172A]">
-          Accepted Requests
-        </Text>
+        <Text className="text-xl font-bold text-[#0F172A]">Accepted Requests</Text>
         <View style={{ width: 26 }} />
       </View>
-
-      {/* Divider under the header title */}
-      <View className="h-px bg-slate-200" />
 
       <FlatList
         data={items}
@@ -721,29 +772,45 @@ export default function ShopAcceptedRequests() {
         renderItem={renderItem}
         contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
         ListEmptyComponent={
-          <View className="px-6 pt-10">
-            <Text className="text-center text-slate-500">
-              No accepted requests yet.
+          <View className="px-6 pt-16 items-center">
+            <Ionicons name="document-text-outline" size={48} color="#94A3B8" />
+            <Text className="text-center text-slate-500 mt-4 text-[15px]">
+              No accepted requests to show.
             </Text>
           </View>
         }
       />
 
-      {/* Confirm: Complete */}
-      <CenterConfirm
-        visible={!!confirmComplete}
-        title="Mark job as completed?"
-        message="This will set the emergency status to Completed."
-        onCancel={() => setConfirmComplete(null)}
-        onConfirm={() => {
-          if (confirmComplete) {
-            completeEmergency(confirmComplete.emergencyId);
-            setConfirmComplete(null);
-          }
+      {/* Payment Modal */}
+      <PaymentModal
+        visible={showPaymentModal}
+        offerId={selectedEmergency?.emergencyId || ''}
+        originalOffer={{
+          labor_cost: 50, // Default labor cost
+          distance_fee: (selectedEmergency?.distanceKm || 0) * 15, // 15 PHP per km
+          total_cost: 50 + ((selectedEmergency?.distanceKm || 0) * 15),
         }}
-        confirmLabel="Yes, Complete"
-        cancelLabel="Back"
-        confirmColor="#2563EB"
+        onClose={() => {
+          setShowPaymentModal(false);
+          setSelectedEmergency(null);
+        }}
+        onSubmit={handleInvoiceSubmit}
+      />
+
+      {/* Cancel Repair Modal */}
+      <CancelRepairModal
+        visible={showCancelModal}
+        offerId={selectedEmergency?.emergencyId || ''}
+        originalOffer={{
+          labor_cost: 50, // Default labor cost
+          distance_fee: (selectedEmergency?.distanceKm || 0) * 15, // 15 PHP per km
+          total_cost: 50 + ((selectedEmergency?.distanceKm || 0) * 15),
+        }}
+        onClose={() => {
+          setShowCancelModal(false);
+          setSelectedEmergency(null);
+        }}
+        onSubmit={handleCancelSubmit}
       />
 
       <LoadingScreen
@@ -752,29 +819,5 @@ export default function ShopAcceptedRequests() {
         variant="spinner"
       />
     </SafeAreaView>
-  );
-}
-
-/* ----------------------------- Row Helper ----------------------------- */
-function Row({
-  label,
-  value,
-  muted = false,
-}: {
-  label: string;
-  value: string;
-  muted?: boolean;
-}) {
-  return (
-    <View className="flex-row items-baseline py-0.5">
-      <Text className="w-40 pr-2 text-[13px] text-slate-600">{label}:</Text>
-      <Text
-        className={`flex-1 text-[13px] ${
-          muted ? "text-slate-500" : "text-slate-800"
-        }`}
-      >
-        {value}
-      </Text>
-    </View>
   );
 }

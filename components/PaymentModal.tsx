@@ -35,7 +35,7 @@ const cardShadow = Platform.select({
   android: { elevation: 2 },
 });
 
-// ✅ NEW: Service item interface
+// ✅ Service item interface
 interface ServiceItem {
   id: string;
   name: string;
@@ -55,7 +55,7 @@ interface PaymentModalProps {
     offerId: string;
     finalLaborCost: number;
     finalPartsCost: number;
-    finalServices: ServiceItem[]; // ✅ Changed from string to array
+    finalServices: ServiceItem[];
     finalTotal: number;
   }) => Promise<void>;
 }
@@ -69,18 +69,25 @@ export default function PaymentModal({
 }: PaymentModalProps) {
   const [laborCost, setLaborCost] = useState(originalOffer.labor_cost.toFixed(2));
   const [partsCost, setPartsCost] = useState('0.00');
-  const [serviceItems, setServiceItems] = useState<ServiceItem[]>([]); // ✅ NEW: Array of services
+  const [serviceItems, setServiceItems] = useState<ServiceItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [serviceWarning, setServiceWarning] = useState<string | null>(null); // ✅ NEW: Warning state
 
   useEffect(() => {
     if (visible) {
       setLaborCost(originalOffer.labor_cost.toFixed(2));
       setPartsCost('0.00');
-      setServiceItems([]); // ✅ Reset services
+      setServiceItems([]);
       setShowConfirm(false);
+      setServiceWarning(null); // ✅ NEW: Reset warning
     }
   }, [visible, offerId]);
+
+  // ✅ NEW: Validate services in real-time
+  useEffect(() => {
+    validateServices();
+  }, [serviceItems]);
 
   const handleLaborBlur = () => {
     const parsed = parseFloat(laborCost);
@@ -100,7 +107,27 @@ export default function PaymentModal({
     }
   };
 
-  // ✅ NEW: Add a new service item
+  // ✅ NEW: Validate services and set warning
+  const validateServices = () => {
+    for (const item of serviceItems) {
+      if (item.name.trim() === '') {
+        setServiceWarning('Please enter a name for all services or remove empty ones.');
+        return false;
+      }
+
+      const fee = parseFloat(item.fee);
+      if (isNaN(fee) || fee < 0) {
+        setServiceWarning(`Please enter a valid fee for "${item.name}".`);
+        return false;
+      }
+    }
+    
+    // Clear warning if all services are valid
+    setServiceWarning(null);
+    return true;
+  };
+
+  // ✅ Add a new service item
   const addService = () => {
     if (serviceItems.length >= 10) {
       Alert.alert('Limit Reached', 'You can add up to 10 services.');
@@ -108,7 +135,7 @@ export default function PaymentModal({
     }
 
     const newService: ServiceItem = {
-      id: Date.now().toString(), // Unique ID
+      id: Date.now().toString(),
       name: '',
       fee: '0.00',
     };
@@ -116,26 +143,26 @@ export default function PaymentModal({
     setServiceItems([...serviceItems, newService]);
   };
 
-  // ✅ NEW: Remove a service item
+  // ✅ Remove a service item
   const removeService = (id: string) => {
     setServiceItems(serviceItems.filter((item) => item.id !== id));
   };
 
-  // ✅ NEW: Update service name
+  // ✅ Update service name
   const updateServiceName = (id: string, name: string) => {
     setServiceItems(
       serviceItems.map((item) => (item.id === id ? { ...item, name } : item))
     );
   };
 
-  // ✅ NEW: Update service fee
+  // ✅ Update service fee
   const updateServiceFee = (id: string, fee: string) => {
     setServiceItems(
       serviceItems.map((item) => (item.id === id ? { ...item, fee } : item))
     );
   };
 
-  // ✅ NEW: Format service fee on blur
+  // ✅ Format service fee on blur
   const handleServiceFeeBlur = (id: string) => {
     const item = serviceItems.find((s) => s.id === id);
     if (!item) return;
@@ -148,7 +175,7 @@ export default function PaymentModal({
     }
   };
 
-  // ✅ UPDATED: Calculate total including service fees
+  // ✅ Calculate total including service fees
   const calculateServiceTotal = () => {
     return serviceItems.reduce((sum, item) => {
       const fee = parseFloat(item.fee);
@@ -170,18 +197,9 @@ export default function PaymentModal({
       return null;
     }
 
-    // ✅ NEW: Validate service items
-    for (const item of serviceItems) {
-      if (item.name.trim() === '') {
-        Alert.alert('Invalid Service', 'Please enter a name for all services or remove empty ones.');
-        return null;
-      }
-
-      const fee = parseFloat(item.fee);
-      if (isNaN(fee) || fee < 0) {
-        Alert.alert('Invalid Service Fee', `Please enter a valid fee for "${item.name}".`);
-        return null;
-      }
+    // ✅ Use the real-time validation instead of alert
+    if (serviceWarning) {
+      return null; // Don't proceed if there's a warning
     }
 
     const serviceFeeTotal = calculateServiceTotal();
@@ -190,7 +208,7 @@ export default function PaymentModal({
     return {
       finalLaborCost: labor,
       finalPartsCost: parts,
-      finalServices: serviceItems, // ✅ Changed to array
+      finalServices: serviceItems,
       finalTotal,
     };
   };
@@ -217,7 +235,6 @@ export default function PaymentModal({
 
       onClose();
 
-      // ✅ UPDATED: Changed message to reflect pending status
       Alert.alert(
         'Invoice Submitted',
         'The driver will receive the payment request. Waiting for payment confirmation.'
@@ -232,11 +249,8 @@ export default function PaymentModal({
     }
   };
 
-  const calculation = validateAndCalculate();
   const serviceFeeTotal = calculateServiceTotal();
-  const finalTotal = calculation
-    ? calculation.finalTotal
-    : parseFloat(laborCost) + parseFloat(partsCost) + serviceFeeTotal + originalOffer.distance_fee;
+  const finalTotal = parseFloat(laborCost) + parseFloat(partsCost) + serviceFeeTotal + originalOffer.distance_fee;
 
   return (
     <>
@@ -314,14 +328,22 @@ export default function PaymentModal({
               </View>
             </View>
 
-            {/* ✅ NEW: Additional Services Section */}
+            {/* ✅ UPDATED: Additional Services Section with Warning */}
             <View className="mb-3">
               <View className="flex-row items-center justify-between mb-2">
-                <Text className="text-[13px] text-slate-700">
-                  <Text className="font-medium text-slate-900">
-                    Additional Services
+                <View className="flex-1">
+                  <Text className="text-[13px] text-slate-700">
+                    <Text className="font-medium text-slate-900">
+                      Additional Services
+                    </Text>
                   </Text>
-                </Text>
+                  {/* ✅ NEW: Warning text below title */}
+                  {serviceWarning && (
+                    <Text className="text-[12px] text-red-500 mt-1">
+                      {serviceWarning}
+                    </Text>
+                  )}
+                </View>
                 <Pressable
                   onPress={addService}
                   className="flex-row items-center rounded-full bg-blue-50 px-3 py-1.5"
@@ -334,7 +356,7 @@ export default function PaymentModal({
                 </Pressable>
               </View>
 
-              {/* ✅ NEW: Service items list */}
+              {/* ✅ Service items list */}
               {serviceItems.length === 0 ? (
                 <View className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 items-center">
                   <Ionicons name="construct-outline" size={24} color={COLORS.muted} />
@@ -393,7 +415,7 @@ export default function PaymentModal({
               )}
             </View>
 
-            {/* ✅ UPDATED: Summary now includes services */}
+            {/* ✅ Summary including services */}
             <View className="rounded-2xl border border-slate-200 bg-slate-50 p-3 mb-4">
               <View className="gap-1.5">
                 <View className="flex-row justify-between items-center">
@@ -416,7 +438,7 @@ export default function PaymentModal({
                     ₱{parseFloat(partsCost).toFixed(2)}
                   </Text>
                 </View>
-                {/* ✅ NEW: Services total */}
+                {/* ✅ Services total */}
                 {serviceItems.length > 0 && (
                   <View className="flex-row justify-between items-center">
                     <Text className="text-[12px] text-slate-600">
@@ -439,14 +461,14 @@ export default function PaymentModal({
               </View>
             </View>
 
-            {/* ✅ UPDATED: Button text changed */}
+            {/* ✅ Submit button */}
             <Pressable
               onPress={handleSubmit}
-              disabled={loading}
+              disabled={loading || !!serviceWarning} // ✅ Disable if there's a warning
               className="rounded-2xl py-2.5 items-center"
               style={{
-                backgroundColor: loading ? '#cbd5e1' : COLORS.primary,
-                opacity: loading ? 0.7 : 1,
+                backgroundColor: (loading || serviceWarning) ? '#cbd5e1' : COLORS.primary,
+                opacity: (loading || serviceWarning) ? 0.7 : 1,
               }}
             >
               <Text className="text-[14px] text-white font-semibold">
@@ -457,7 +479,7 @@ export default function PaymentModal({
         </View>
       </Modal>
 
-      {/* ✅ UPDATED: Confirmation modal text */}
+      {/* ✅ Confirmation modal */}
       <Modal
         visible={showConfirm}
         transparent

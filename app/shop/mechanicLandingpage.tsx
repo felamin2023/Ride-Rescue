@@ -34,6 +34,9 @@ import { supabase } from "../../utils/supabase";
 // ✅ use the cross-platform wrapper instead of react-native-maps
 import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
+// Import the OfferModal
+import OfferModal, { EmergencyDetails, OfferData } from "../../components/OfferModal";
+
 /* ------------------------------ Configurable rules ------------------------------ */
 /** Show to 0–0.8 km for the first RULE_MINUTES; after that show to all. */
 const KM_GATE = 0.8; // km (800 m)
@@ -858,7 +861,7 @@ function LocationGate({
           <Text className="mt-2 text-[14px] text-slate-600 text-center">
             We use your location to compute the{" "}
             <Text className="font-semibold">km distance</Text> to emergencies.
-            You can’t proceed until distance is available.
+            You can't proceed until distance is available.
           </Text>
 
           <View className="mt-5 gap-3">
@@ -889,7 +892,7 @@ function LocationGate({
           </View>
 
           <Text className="mt-3 text-[12px] text-slate-500 text-center">
-            Tip: Make sure GPS is on and allow “While using the app”.
+            Tip: Make sure GPS is on and allow "While using the app".
           </Text>
         </View>
       </View>
@@ -952,6 +955,10 @@ export default function RequestScreen() {
     visible: boolean;
     message?: string;
   }>({ visible: false });
+
+  // Offer modal state
+  const [offerModalVisible, setOfferModalVisible] = useState(false);
+  const [selectedEmergencyForOffer, setSelectedEmergencyForOffer] = useState<RequestItem | null>(null);
 
   // Confirm flows
   const [confirmAccept, setConfirmAccept] = useState<RequestItem | null>(null);
@@ -1348,25 +1355,29 @@ export default function RequestScreen() {
     return () => clearInterval(id);
   }, [fetchPending, myCoords]);
 
-  /* ----------------------------- ACCEPT / CANCEL ----------------------------- */
+  /* ----------------------------- OFFER MODAL HANDLERS ----------------------------- */
   const handleAcceptOrCancel = (it: RequestItem) => {
     // If already sent by THIS shop for this emergency -> cancel flow
     if (hasMyPending(it.id)) {
       setConfirmCancel(it);
     } else {
-      setConfirmAccept(it);
+      // Show offer modal instead of directly accepting
+      setSelectedEmergencyForOffer(it);
+      setOfferModalVisible(true);
     }
   };
 
-  const doSendRequest = async () => {
-    if (!confirmAccept || !shopId) return;
-    const emergencyId = confirmAccept.id;
-    const lat = myCoords?.lat ?? 0;
-    const lng = myCoords?.lng ?? 0;
-    setConfirmAccept(null);
-
+  const handleOfferSubmit = async (offerData: OfferData) => {
+    if (!selectedEmergencyForOffer || !shopId) return;
+    
     try {
-      setLoading({ visible: true, message: "Sending request…" });
+      setLoading({ visible: true, message: "Sending offer…" });
+
+      // For now, we'll use the same functionality as before (direct accept)
+      // In the future, this will send the offer details to the backend
+      const emergencyId = selectedEmergencyForOffer.id;
+      const lat = myCoords?.lat ?? 0;
+      const lng = myCoords?.lng ?? 0;
 
       // Existing row?
       const { data: existing } = await supabase
@@ -1427,10 +1438,12 @@ export default function RequestScreen() {
       }
 
       setLoading({ visible: false });
-      showToast("Request sent");
+      showToast("Offer sent successfully!");
+      setOfferModalVisible(false);
+      setSelectedEmergencyForOffer(null);
     } catch (e: any) {
       setLoading({ visible: false });
-      Alert.alert("Failed to send", e?.message ?? "Please try again.");
+      Alert.alert("Failed to send offer", e?.message ?? "Please try again.");
     }
   };
 
@@ -1467,6 +1480,17 @@ export default function RequestScreen() {
       Alert.alert("Failed to cancel", e?.message ?? "Please try again.");
     }
   };
+
+  // Convert RequestItem to EmergencyDetails for OfferModal
+  const getEmergencyDetails = (item: RequestItem): EmergencyDetails => ({
+    emergencyId: item.id,
+    customerName: item.name,
+    vehicleType: item.vehicle,
+    breakdownCause: item.service,
+    location: item.landmark || "Location not specified",
+    dateTime: item.time,
+    distanceKm: item.distanceKm,
+  });
 
   // Gate open until: permission granted + coords acquired + distances computed
   const gateOpen = locPerm !== "granted" || !myCoords || !distanceReady;
@@ -1548,16 +1572,17 @@ export default function RequestScreen() {
         onOpenViewer={openViewer}
       />
 
-      {/* Accept confirm */}
-      <CenterConfirm
-        visible={!!confirmAccept}
-        title="Accept this request?"
-        message="This will send your request to the driver."
-        onCancel={() => setConfirmAccept(null)}
-        onConfirm={doSendRequest}
-        confirmLabel="Accept Request"
-        cancelLabel="Back"
-        confirmColor={COLORS.primary}
+      {/* Offer Modal */}
+      <OfferModal
+        visible={offerModalVisible}
+        emergency={selectedEmergencyForOffer ? getEmergencyDetails(selectedEmergencyForOffer) : null}
+        distanceKm={selectedEmergencyForOffer?.distanceKm}
+        onClose={() => {
+          setOfferModalVisible(false);
+          setSelectedEmergencyForOffer(null);
+        }}
+        onSubmit={handleOfferSubmit}
+        isSubmitting={loading.visible && loading.message === "Sending offer…"}
       />
 
       {/* Cancel confirm */}

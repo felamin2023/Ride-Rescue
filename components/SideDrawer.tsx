@@ -52,7 +52,7 @@ const DEFAULT_ITEMS: Item[] = [
     icon: "document-text-outline",
   },
   {
-    label: "Transaction History",
+    label: "Transactions",
     href: "/driver/transactionhistory",
     icon: "receipt-outline",
   },

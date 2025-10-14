@@ -45,7 +45,8 @@ type RequestItem = {
   landmark: string;
   location: string;
   imageUrls?: string[];
-  dateTime: string;
+  dateTime: string;       // formatted
+  createdAtIso: string;   // raw ISO for logic
   status: RequestStatus;
   seen: boolean;
   sentWhen: string;
@@ -59,7 +60,12 @@ type EmergencyRow = {
   vehicle_type: string;
   breakdown_cause: string | null;
   attachments: string[] | null;
-  emergency_status: "waiting" | "in_process" | "completed" | "canceled";
+  emergency_status:
+    | "waiting"
+    | "in_process"
+    | "completed"
+    | "canceled"
+    | "cancelled";
   latitude: number;
   longitude: number;
   created_at: string;
@@ -67,6 +73,7 @@ type EmergencyRow = {
   completed_at: string | null;
   canceled_at: string | null;
   accepted_by: string | null;
+  driver_hidden: boolean; // 🔵 NEW
 };
 
 type AppUserRow = { full_name: string | null; photo_url: string | null };
@@ -97,11 +104,10 @@ type PlaceRow = {
 type SRUI = {
   service_id: string;
   user_id?: string; // UUID of shop owner (app_user.user_id)
-  name: string; // 🔵 Now shows shop name from places table
+  name: string;     // 🔵 Shop name from places
   avatar: string;
   distanceKm: number;
   status: SRStatus;
-  // 🔵 Updated offer details fields
   offerDetails?: {
     distanceFee: string;
     laborCost: string;
@@ -109,6 +115,21 @@ type SRUI = {
     notes?: string;
   };
 };
+
+type ShopOfferRow = {
+  offer_id: string;
+  service_id: string | null;
+  emergency_id: string;
+  shop_id: string;
+  distance_km: number;
+  rate_per_km: number;
+  distance_fee: number;
+  labor_cost: number;
+  total_amount: number;
+  note: string | null;
+  created_at: string;
+};
+
 
 /* ----------------------------- Helpers ----------------------------- */
 const AVATAR_PLACEHOLDER =
@@ -144,6 +165,7 @@ const statusMap: Record<EmergencyRow["emergency_status"], RequestStatus> = {
   in_process: "IN_PROCESS",
   completed: "COMPLETED",
   canceled: "CANCELED",
+  cancelled: "CANCELED", // ✅ normalize to CANCELED for UI logic
 };
 
 async function reverseGeocode(lat: number, lon: number): Promise<string> {
@@ -154,7 +176,6 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
     });
     if (results.length > 0) {
       const p = results[0];
-      // Build full address from all available components
       const addressParts = [
         p.name,
         p.street,
@@ -162,10 +183,9 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
         p.city,
         p.region,
         p.postalCode,
-        p.country
-      ].filter(Boolean); // Remove any null/undefined parts
-      
-      return addressParts.join(', ') || "Address not available";
+        p.country,
+      ].filter(Boolean);
+      return addressParts.join(", ") || "Address not available";
     }
   } catch {}
   return "Unknown location";
@@ -187,6 +207,7 @@ function mapEmergencyToItem(
     location: `(${lat.toFixed(5)}, ${lon.toFixed(5)})`,
     imageUrls: (r.attachments || []).filter(Boolean),
     dateTime: fmtDateTime(r.created_at),
+    createdAtIso: r.created_at,            // 🔵 keep raw for logic
     status: statusMap[r.emergency_status],
     seen: r.emergency_status !== "waiting",
     sentWhen: timeAgo(r.created_at),
@@ -216,6 +237,7 @@ function fmtDistance(km: number) {
 
 /** Title-case + remove underscores for UI display */
 function prettyStatus(s: RequestStatus): string {
+  if (s === "CANCELED") return "Cancelled"; // ✅ display preference
   return s
     .toLowerCase()
     .replace(/_/g, " ")
@@ -433,6 +455,10 @@ export default function RequestStatus() {
     userId?: string; // app_user uuid for accepted_by
   } | null>(null);
 
+  // 🔵 NEW: confirm cancel & confirm hide
+  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const [confirmHideId, setConfirmHideId] = useState<string | null>(null);
+
   const toggleCard = async (emId: string, emLat: number, emLon: number) => {
     const isOpening = !openCards[emId];
     setOpenCards((s) => ({ ...s, [emId]: isOpening }));
@@ -466,6 +492,7 @@ export default function RequestStatus() {
         }
 
         if (emergency_id) {
+          // Single view: show even if hidden (so deep-links still work)
           const { data: erow, error } = await supabase
             .from("emergency")
             .select("*")
@@ -488,10 +515,12 @@ export default function RequestStatus() {
           setItems([item]);
           await fetchSRCounts([item.id]); // pending only
         } else {
+          // List view: hide rows the driver "deleted"
           const { data: rows, error } = await supabase
             .from("emergency")
             .select("*")
             .eq("user_id", uid!)
+            .eq("driver_hidden", false) // 🔵 NEW
             .order("created_at", { ascending: false });
           if (error) throw error;
 
@@ -545,6 +574,7 @@ export default function RequestStatus() {
     async (emergencyId: string, emLat: number, emLon: number) => {
       setReqLoading((m) => ({ ...m, [emergencyId]: true }));
       try {
+        // 1) pending service_requests for this emergency
         const { data: rows, error } = await supabase
           .from("service_requests")
           .select(
@@ -561,13 +591,13 @@ export default function RequestStatus() {
 
         const srRows = (rows as ServiceRequestRow[]) ?? [];
 
-        // shop_id -> user_id + place_id
+        // 2) shop_details -> user_id + place_id
         const shopIds = Array.from(new Set(srRows.map((r) => r.shop_id)));
         const { data: shops } = await supabase
           .from("shop_details")
           .select("shop_id, user_id, place_id")
           .in("shop_id", shopIds.length ? shopIds : ["shp-void"]);
-        
+
         const shopToUser: Record<string, string> = {};
         const shopToPlace: Record<string, string> = {};
         (shops as ShopRow[] | null)?.forEach((s) => {
@@ -575,7 +605,7 @@ export default function RequestStatus() {
           if (s.place_id) shopToPlace[s.shop_id] = s.place_id;
         });
 
-        // user_id -> photo_url
+        // 3) app_user for avatar/name fallback
         const userIds = Array.from(new Set(Object.values(shopToUser)));
         let userMap: Record<string, UserRow> = {};
         if (userIds.length) {
@@ -586,7 +616,7 @@ export default function RequestStatus() {
           (users as UserRow[] | null)?.forEach((u) => (userMap[u.user_id] = u));
         }
 
-        // place_id -> name
+        // 4) places for shop display name
         const placeIds = Array.from(new Set(Object.values(shopToPlace)));
         let placeMap: Record<string, PlaceRow> = {};
         if (placeIds.length) {
@@ -597,31 +627,48 @@ export default function RequestStatus() {
           (places as PlaceRow[] | null)?.forEach((p) => (placeMap[p.place_id] = p));
         }
 
+        // 5) latest offer per service_id from shop_offers
+        const serviceIds = srRows.map((r) => r.service_id);
+        let latestOfferByService: Record<string, ShopOfferRow> = {};
+        if (serviceIds.length) {
+          const { data: offers } = await supabase
+            .from("shop_offers")
+            .select(
+              "offer_id, service_id, emergency_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount, note, created_at"
+            )
+            .in(
+              "service_id",
+              serviceIds.length ? serviceIds : ["00000000-0000-0000-0000-000000000000"]
+            )
+            .order("created_at", { ascending: false });
+
+          (offers as ShopOfferRow[] | null)?.forEach((o) => {
+            const key = o.service_id ?? "";
+            if (key && !latestOfferByService[key]) latestOfferByService[key] = o;
+          });
+        }
+
+        // 6) map to UI
         const list: SRUI[] = srRows.map((r) => {
-          const uid = shopToUser[r.shop_id]; // app_user uuid
+          const uid = shopToUser[r.shop_id];
           const u = uid ? userMap[uid] : undefined;
           const placeId = shopToPlace[r.shop_id];
           const place = placeId ? placeMap[placeId] : undefined;
-          
+
           const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
-          // 🔵 UPDATED: Use longer shop names with better formatting
           const name = place?.name || u?.full_name || "Auto Repair Shop";
           const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
 
-          // 🔵 UPDATED: Add placeholder offer details with new fields
-          const offerDetails = {
-            distanceFee: "$25.00",
-            laborCost: "$80.00", 
-            totalCost: "$105.00",
-            notes: "Includes basic diagnostic and repair. Additional parts may incur extra costs."
-          };
+          const off = latestOfferByService[r.service_id];
 
-          dbg(
-            `[SR_LIST] em=${emergencyId} service=${r.service_id}`,
-            `user_id=${uid ?? "unknown"}`,
-            `place_name=${place?.name ?? "N/A"}`,
-            `dist=${distanceKm} km`
-          );
+          const offerDetails = off
+            ? {
+                distanceFee: `₱${off.distance_fee.toFixed(2)}`,
+                laborCost: `₱${off.labor_cost.toFixed(2)}`,
+                totalCost: `₱${off.total_amount.toFixed(2)}`,
+                notes: off.note ?? undefined,
+              }
+            : undefined;
 
           return {
             service_id: r.service_id,
@@ -630,7 +677,7 @@ export default function RequestStatus() {
             avatar,
             distanceKm,
             status: r.status,
-            offerDetails, // 🔵 Added offer details
+            offerDetails,
           };
         });
 
@@ -655,7 +702,7 @@ export default function RequestStatus() {
 
         if (error) throw error;
 
-        // Optimistic UI: remove it locally and update counts
+        // Optimistic UI
         setReqLists((prev) => {
           const cur = prev[emergencyId] ?? [];
           const next = cur.filter((r) => r.service_id !== serviceId);
@@ -677,20 +724,67 @@ export default function RequestStatus() {
     []
   );
 
+  // Copy latest offer → payment_transaction if not already created
+  async function ensurePaymentTransaction(
+    emergencyId: string,
+    serviceId: string
+  ): Promise<void> {
+    const { data: existing } = await supabase
+      .from("payment_transaction")
+      .select("transaction_id")
+      .eq("emergency_id", emergencyId)
+      .eq("service_id", serviceId)
+      .maybeSingle();
+
+    if (existing) return;
+
+    const { data: offer, error: offErr } = await supabase
+      .from("shop_offers")
+      .select(
+        "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount"
+      )
+      .eq("service_id", serviceId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (offErr) throw offErr;
+    if (!offer) throw new Error("No offer found for this request.");
+
+    const { data: em } = await supabase
+      .from("emergency")
+      .select("user_id")
+      .eq("emergency_id", emergencyId)
+      .maybeSingle();
+
+    const { error: insErr } = await supabase.from("payment_transaction").insert({
+      emergency_id: emergencyId,
+      service_id: serviceId,
+      shop_id: offer.shop_id,
+      driver_user_id: em?.user_id ?? null,
+      offer_id: offer.offer_id,
+      rate_per_km: offer.rate_per_km,
+      distance_km: offer.distance_km,
+      distance_fee: offer.distance_fee,
+      labor_cost: offer.labor_cost,
+      parts_cost: 0,
+      total_amount: offer.total_amount,
+      status: "pending",
+    });
+
+    if (insErr) throw insErr;
+  }
+
   // ✅ Accept a service request (confirm first)
   const acceptService = useCallback(
-    async (opts: {
-      serviceId: string;
-      emergencyId: string;
-      userId?: string;
-    }) => {
+    async (opts: { serviceId: string; emergencyId: string; userId?: string }) => {
       const { serviceId, emergencyId, userId: acceptedByUser } = opts;
       const now = new Date().toISOString();
 
       try {
         setLoading({ visible: true, message: "Accepting request…" });
 
-        // 1) Mark this service request as accepted
+        // 1) Mark service_request as accepted
         const { error: srErr } = await supabase
           .from("service_requests")
           .update({ status: "accepted", accepted_at: now })
@@ -698,11 +792,8 @@ export default function RequestStatus() {
           .eq("emergency_id", emergencyId);
         if (srErr) throw srErr;
 
-        // 2) Update the emergency status to in_process + accepted_by + accepted_at
-        const patch: Partial<EmergencyRow> & any = {
-          emergency_status: "in_process",
-          accepted_at: now,
-        };
+        // 2) Move emergency → in_process (+ accepted_by)
+        const patch: any = { emergency_status: "in_process", accepted_at: now };
         if (acceptedByUser) patch.accepted_by = acceptedByUser;
 
         const { error: emErr } = await supabase
@@ -711,14 +802,15 @@ export default function RequestStatus() {
           .eq("emergency_id", emergencyId);
         if (emErr) throw emErr;
 
-        // Optimistic UI:
+        // 3) Ensure payment transaction
+        await ensurePaymentTransaction(emergencyId, serviceId);
+
+        // Optimistic UI
         setItems((prev) =>
           prev.map((it) =>
             it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
           )
         );
-
-        // This list shows only pending -> remove it + refresh counts
         setReqLists((prev) => {
           const cur = prev[emergencyId] ?? [];
           const next = cur.filter((r) => r.service_id !== serviceId);
@@ -729,7 +821,6 @@ export default function RequestStatus() {
           [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
         }));
 
-        // Also refresh from server (in case there are other rows)
         const em = items.find((i) => i.id === emergencyId);
         if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
       } catch (e: any) {
@@ -739,6 +830,62 @@ export default function RequestStatus() {
       }
     },
     [items, fetchSRListFor]
+  );
+
+  // 🔵 NEW: Cancel emergency (driver-initiated after 5 min no offers)
+  const cancelEmergency = useCallback(async (emergencyId: string) => {
+    try {
+      setLoading({ visible: true, message: "Canceling emergency…" });
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from("emergency")
+        .update({ emergency_status: "canceled", canceled_at: now })
+        .eq("emergency_id", emergencyId);
+      if (error) throw error;
+
+      // Optimistic UI
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === emergencyId ? { ...it, status: "CANCELED" } : it
+        )
+      );
+      setOpenCards((s) => ({ ...s, [emergencyId]: false }));
+    } catch (e: any) {
+      Alert.alert("Cancel failed", e?.message ?? "Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  }, []);
+
+  // 🔵 NEW: Hide completed emergency (soft delete)
+  const hideEmergency = useCallback(
+    async (emergencyId: string) => {
+      try {
+        setLoading({ visible: true, message: "Hiding from list…" });
+        const patch: any = { driver_hidden: true };
+        // If you added a timestamp column, also set it here:
+        // patch.driver_hidden_at = new Date().toISOString();
+
+        const { error } = await supabase
+          .from("emergency")
+          .update(patch)
+          .eq("emergency_id", emergencyId);
+        if (error) throw error;
+
+        // Optimistic UI
+        if (emergency_id) {
+          // If viewing a single item, go back once hidden
+          router.back();
+        } else {
+          setItems((prev) => prev.filter((it) => it.id !== emergencyId));
+        }
+      } catch (e: any) {
+        Alert.alert("Hide failed", e?.message ?? "Please try again.");
+      } finally {
+        setLoading({ visible: false });
+      }
+    },
+    [emergency_id, router]
   );
 
   /* ----------------------------- Realtime & lifecycle ----------------------------- */
@@ -810,7 +957,6 @@ export default function RequestStatus() {
             <View className="ml-3 flex-1">
               <View className="flex-row justify-between items-start">
                 <View className="flex-1">
-                  {/* 🔵 UPDATED: Shop name with better spacing and full name support */}
                   <Text
                     className="text-[15px] font-semibold text-slate-900 leading-5"
                     numberOfLines={2}
@@ -849,7 +995,6 @@ export default function RequestStatus() {
               {/* Offer Details - Collapsible */}
               {isExpanded && it.offerDetails && (
                 <View className="mt-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  {/* Notes at the top */}
                   {it.offerDetails.notes && (
                     <View className="mb-3 pb-3 border-b border-slate-200">
                       <Text className="text-slate-600 text-xs font-medium mb-1">
@@ -861,7 +1006,6 @@ export default function RequestStatus() {
                     </View>
                   )}
 
-                  {/* Cost Breakdown */}
                   <View className="space-y-2">
                     <View className="flex-row justify-between items-center">
                       <Text className="text-slate-600 text-sm">Distance Fee</Text>
@@ -973,132 +1117,140 @@ export default function RequestStatus() {
     );
   };
 
-  const renderItem = ({ item }: { item: RequestItem }) => {
-    const waiting = item.status === "WAITING";
-    const inProcess = item.status === "IN_PROCESS";
-    const isOpen = !!openCards[item.id];
+  // ⬇️ place this right after renderSRList(...)
+const renderItem = ({ item }: { item: RequestItem }) => {
+  const waiting = item.status === "WAITING";
+  const inProcess = item.status === "IN_PROCESS";
+  const completed = item.status === "COMPLETED";
+  const canceled  = item.status === "CANCELED"; // normalized value
+  const isOpen = !!openCards[item.id];
 
-    return (
-      <Pressable
-        onPress={() => toggleCard(item.id, item.lat, item.lon)}
-        className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
-        style={cardShadow as any}
-      >
-        <View className="flex-row items-center">
-          <Image
-            source={{ uri: item.avatar }}
-            className="w-12 h-12 rounded-full"
-          />
-          <View className="ml-3 flex-1">
-            <Text
-              className="text-[17px] font-semibold text-slate-900"
-              numberOfLines={1}
-            >
-              {item.name}
-            </Text>
-            <Text className="text-[13px] text-slate-500 mt-0.5">
-              Emergency Request • {item.vehicleType}
-            </Text>
-            {/* 🔵 REMOVED: Green dot and info section */}
-          </View>
-        </View>
+  // Show "Cancel" if: waiting, age ≥ 5 min, and no pending requests
+  const ageMs = Date.now() - new Date(item.createdAtIso).getTime();
+  const hasPending = (reqCounts[item.id] ?? 0) > 0;
+  const canCancel = waiting && !hasPending && ageMs >= 5 * 60 * 1000;
 
-        <View className="h-px bg-slate-200 my-4" />
-
-        {/* 🔵 UPDATED: Driver Info with Correct Order */}
-        <View className="space-y-3">
-          {/* Notes (using the info field) */}
-          {item.info && item.info !== "—" && (
-            <View className="flex-row items-start">
-              <Ionicons name="document-text-outline" size={16} color="#64748B" className="mt-0.5" />
-              <View className="ml-3 flex-1">
-                <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
-                <Text className="text-slate-800 text-sm mt-0.5 leading-5">
-                  {item.info}
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {/* Landmark */}
-          <View className="flex-row items-start">
-            <Ionicons name="location-outline" size={16} color="#64748B" className="mt-0.5" />
-            <View className="ml-3 flex-1">
-              <Text className="text-slate-600 text-sm font-medium">Landmark</Text>
-              <Text className="text-slate-800 text-sm mt-0.5 leading-5">
-                {item.landmark}
-              </Text>
-            </View>
-          </View>
-
-          {/* Location */}
-          <View className="flex-row items-start">
-            <Ionicons name="map-outline" size={16} color="#64748B" className="mt-0.5" />
-            <View className="ml-3 flex-1">
-              <Text className="text-slate-600 text-sm font-medium">Location</Text>
-              <Text className="text-slate-800 text-sm mt-0.5">
-                {item.location}
-              </Text>
-            </View>
-          </View>
-
-          {/* Date & Time */}
-          <View className="flex-row items-start">
-            <Ionicons name="calendar-outline" size={16} color="#64748B" className="mt-0.5" />
-            <View className="ml-3 flex-1">
-              <Text className="text-slate-600 text-sm font-medium">Date & Time</Text>
-              <Text className="text-slate-800 text-sm mt-0.5">
-                {item.dateTime}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View className="h-px bg-slate-200 my-4" />
-
-        <View className="flex-row items-center justify-between">
-          <View
-            className={`rounded-full px-3 py-1.5 border self-start flex-row items-center ${
-              STATUS_STYLES[item.status].bg ?? ""
-            } ${STATUS_STYLES[item.status].border ?? ""}`}
+  return (
+    <Pressable
+      onPress={() => toggleCard(item.id, item.lat, item.lon)}
+      className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
+      style={cardShadow as any}
+    >
+      {/* Trash on completed OR canceled (soft-hide) */}
+      {(completed || canceled) && (
+        <View className="absolute top-3 right-3">
+          <Pressable
+            onPress={() => setConfirmHideId(item.id)}
+            hitSlop={8}
+            className="p-1 rounded-full"
           >
-            {item.status === "IN_PROCESS" ? (
-              <View className="mr-1.5">
-                <SpinningGear size={12} />
-              </View>
-            ) : null}
-            <Text
-              className={`text-[12px] font-medium ${
-                STATUS_STYLES[item.status].text ?? "text-slate-800"
-              }`}
-            >
-              {prettyStatus(item.status)}
-            </Text>
+            <Ionicons name="trash-outline" size={20} color="#64748B" />
+          </Pressable>
+        </View>
+      )}
+
+      <View className="flex-row items-center">
+        <Image source={{ uri: item.avatar }} className="w-12 h-12 rounded-full" />
+        <View className="ml-3 flex-1">
+          <Text className="text-[17px] font-semibold text-slate-900" numberOfLines={1}>
+            {item.name}
+          </Text>
+          <Text className="text-[13px] text-slate-500 mt-0.5">
+            Emergency Request • {item.vehicleType}
+          </Text>
+        </View>
+      </View>
+
+      <View className="h-px bg-slate-200 my-4" />
+
+      {/* Driver Info */}
+      <View className="space-y-3">
+        {item.info && item.info !== "—" && (
+          <View className="flex-row items-start">
+            <Ionicons name="document-text-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
+              <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.info}</Text>
+            </View>
           </View>
+        )}
 
-          {inProcess && (
-            <Pressable
-              onPress={() => openChatForEmergency(item.id, router)}
-              className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2"
-            >
-              <Ionicons name="chatbubbles" size={14} color="#FFF" />
-              <Text className="text-white text-[13px] font-semibold ml-1.5">
-                Message
-              </Text>
-            </Pressable>
-          )}
-
-          {!inProcess && (
-            <Text className="text-[13px] text-slate-400">
-              Sent {item.sentWhen}
-            </Text>
-          )}
+        <View className="flex-row items-start">
+          <Ionicons name="location-outline" size={16} color="#64748B" className="mt-0.5" />
+          <View className="ml-3 flex-1">
+            <Text className="text-slate-600 text-sm font-medium">Landmark</Text>
+            <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.landmark}</Text>
+          </View>
         </View>
 
-        {waiting && isOpen ? renderSRList(item) : null}
-      </Pressable>
-    );
-  };
+        <View className="flex-row items-start">
+          <Ionicons name="map-outline" size={16} color="#64748B" className="mt-0.5" />
+          <View className="ml-3 flex-1">
+            <Text className="text-slate-600 text-sm font-medium">Location</Text>
+            <Text className="text-slate-800 text-sm mt-0.5">{item.location}</Text>
+          </View>
+        </View>
+
+        <View className="flex-row items-start">
+          <Ionicons name="calendar-outline" size={16} color="#64748B" className="mt-0.5" />
+          <View className="ml-3 flex-1">
+            <Text className="text-slate-600 text-sm font-medium">Date & Time</Text>
+            <Text className="text-slate-800 text-sm mt-0.5">{item.dateTime}</Text>
+          </View>
+        </View>
+      </View>
+
+      <View className="h-px bg-slate-200 my-4" />
+
+      <View className="flex-row items-center justify-between">
+        <View
+          className={`rounded-full px-3 py-1.5 border self-start flex-row items-center ${
+            STATUS_STYLES[item.status].bg ?? ""
+          } ${STATUS_STYLES[item.status].border ?? ""}`}
+        >
+          {item.status === "IN_PROCESS" ? (
+            <View className="mr-1.5">
+              <SpinningGear size={12} />
+            </View>
+          ) : null}
+          <Text
+            className={`text-[12px] font-medium ${
+              STATUS_STYLES[item.status].text ?? "text-slate-800"
+            }`}
+          >
+            {prettyStatus(item.status)}
+          </Text>
+        </View>
+
+        {inProcess && (
+          <Pressable
+            onPress={() => openChatForEmergency(item.id, router)}
+            className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2"
+          >
+            <Ionicons name="chatbubbles" size={14} color="#FFF" />
+            <Text className="text-white text-[13px] font-semibold ml-1.5">Message</Text>
+          </Pressable>
+        )}
+
+        {!inProcess &&
+          (canCancel ? (
+            <Pressable
+              onPress={() => setConfirmCancelId(item.id)}
+              className="flex-row items-center bg-rose-600 rounded-xl px-4 py-2"
+            >
+              <Ionicons name="close-circle" size={14} color="#FFF" />
+              <Text className="text-white text-[13px] font-semibold ml-1.5">Cancel</Text>
+            </Pressable>
+          ) : (
+            <Text className="text-[13px] text-slate-400">Sent {item.sentWhen}</Text>
+          ))}
+      </View>
+
+      {waiting && isOpen ? renderSRList(item) : null}
+    </Pressable>
+  );
+};
+
 
   return (
     <SafeAreaView className="flex-1 bg-[#F4F6F8]">
@@ -1163,6 +1315,40 @@ export default function RequestStatus() {
         confirmLabel="Accept"
         cancelLabel="Back"
         confirmColor="#2563EB"
+      />
+
+      {/* 🔵 Confirm: Cancel emergency */}
+      <CenterConfirm
+        visible={!!confirmCancelId}
+        title="Cancel this emergency?"
+        message="No shop offers were received within 5 minutes. You can cancel now."
+        onCancel={() => setConfirmCancelId(null)}
+        onConfirm={() => {
+          if (confirmCancelId) {
+            cancelEmergency(confirmCancelId);
+            setConfirmCancelId(null);
+          }
+        }}
+        confirmLabel="Cancel Emergency"
+        cancelLabel="Back"
+        confirmColor="#DC2626"
+      />
+
+      {/* 🔵 Confirm: Hide completed emergency */}
+      <CenterConfirm
+        visible={!!confirmHideId}
+        title="Delete request from your list?"
+        message="Note: You cannot view this again once deleted."
+        onCancel={() => setConfirmHideId(null)}
+        onConfirm={() => {
+          if (confirmHideId) {
+            hideEmergency(confirmHideId);
+            setConfirmHideId(null);
+          }
+        }}
+        confirmLabel="Delete"
+        cancelLabel="Back"
+        confirmColor="#475569"
       />
 
       <LoadingScreen

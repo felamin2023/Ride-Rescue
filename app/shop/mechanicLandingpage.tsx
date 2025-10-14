@@ -943,7 +943,7 @@ export default function RequestScreen() {
       icon: "document-text-outline" as const, // you can use "time-outline" or "clipboard-outline" if you prefer
     },
       {
-        label: "Transaction History",
+        label: "Transactions",
         href: "/shop/completedrequest",
         icon: "receipt-outline" as const,
       },
@@ -1367,85 +1367,107 @@ export default function RequestScreen() {
     }
   };
 
-  const handleOfferSubmit = async (offerData: OfferData) => {
-    if (!selectedEmergencyForOffer || !shopId) return;
-    
-    try {
-      setLoading({ visible: true, message: "Sending offer…" });
+  // constants for fee rule
+const RATE_PER_KM = 15;          // PHP per km
+const MINIMUM_DISTANCE_KM = 1.0; // bill minimum 1km
 
-      // For now, we'll use the same functionality as before (direct accept)
-      // In the future, this will send the offer details to the backend
-      const emergencyId = selectedEmergencyForOffer.id;
-      const lat = myCoords?.lat ?? 0;
-      const lng = myCoords?.lng ?? 0;
+const handleOfferSubmit = async (offerData: OfferData) => {
+  if (!selectedEmergencyForOffer || !shopId) return;
 
-      // Existing row?
-      const { data: existing } = await supabase
-        .from("service_requests")
-        .select("service_id, status")
-        .eq("emergency_id", emergencyId)
-        .eq("shop_id", shopId)
-        .maybeSingle();
+  try {
+    setLoading({ visible: true, message: "Sending offer…" });
 
-      if (existing) {
-        if (existing.status === "canceled") {
-          const { error: upErr } = await supabase
-            .from("service_requests")
-            .update({
-              status: "pending",
-              requested_at: new Date().toISOString(),
-            })
-            .eq("service_id", existing.service_id);
-          if (upErr) throw upErr;
-          setMyReq((m) => ({
-            ...m,
-            [emergencyId]: {
-              service_id: existing.service_id,
-              status: "pending",
-            },
-          }));
-        } else {
-          // Already pending/accepted/rejected — just mirror
-          setMyReq((m) => ({
-            ...m,
-            [emergencyId]: {
-              service_id: existing.service_id,
-              status: existing.status as MyReqStatus,
-            },
-          }));
-        }
-      } else {
-        // Fresh insert
-        const { data: ins, error: insErr } = await supabase
+    const emergencyId = selectedEmergencyForOffer.id;
+    const lat = myCoords?.lat ?? 0;
+    const lng = myCoords?.lng ?? 0;
+
+    // 1) Ensure a service_requests row exists (or revive a canceled one)
+    let serviceId: string | null = null;
+
+    const { data: existing } = await supabase
+      .from("service_requests")
+      .select("service_id, status")
+      .eq("emergency_id", emergencyId)
+      .eq("shop_id", shopId)
+      .maybeSingle();
+
+    if (existing) {
+      serviceId = existing.service_id;
+      if (existing.status === "canceled") {
+        const { error: upErr } = await supabase
           .from("service_requests")
-          .insert({
-            emergency_id: emergencyId,
-            shop_id: shopId,
-            latitude: lat,
-            longitude: lng,
+          .update({
             status: "pending",
+            requested_at: new Date().toISOString(),
           })
-          .select("service_id, status")
-          .single();
-        if (insErr) throw insErr;
-        setMyReq((m) => ({
-          ...m,
-          [emergencyId]: {
-            service_id: ins.service_id,
-            status: ins.status as MyReqStatus,
-          },
-        }));
+          .eq("service_id", existing.service_id);
+        if (upErr) throw upErr;
       }
-
-      setLoading({ visible: false });
-      showToast("Offer sent successfully!");
-      setOfferModalVisible(false);
-      setSelectedEmergencyForOffer(null);
-    } catch (e: any) {
-      setLoading({ visible: false });
-      Alert.alert("Failed to send offer", e?.message ?? "Please try again.");
+    } else {
+      const { data: ins, error: insErr } = await supabase
+        .from("service_requests")
+        .insert({
+          emergency_id: emergencyId,
+          shop_id: shopId,
+          latitude: lat,
+          longitude: lng,
+          status: "pending",
+          requested_at: new Date().toISOString(),
+        })
+        .select("service_id")
+        .single();
+      if (insErr) throw insErr;
+      serviceId = ins.service_id;
     }
-  };
+
+    // 2) Compute distance + price with fallback (min 1.0 km)
+    const dKm =
+      selectedEmergencyForOffer.distanceKm ??
+      (myCoords &&
+      typeof selectedEmergencyForOffer.lat === "number" &&
+      typeof selectedEmergencyForOffer.lng === "number"
+        ? haversineKm(
+            myCoords.lat,
+            myCoords.lng,
+            selectedEmergencyForOffer.lat,
+            selectedEmergencyForOffer.lng
+          )
+        : MINIMUM_DISTANCE_KM);
+
+    const billableKm = Math.max(dKm ?? 0, MINIMUM_DISTANCE_KM);
+    const distanceFee = billableKm * RATE_PER_KM;
+    const total = distanceFee + offerData.laborCost;
+
+    // 3) Insert offer into shop_offers
+    const { error: offerErr } = await supabase.from("shop_offers").insert({
+      emergency_id: emergencyId,
+      service_id: serviceId,
+      shop_id: shopId,
+      distance_km: Number(billableKm.toFixed(2)),
+      rate_per_km: RATE_PER_KM,
+      distance_fee: Number(distanceFee.toFixed(2)),
+      labor_cost: Number(offerData.laborCost.toFixed(2)),
+      total_amount: Number(total.toFixed(2)),
+      note: offerData.note || null,
+    });
+    if (offerErr) throw offerErr;
+
+    // reflect locally (same as before)
+    setMyReq((m) => ({
+      ...m,
+      [emergencyId]: { service_id: serviceId!, status: "pending" },
+    }));
+
+    setLoading({ visible: false });
+    showToast("Offer sent successfully!");
+    setOfferModalVisible(false);
+    setSelectedEmergencyForOffer(null);
+  } catch (e: any) {
+    setLoading({ visible: false });
+    Alert.alert("Failed to send offer", e?.message ?? "Please try again.");
+  }
+};
+
 
   const doCancelRequest = async () => {
     if (!confirmCancel || !shopId) return;

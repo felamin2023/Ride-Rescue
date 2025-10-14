@@ -223,28 +223,117 @@ function prettyStatus(s: RequestStatus): string {
 }
 
 // 🔵 Helper to open chat for an emergency
+// 🔵 UPDATED: Check for ANY existing conversation between users before creating emergency one
+// 🔵 UPDATED: Check for ANY existing conversation between users (emergency or non-emergency)
+
+// 🔵 UPDATED: Check for ANY existing conversation between users before creating emergency one
 async function openChatForEmergency(emergencyId: string, router: any) {
   try {
-    const { data, error } = await supabase
-      .from("conversations")
-      .select("id")
-      .eq("emergency_id", emergencyId)
-      .single();
-
-    if (error || !data) {
-      Alert.alert(
-        "Chat Not Available",
-        "Conversation will be created shortly. Please try again in a moment."
-      );
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      Alert.alert("Error", "You need to be logged in.");
       return;
     }
 
-    router.push(`/driver/chat/${data.id}`);
+    // First, get the emergency details to find the accepted shop
+    const { data: emergency, error: emError } = await supabase
+      .from("emergency")
+      .select("accepted_by")
+      .eq("emergency_id", emergencyId)
+      .single();
+
+    if (emError || !emergency) {
+      Alert.alert("Error", "Emergency not found.");
+      return;
+    }
+
+    const shopOwnerUserId = emergency.accepted_by;
+    if (!shopOwnerUserId) {
+      Alert.alert("Error", "No shop has accepted this emergency yet.");
+      return;
+    }
+
+    console.log("Looking for ANY conversation between driver and shop:", {
+      driver_id: user.id,
+      shop_owner_id: shopOwnerUserId
+    });
+
+    // 🔵 FIXED: Better query to find conversations between these users
+    // Look for conversations where either:
+    // 1. customer_id = driver AND driver_id = shop_owner (emergency format)
+    // 2. customer_id = shop_owner AND driver_id = driver (non-emergency format)
+    const { data: existingConvs, error: convError } = await supabase
+      .from("conversations")
+      .select(`
+        id,
+        emergency_id,
+        customer_id,
+        driver_id,
+        shop_place_id
+      `)
+      .or(`and(customer_id.eq.${user.id},driver_id.eq.${shopOwnerUserId}),and(customer_id.eq.${shopOwnerUserId},driver_id.eq.${user.id})`)
+      .order("updated_at", { ascending: false });
+
+    if (convError) {
+      console.error("Error checking conversations:", convError);
+    }
+
+    let conversationId;
+    let existingConv = existingConvs && existingConvs.length > 0 ? existingConvs[0] : null;
+
+    // Use the most recent existing conversation if found
+    if (existingConv) {
+      conversationId = existingConv.id;
+      console.log("Found existing conversation:", conversationId, 
+        existingConv.emergency_id ? "(emergency)" : "(non-emergency)");
+      
+      // 🔵 FIXED: Only update if this conversation doesn't already have an emergency_id
+      // OR if it has a different emergency_id (upgrade non-emergency to emergency)
+      if (!existingConv.emergency_id || existingConv.emergency_id !== emergencyId) {
+        const { error: updateError } = await supabase
+          .from("conversations")
+          .update({ 
+            emergency_id: emergencyId,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", conversationId);
+        
+        if (updateError) {
+          console.error("Error updating conversation emergency_id:", updateError);
+        } else {
+          console.log("Updated conversation with emergency_id:", emergencyId);
+        }
+      }
+    } else {
+      console.log("No existing conversation found, creating new emergency conversation");
+      // Create new emergency conversation with correct role assignment
+      // In emergency context: driver is customer, shop is driver
+      const { data: newConv, error } = await supabase
+        .from("conversations")
+        .insert({
+          emergency_id: emergencyId,
+          customer_id: user.id, // driver is customer in emergency context
+          driver_id: shopOwnerUserId, // shop is driver in emergency context
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error creating emergency conversation:", error);
+        Alert.alert("Error", "Could not start conversation. Please try again.");
+        return;
+      }
+      conversationId = newConv.id;
+      console.log("Created new emergency conversation:", conversationId);
+    }
+
+    router.push(`/driver/chat/${conversationId}`);
   } catch (err) {
     console.error("[openChatForEmergency] Error:", err);
     Alert.alert("Error", "Could not open chat. Please try again.");
   }
 }
+
 
 /* ----------------------------- UI helpers ----------------------------- */
 const cardShadow = Platform.select({
@@ -678,68 +767,72 @@ export default function RequestStatus() {
   );
 
   // ✅ Accept a service request (confirm first)
-  const acceptService = useCallback(
-    async (opts: {
-      serviceId: string;
-      emergencyId: string;
-      userId?: string;
-    }) => {
-      const { serviceId, emergencyId, userId: acceptedByUser } = opts;
-      const now = new Date().toISOString();
+// ✅ FIXED: Remove automatic conversation creation from acceptService
+const acceptService = useCallback(
+  async (opts: {
+    serviceId: string;
+    emergencyId: string;
+    userId?: string;
+  }) => {
+    const { serviceId, emergencyId, userId: acceptedByUser } = opts;
+    const now = new Date().toISOString();
 
-      try {
-        setLoading({ visible: true, message: "Accepting request…" });
+    try {
+      setLoading({ visible: true, message: "Accepting request…" });
 
-        // 1) Mark this service request as accepted
-        const { error: srErr } = await supabase
-          .from("service_requests")
-          .update({ status: "accepted", accepted_at: now })
-          .eq("service_id", serviceId)
-          .eq("emergency_id", emergencyId);
-        if (srErr) throw srErr;
+      // 1) Mark this service request as accepted
+      const { error: srErr } = await supabase
+        .from("service_requests")
+        .update({ status: "accepted", accepted_at: now })
+        .eq("service_id", serviceId)
+        .eq("emergency_id", emergencyId);
+      if (srErr) throw srErr;
 
-        // 2) Update the emergency status to in_process + accepted_by + accepted_at
-        const patch: Partial<EmergencyRow> & any = {
-          emergency_status: "in_process",
-          accepted_at: now,
-        };
-        if (acceptedByUser) patch.accepted_by = acceptedByUser;
+      // 2) Update the emergency status to in_process + accepted_by + accepted_at
+      const patch: Partial<EmergencyRow> & any = {
+        emergency_status: "in_process",
+        accepted_at: now,
+      };
+      if (acceptedByUser) patch.accepted_by = acceptedByUser;
 
-        const { error: emErr } = await supabase
-          .from("emergency")
-          .update(patch)
-          .eq("emergency_id", emergencyId);
-        if (emErr) throw emErr;
+      const { error: emErr } = await supabase
+        .from("emergency")
+        .update(patch)
+        .eq("emergency_id", emergencyId);
+      if (emErr) throw emErr;
 
-        // Optimistic UI:
-        setItems((prev) =>
-          prev.map((it) =>
-            it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
-          )
-        );
+      // ✅ REMOVED: Automatic conversation creation logic
+      // The conversation should only be created when user explicitly clicks "Message"
 
-        // This list shows only pending -> remove it + refresh counts
-        setReqLists((prev) => {
-          const cur = prev[emergencyId] ?? [];
-          const next = cur.filter((r) => r.service_id !== serviceId);
-          return { ...prev, [emergencyId]: next };
-        });
-        setReqCounts((prev) => ({
-          ...prev,
-          [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
-        }));
+      // Optimistic UI:
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
+        )
+      );
 
-        // Also refresh from server (in case there are other rows)
-        const em = items.find((i) => i.id === emergencyId);
-        if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
-      } catch (e: any) {
-        Alert.alert("Accept failed", e?.message ?? "Please try again.");
-      } finally {
-        setLoading({ visible: false });
-      }
-    },
-    [items, fetchSRListFor]
-  );
+      // This list shows only pending -> remove it + refresh counts
+      setReqLists((prev) => {
+        const cur = prev[emergencyId] ?? [];
+        const next = cur.filter((r) => r.service_id !== serviceId);
+        return { ...prev, [emergencyId]: next };
+      });
+      setReqCounts((prev) => ({
+        ...prev,
+        [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
+      }));
+
+      // Also refresh from server (in case there are other rows)
+      const em = items.find((i) => i.id === emergencyId);
+      if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
+    } catch (e: any) {
+      Alert.alert("Accept failed", e?.message ?? "Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  },
+  [items, fetchSRListFor]
+);
 
   /* ----------------------------- Realtime & lifecycle ----------------------------- */
   useEffect(() => {

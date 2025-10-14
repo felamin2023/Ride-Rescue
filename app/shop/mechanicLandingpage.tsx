@@ -933,11 +933,6 @@ export default function RequestScreen() {
         icon: "chatbubbles-outline" as const,
       },
       {
-        label: "Inbox",
-        href: "/shop/inbox",
-        icon: "notifications-outline" as const,
-      },
-      {
       label: "Accepted Requests",
       href: "/shop/mechanicAcceptedrequests", // ← the page we built
       icon: "document-text-outline" as const, // you can use "time-outline" or "clipboard-outline" if you prefer
@@ -1546,16 +1541,29 @@ const handleOfferSubmit = async (offerData: OfferData) => {
             </Text>
           </View>
 
-          <Pressable
-            className="p-2 rounded-lg active:opacity-80"
-            android_ripple={{
-              color: "rgba(255,255,255,0.18)",
-              borderless: true,
-            }}
-            onPress={() => setDrawerOpen(true)}
-          >
-            <Ionicons name="menu" size={24} color="#fff" />
-          </Pressable>
+          
+  <View className="flex-row items-center">
+    {/* Notifications */}
+    <Pressable
+      onPress={() => router.push("/shop/inbox")}
+      className="p-2 rounded-lg mr-1 active:opacity-80"
+      android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+      hitSlop={10}
+    >
+      <Ionicons name="notifications-outline" size={22} color="#fff" />
+    </Pressable>
+
+    {/* Burger / Drawer */}
+    <Pressable
+      className="p-2 rounded-lg active:opacity-80"
+      android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+      onPress={() => setDrawerOpen(true)}
+      hitSlop={10}
+    >
+      <Ionicons name="menu" size={24} color="#fff" />
+    </Pressable>
+  </View>
+
         </View>
       </SafeAreaView>
 

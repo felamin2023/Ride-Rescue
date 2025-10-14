@@ -72,27 +72,17 @@ type PaymentTx = {
   paid_at: string | null;
   proof_image_url?: string | null;
 
-  // ✅ NEW
-  receiver_shop_id: string | null;
+  receiver_shop_id: string | null; // from GENERATED column
 };
 
-// ✅ NEW (for places.owner lookup)
 type PlaceByOwnerRow = { owner: string | null; name?: string | null; place_id?: string | null };
-
-type ShopRow = {
-  shop_id: string;
-  shop_name?: string | null;
-  business_name?: string | null;
-  name?: string | null;
-  place_id?: string | null;
-};
-
+type ShopRow = { shop_id: string; shop_name?: string | null; business_name?: string | null; name?: string | null; place_id?: string | null };
 type AppUserRow = { user_id: string; full_name?: string | null };
 type PlaceRow = { place_id: string; name?: string | null };
 
 type TxItem = {
   id: string; // transaction_id
-  title: string; // final display name (ideally from places.name)
+  title: string; // shop display name
   desc: string;
   method: PaymentMethod;
   amount: number;
@@ -148,7 +138,6 @@ const statusStyle: Record<
 };
 
 function pickShopName(s?: ShopRow | null, u?: AppUserRow | null, p?: PlaceRow | null) {
-  // Priority: shop_details.shop_name → business_name → places.name → app_user.full_name → shop_details.name → fallback
   return (
     s?.shop_name?.trim() ||
     s?.business_name?.trim() ||
@@ -205,9 +194,7 @@ async function uploadReceiptToBucket(userId: string, txId: string, localUri: str
   let arrayBuffer: ArrayBuffer;
   let { type: contentType, ext } = guessExtAndMime(localUri);
   try {
-    const base64 = await FileSystem.readAsStringAsync(localUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
     arrayBuffer = base64ToArrayBuffer(base64.replace(/\r?\n/g, ""));
   } catch (readErr) {
     console.warn("read->base64->arrayBuffer failed", { localUri, readErr });
@@ -221,34 +208,19 @@ async function uploadReceiptToBucket(userId: string, txId: string, localUri: str
   let lastErr: any = null;
 
   try {
-    const { error } = await bucket.upload(path, arrayBuffer, {
-      upsert: true,
-      contentType,
-    });
+    const { error } = await bucket.upload(path, arrayBuffer, { upsert: true, contentType });
     if (error) throw error;
     uploadedOk = true;
   } catch (err: any) {
     lastErr = err;
-    console.warn("direct upload failed, will try signed upload", err?.message || err);
   }
 
   // Fallback: signed upload
   if (!uploadedOk) {
-    try {
-      const { data: sign, error: signErr } = await bucket.createSignedUploadUrl(path);
-      if (signErr) throw signErr;
-
-      const { error: up2Err } = await bucket.uploadToSignedUrl(path, sign.token, arrayBuffer, {
-        upsert: true,
-        contentType,
-      });
-      if (up2Err) throw up2Err;
-
-      uploadedOk = true;
-    } catch (err2) {
-      console.error("signed upload also failed", err2);
-      throw lastErr || err2;
-    }
+    const { data: sign, error: signErr } = await bucket.createSignedUploadUrl(path);
+    if (signErr) throw signErr;
+    const { error: up2Err } = await bucket.uploadToSignedUrl(path, sign.token, arrayBuffer, { upsert: true, contentType });
+    if (up2Err) throw up2Err;
   }
 
   const { data } = bucket.getPublicUrl(path);
@@ -261,9 +233,7 @@ function LoadingOverlay({ visible, message }: { visible: boolean; message?: stri
 
   useEffect(() => {
     if (!visible) return;
-    const loop = Animated.loop(
-      Animated.timing(spin, { toValue: 1, duration: 1000, easing: Easing.linear, useNativeDriver: true })
-    );
+    const loop = Animated.loop(Animated.timing(spin, { toValue: 1, duration: 1000, easing: Easing.linear, useNativeDriver: true }));
     loop.start();
     return () => {
       loop.stop();
@@ -431,8 +401,11 @@ export default function TransactionHistory() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMsg, setLoadingMsg] = useState<string | undefined>(undefined);
+
+  // Details + Proof viewer
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailTx, setDetailTx] = useState<TxItem | null>(null);
+  const [proofOpen, setProofOpen] = useState(false);
 
   // Pay Now
   const [payOpen, setPayOpen] = useState(false);
@@ -452,172 +425,149 @@ export default function TransactionHistory() {
     return "Unknown";
   };
 
-const loadData = useCallback(async (reset = false) => {
-  try {
-    if (reset) {
-      setLoading(true);
-      setLoadingMsg("Loading transactions…");
-    }
-
-    // who am I
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) throw new Error("Please sign in.");
-
-    // my transactions (TYPED)
-    const { data: txs, error: txErr } = await supabase
-    .from("payment_transaction")
-    .select(
-      [
-        "transaction_id",
-        "emergency_id",
-        "service_id",
-        "shop_id",
-        "receiver_shop_id",     // ✅ add this
-        "driver_user_id",
-        "distance_fee",
-        "labor_cost",
-        "parts_cost",
-        "extra_total",
-        "extra_items",
-        "total_amount",
-        "status",
-        "payment_method",
-        "created_at",
-        "updated_at",
-        "paid_at",
-        "proof_image_url",
-      ].join(",")
-    )
-    .eq("driver_user_id", auth.user.id)
-    .order("created_at", { ascending: false })
-    .returns<PaymentTx[]>();
-
-    if (txErr) throw txErr;
-
-    const list: PaymentTx[] = txs ?? [];
-
-    // ✅ owner-based name resolution
-    const receiverIds = Array.from(
-      new Set(list.map(t => (t.receiver_shop_id || t.shop_id)).filter(Boolean) as string[])
-    );
-
-    const placeByOwner = new Map<string, PlaceByOwnerRow>();
-    if (receiverIds.length) {
-      const { data: placesByOwner } = await supabase
-        .from("places")
-        .select("owner, name, place_id")
-        .in("owner", receiverIds)
-        .returns<PlaceByOwnerRow[]>();
-      placesByOwner?.forEach(p => {
-        if (p.owner) placeByOwner.set(p.owner, p);
-      });
-    }
-
-
-    /* ---------- Resolve shop display names with PLACES priority ---------- */
-    const shopIds = Array.from(new Set(list.map((t) => t.shop_id)));
-
-    const placeDirectById = new Map<string, PlaceRow>(); // when shop_id === places.place_id
-    const shopById = new Map<string, ShopRow>();         // shop_details by shop_id
-    const placeByShopPlaceId = new Map<string, PlaceRow>();
-    const userById = new Map<string, AppUserRow>();      // optional fallback
-
-    if (shopIds.length) {
-      // A) Try direct places lookup using shop_id as place_id (TYPED)
-      const { data: directPlaces } = await supabase
-        .from("places")
-        .select("place_id, name")
-        .in("place_id", shopIds)
-        .returns<PlaceRow[]>();
-      directPlaces?.forEach((p) => placeDirectById.set(p.place_id, p));
-
-      // B) shop_details (discover place_id) (TYPED)
-      const { data: shops } = await supabase
-        .from("shop_details")
-        .select("shop_id, shop_name, business_name, name, place_id")
-        .in("shop_id", shopIds)
-        .returns<ShopRow[]>();
-      shops?.forEach((s) => shopById.set(s.shop_id, s));
-
-      // C) places from the discovered place_ids (TYPED)
-      const placeIds = Array.from(new Set((shops ?? []).map((s) => s.place_id).filter(Boolean) as string[]));
-      if (placeIds.length) {
-        const { data: placeRows } = await supabase
-          .from("places")
-          .select("place_id, name")
-          .in("place_id", placeIds)
-          .returns<PlaceRow[]>();
-        placeRows?.forEach((p) => placeByShopPlaceId.set(p.place_id, p));
+  const loadData = useCallback(async (reset = false) => {
+    try {
+      if (reset) {
+        setLoading(true);
+        setLoadingMsg("Loading transactions…");
       }
 
-      // D) optional: app_user as a last resort (TYPED)
-      const { data: users } = await supabase
-        .from("app_user")
-        .select("user_id, full_name")
-        .in("user_id", shopIds)
-        .returns<AppUserRow[]>();
-      users?.forEach((u) => userById.set(u.user_id, u));
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) throw new Error("Please sign in.");
+
+      const { data: txs, error: txErr } = await supabase
+        .from("payment_transaction")
+        .select(
+          [
+            "transaction_id",
+            "emergency_id",
+            "service_id",
+            "shop_id",
+            "receiver_shop_id",
+            "driver_user_id",
+            "distance_fee",
+            "labor_cost",
+            "parts_cost",
+            "extra_total",
+            "extra_items",
+            "total_amount",
+            "status",
+            "payment_method",
+            "created_at",
+            "updated_at",
+            "paid_at",
+            "proof_image_url",
+          ].join(",")
+        )
+        .eq("driver_user_id", auth.user.id)
+        .order("created_at", { ascending: false })
+        .returns<PaymentTx[]>();
+
+      if (txErr) throw txErr;
+      const list: PaymentTx[] = txs ?? [];
+
+      // Resolve shop names (places.owner → places.place_id → shop_details → app_user)
+      const receiverIds = Array.from(new Set(list.map((t) => (t.receiver_shop_id || t.shop_id)).filter(Boolean) as string[]));
+      const placeByOwner = new Map<string, PlaceByOwnerRow>();
+      if (receiverIds.length) {
+        const { data: placesByOwner } = await supabase
+          .from("places")
+          .select("owner, name, place_id")
+          .in("owner", receiverIds)
+          .returns<PlaceByOwnerRow[]>();
+        placesByOwner?.forEach((p) => p.owner && placeByOwner.set(p.owner, p));
+      }
+
+      const shopIds = Array.from(new Set(list.map((t) => t.shop_id)));
+      const placeDirectById = new Map<string, PlaceRow>();
+      const shopById = new Map<string, ShopRow>();
+      const placeByShopPlaceId = new Map<string, PlaceRow>();
+      const userById = new Map<string, AppUserRow>();
+
+      if (shopIds.length) {
+        const { data: directPlaces } = await supabase
+          .from("places")
+          .select("place_id, name")
+          .in("place_id", shopIds)
+          .returns<PlaceRow[]>();
+        directPlaces?.forEach((p) => placeDirectById.set(p.place_id, p));
+
+        const { data: shops } = await supabase
+          .from("shop_details")
+          .select("shop_id, shop_name, business_name, name, place_id")
+          .in("shop_id", shopIds)
+          .returns<ShopRow[]>();
+        shops?.forEach((s) => shopById.set(s.shop_id, s));
+
+        const placeIds = Array.from(new Set((shops ?? []).map((s) => s.place_id).filter(Boolean) as string[]));
+        if (placeIds.length) {
+          const { data: placeRows } = await supabase
+            .from("places")
+            .select("place_id, name")
+            .in("place_id", placeIds)
+            .returns<PlaceRow[]>();
+          placeRows?.forEach((p) => placeByShopPlaceId.set(p.place_id, p));
+        }
+
+        const { data: users } = await supabase
+          .from("app_user")
+          .select("user_id, full_name")
+          .in("user_id", shopIds)
+          .returns<AppUserRow[]>();
+        users?.forEach((u) => userById.set(u.user_id, u));
+      }
+
+      const mapped: TxItem[] = list.map((t) => {
+        let title = "Mechanic/Shop";
+        const ownerKey = t.receiver_shop_id ?? t.shop_id;
+        const ownerPlace = ownerKey ? placeByOwner.get(ownerKey) : undefined;
+
+        if (ownerPlace?.name?.trim()) {
+          title = ownerPlace.name.trim();
+        } else {
+          const directPlace = placeDirectById.get(t.shop_id);
+          if (directPlace?.name?.trim()) {
+            title = directPlace.name.trim();
+          } else {
+            const srow = shopById.get(t.shop_id);
+            const prow = srow?.place_id ? placeByShopPlaceId.get(srow.place_id) : undefined;
+            const urow = userById.get(t.shop_id);
+            title = pickShopName(srow, urow, prow);
+          }
+        }
+
+        const status: TxItem["status"] =
+          t.status === "paid" ? "completed" : t.status === "to_pay" ? "pending" : t.status === "canceled" ? "refunded" : "failed";
+
+        const parts = [
+          t.distance_fee > 0 ? `Distance ${peso(t.distance_fee)}` : null,
+          t.labor_cost > 0 ? `Labor ${peso(t.labor_cost)}` : null,
+          t.parts_cost > 0 ? `Parts ${peso(t.parts_cost)}` : null,
+          Array.isArray(t.extra_items) && t.extra_items.length > 0 ? `Other ${peso(t.extra_total)}` : null,
+        ].filter(Boolean);
+
+        const desc = parts.length ? parts.join(" • ") : status === "pending" ? "Awaiting payment" : "—";
+
+        return {
+          id: t.transaction_id,
+          title,
+          desc,
+          method: mapMethod(t.payment_method),
+          amount: t.total_amount,
+          status,
+          dateISO: t.created_at,
+          raw: t,
+        };
+      });
+
+      setItems(mapped);
+    } catch (e: any) {
+      console.warn("loadData error:", e?.message);
+    } finally {
+      setLoading(false);
+      setLoadingMsg(undefined);
     }
-
-const mapped: TxItem[] = list.map((t) => {
-  // ✅ 1st choice: places.name where places.owner == receiver_shop_id (or shop_id)
-  let title = "Mechanic/Shop";
-  const ownerKey = t.receiver_shop_id ?? t.shop_id;
-  const ownerPlace = ownerKey ? placeByOwner.get(ownerKey) : undefined;
-
-  if (ownerPlace?.name?.trim()) {
-    title = ownerPlace.name.trim();
-  } else {
-    // (optional) your existing fallbacks:
-    // - direct places by place_id if shop_id is a place_id
-    // - shop_details → place_id → places
-    const directPlace = placeDirectById?.get?.(t.shop_id);
-    if (directPlace?.name?.trim()) {
-      title = directPlace.name.trim();
-    } else {
-      const srow = shopById?.get?.(t.shop_id);
-      const prow = srow?.place_id ? placeByShopPlaceId?.get?.(srow.place_id) : undefined;
-      const urow = userById?.get?.(t.shop_id);
-      title = pickShopName(srow, urow, prow);
-    }
-  }
-
-  const status: TxItem["status"] =
-    t.status === "paid" ? "completed" :
-    t.status === "to_pay" ? "pending" :
-    t.status === "canceled" ? "refunded" : "failed";
-
-  const parts = [
-    t.distance_fee > 0 ? `Distance ${peso(t.distance_fee)}` : null,
-    t.labor_cost > 0 ? `Labor ${peso(t.labor_cost)}` : null,
-    t.parts_cost > 0 ? `Parts ${peso(t.parts_cost)}` : null,
-    Array.isArray(t.extra_items) && t.extra_items.length > 0 ? `Other ${peso(t.extra_total)}` : null,
-  ].filter(Boolean);
-
-  const desc = parts.length ? parts.join(" • ") : status === "pending" ? "Awaiting payment" : "—";
-
-  return {
-    id: t.transaction_id,
-    title,
-    desc,
-    method: mapMethod(t.payment_method),
-    amount: t.total_amount,
-    status,
-    dateISO: t.created_at,
-    raw: t,
-  };
-});
-
-
-    setItems(mapped);
-  } catch (e: any) {
-    console.warn("loadData error:", e?.message);
-  } finally {
-    setLoading(false);
-    setLoadingMsg(undefined);
-  }
-}, []);
-
+  }, []);
 
   useEffect(() => {
     loadData(true);
@@ -653,7 +603,7 @@ const mapped: TxItem[] = list.map((t) => {
       else cmp = a.amount - b.amount;
       return sortDir === "asc" ? cmp : -cmp;
     });
-    // pending first (to_pay)
+    // pending first
     arr.sort((a, b) => {
       const prio = (x: TxItem["status"]) => (x === "pending" ? 0 : x === "completed" ? 1 : 2);
       return prio(a.status) - prio(b.status);
@@ -701,8 +651,7 @@ const mapped: TxItem[] = list.map((t) => {
   const Item = ({ tx }: { tx: TxItem }) => {
     const s = statusStyle[tx.status];
     const isDim = tx.status !== "pending" && tx.status !== "completed";
-    // only show Pay Now if still pending AND no proof uploaded yet
-  const showPayNow = tx.status === "pending" && !tx.raw.proof_image_url;
+    const showPayNow = tx.status === "pending" && !tx.raw.proof_image_url;
 
     return (
       <View className="px-4">
@@ -845,6 +794,191 @@ const mapped: TxItem[] = list.map((t) => {
         setSortDir={setSortDir}
       />
 
+      {/* ---------- DETAILS MODAL (mirror of shop/completedrequest) ---------- */}
+      <Modal visible={detailOpen} animationType="slide" onRequestClose={() => setDetailOpen(false)}>
+        <SafeAreaView className="flex-1 bg-white">
+          {/* Header */}
+          <View className="flex-row items-center justify-between px-4 py-3">
+            <Pressable onPress={() => setDetailOpen(false)} hitSlop={8}>
+              <Ionicons name="close" size={26} color="#0F172A" />
+            </Pressable>
+            <Text className="text-[16px] font-semibold text-[#0F172A]">Transaction details</Text>
+            <View style={{ width: 26 }} />
+          </View>
+
+          {detailTx && (
+            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 28 }}>
+              {/* Header row */}
+              <View className="rounded-2xl border border-slate-200 bg-white p-4" style={cardShadow as any}>
+                <View className="flex-row items-center">
+                  <View className="mr-3 rounded-full bg-blue-50 p-2">
+                    <Ionicons name={methodIcon[detailTx.method]} size={20} color={COLORS.primary} />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-[16px] font-extrabold text-slate-900" numberOfLines={1}>
+                      {detailTx.title}
+                    </Text>
+                    <Text className="mt-0.5 text-[12px] text-slate-500" numberOfLines={1}>
+                      Emergency • {detailTx.raw.emergency_id.slice(0, 8)}… • {formatPayNowDate(detailTx.raw.created_at)}
+                    </Text>
+                  </View>
+                  <Text className="ml-3 text-[14px] font-bold text-slate-900">{peso(detailTx.amount)}</Text>
+                </View>
+
+                {/* Divider */}
+                <View className="h-px bg-slate-200 my-4" />
+
+                {/* Breakdown */}
+                <View className="space-y-1">
+                  {detailTx.raw.distance_fee > 0 && (
+                    <View className="flex-row items-baseline py-1.5">
+                      <Text className="w-44 pr-2 text-[13px] leading-5 text-slate-600">Distance fee:</Text>
+                      <Text className="flex-1 text-[13px] leading-5 text-slate-800">{peso(detailTx.raw.distance_fee)}</Text>
+                    </View>
+                  )}
+                  {detailTx.raw.labor_cost > 0 && (
+                    <View className="flex-row items-baseline py-1.5">
+                      <Text className="w-44 pr-2 text-[13px] leading-5 text-slate-600">Labor:</Text>
+                      <Text className="flex-1 text-[13px] leading-5 text-slate-800">{peso(detailTx.raw.labor_cost)}</Text>
+                    </View>
+                  )}
+                  {detailTx.raw.parts_cost > 0 && (
+                    <View className="flex-row items-baseline py-1.5">
+                      <Text className="w-44 pr-2 text-[13px] leading-5 text-slate-600">Parts:</Text>
+                      <Text className="flex-1 text-[13px] leading-5 text-slate-800">{peso(detailTx.raw.parts_cost)}</Text>
+                    </View>
+                  )}
+                  {Number(detailTx.raw.extra_total || 0) > 0 && (
+                    <View className="flex-row items-baseline py-1.5">
+                      <Text className="w-44 pr-2 text-[13px] leading-5 text-slate-600">Other services:</Text>
+                      <Text className="flex-1 text-[13px] leading-5 text-slate-800">{peso(detailTx.raw.extra_total)}</Text>
+                    </View>
+                  )}
+                  {/* Extra items list */}
+                  {(() => {
+                    const extrasRaw = detailTx.raw.extra_items as any;
+                    const extras =
+                      Array.isArray(extrasRaw)
+                        ? extrasRaw
+                        : typeof extrasRaw === "string"
+                        ? (() => {
+                            try {
+                              return JSON.parse(extrasRaw);
+                            } catch {
+                              return [];
+                            }
+                          })()
+                        : [];
+                    return Array.isArray(extras) && extras.length > 0 ? (
+                      <View className="mt-1">
+                        <Text className="text-[13px] font-semibold text-slate-700">Other services/items</Text>
+                        {extras.map((x: any, idx: number) => {
+                          const name = String(x?.name ?? x?.title ?? `Item ${idx + 1}`);
+                          const qty = Number(x?.qty ?? x?.quantity ?? 1) || 1;
+                          const unit = Number(x?.fee ?? x?.price ?? x?.amount ?? x?.cost ?? 0) || 0;
+                          const line = qty * unit;
+                          return (
+                            <View key={x?.id ?? idx} className="flex-row items-baseline py-1">
+                              <Text className="flex-1 text-[12px] text-slate-700">{name}</Text>
+                              <Text className="text-[12px] text-slate-500 mr-2">₱{unit.toFixed(2)} × {qty}</Text>
+                              <Text className="text-[12px] font-semibold text-slate-800">₱{line.toFixed(2)}</Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ) : null;
+                  })()}
+
+                  {/* Total */}
+                  <View className="flex-row items-baseline py-1.5 mt-1 border-t border-slate-200 pt-2">
+                    <Text className="w-44 pr-2 text-[13px] font-semibold text-slate-700">Total amount</Text>
+                    <Text className="flex-1 text-[13px] font-bold text-slate-900">{peso(detailTx.raw.total_amount)}</Text>
+                  </View>
+                </View>
+
+                {/* Divider */}
+                <View className="h-px bg-slate-200 my-4" />
+
+                {/* Status + date */}
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-row items-center">
+                    <Ionicons name="calendar-outline" size={16} color="#334155" />
+                    <Text className="ml-2 text-[12px] text-slate-600">{formatPayNowDate(detailTx.raw.created_at)}</Text>
+                  </View>
+
+                  {detailTx.status === "completed" ? (
+                    <View className="px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 flex-row items-center">
+                      <Ionicons name="card" size={12} color="#2563EB" />
+                      <Text className="ml-1 text-[11px] font-semibold text-blue-700">Paid</Text>
+                    </View>
+                  ) : (
+                    <View className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 flex-row items-center">
+                      <Ionicons name="time" size={12} color="#D97706" />
+                      <Text className="ml-1 text-[11px] font-semibold text-amber-700">
+                        {detailTx.raw.proof_image_url ? "Receipt Submitted" : "Awaiting Payment"}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Proof button (or hint) */}
+                <View className="mt-3 flex-row items-center justify-between">
+                  <View className="flex-row items-center">
+                    <Ionicons name="image-outline" size={16} color="#475569" />
+                    <Text className="ml-2 text-[12px] text-slate-600">Proof of payment</Text>
+                  </View>
+
+                  {detailTx.raw.proof_image_url ? (
+                    <Pressable onPress={() => setProofOpen(true)} className="rounded-xl border border-slate-300 px-3 py-1.5 active:opacity-90">
+                      <Text className="text-[12px] font-semibold text-slate-900">View Proof</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      onPress={() => {
+                        setPayTx(detailTx);
+                        setPayOpen(true);
+                        setPayMethod("GCash");
+                        setProofUri(null);
+                      }}
+                      className="rounded-xl border border-slate-300 px-3 py-1.5 active:opacity-90"
+                    >
+                      <Text className="text-[12px] font-semibold text-slate-900">Upload Proof</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            </ScrollView>
+          )}
+        </SafeAreaView>
+      </Modal>
+
+      {/* ---------- Proof image viewer (zoomable) ---------- */}
+      <Modal visible={proofOpen} animationType="fade" transparent onRequestClose={() => setProofOpen(false)}>
+        <View className="flex-1 bg-black/85">
+          <View className="flex-row items-center justify-between px-4 pt-10 pb-3">
+            <Pressable onPress={() => setProofOpen(false)} hitSlop={10}>
+              <Ionicons name="close" size={26} color="#fff" />
+            </Pressable>
+            <Text className="text-white font-semibold">
+              {detailTx?.title} • {detailTx ? peso(detailTx.raw.total_amount) : ""}
+            </Text>
+            <View style={{ width: 26, height: 26 }} />
+          </View>
+
+          <ScrollView maximumZoomScale={3} minimumZoomScale={1} contentContainerStyle={{ alignItems: "center", padding: 12 }}>
+            {detailTx?.raw.proof_image_url ? (
+              <Image
+                source={{ uri: detailTx.raw.proof_image_url }}
+                resizeMode="contain"
+                style={{ width: "100%", height: 520, borderRadius: 12, backgroundColor: "#0b0b0b" }}
+              />
+            ) : (
+              <Text className="text-white">No proof uploaded.</Text>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
       {/* Pay Now Modal */}
       <PayNowModal
         visible={payOpen}
@@ -856,71 +990,69 @@ const mapped: TxItem[] = list.map((t) => {
         setProofUri={setProofUri}
         submitting={paySubmitting}
         onSubmit={async () => {
-        try {
-          if (!payTx) return;
-          if (!proofUri) {
-            Alert.alert("Receipt required", "Please upload or take a photo of your payment receipt.");
-            return;
+          try {
+            if (!payTx) return;
+            if (!proofUri) {
+              Alert.alert("Receipt required", "Please upload or take a photo of your payment receipt.");
+              return;
+            }
+            setPaySubmitting(true);
+
+            const { data: auth } = await supabase.auth.getUser();
+            const userId = auth?.user?.id;
+            if (!userId) throw new Error("Please sign in.");
+
+            // 1) Upload proof
+            const proofUrl = await uploadReceiptToBucket(userId, payTx.id, proofUri);
+
+            // 2) Update transaction (stay "to_pay" until shop confirms)
+            const now = new Date().toISOString();
+            const { error: txErr } = await supabase
+              .from("payment_transaction")
+              .update({
+                payment_method: payMethod,
+                proof_image_url: proofUrl,
+                updated_at: now,
+                status: "to_pay",
+              })
+              .eq("transaction_id", payTx.id);
+            if (txErr) throw txErr;
+
+            // 3) Local UI
+            setItems((prev) =>
+              prev.map((i) =>
+                i.id === payTx.id
+                  ? {
+                      ...i,
+                      method: payMethod,
+                      status: "pending",
+                      raw: {
+                        ...i.raw,
+                        status: "to_pay",
+                        payment_method: payMethod,
+                        proof_image_url: proofUrl,
+                        updated_at: now,
+                      },
+                    }
+                  : i
+              )
+            );
+
+            // reflect immediately in the details panel if it's open on this tx
+            if (detailTx?.id === payTx.id) {
+              setDetailTx((d) => (d ? { ...d, method: payMethod, raw: { ...d.raw, proof_image_url: proofUrl, updated_at: now, status: "to_pay" } } : d));
+            }
+
+            setPayOpen(false);
+            setPayTx(null);
+            setProofUri(null);
+            Alert.alert("Payment submitted", "Thanks! Waiting for the shop to confirm receipt.");
+          } catch (e: any) {
+            Alert.alert("Submission failed", e?.message ?? "Please try again.");
+          } finally {
+            setPaySubmitting(false);
           }
-          setPaySubmitting(true);
-
-          // who am I
-          const { data: auth } = await supabase.auth.getUser();
-          const userId = auth?.user?.id;
-          if (!userId) throw new Error("Please sign in.");
-
-          // 1) Upload proof
-          const proofUrl = await uploadReceiptToBucket(userId, payTx.id, proofUri);
-
-          // 2) Update the transaction to carry the proof + method.
-          //    IMPORTANT: do NOT mark as 'paid' here.
-          const now = new Date().toISOString();
-          const { error: txErr } = await supabase
-            .from("payment_transaction")
-            .update({
-              payment_method: payMethod,
-              proof_image_url: proofUrl,
-              updated_at: now,
-              // keep or set as 'to_pay' while waiting for shop to confirm
-              status: "to_pay",
-            })
-            .eq("transaction_id", payTx.id);
-          if (txErr) throw txErr;
-
-          // 3) (removed) do NOT complete the emergency here — shop will confirm and complete if needed
-
-          // 4) Local UI update
-          setItems((prev) =>
-            prev.map((i) =>
-              i.id === payTx.id
-                ? {
-                    ...i,
-                    method: payMethod,
-                    // keep the card in "pending" (our UI maps 'to_pay' -> pending)
-                    status: "pending",
-                    raw: {
-                      ...i.raw,
-                      status: "to_pay",
-                      payment_method: payMethod,
-                      proof_image_url: proofUrl,
-                      updated_at: now,
-                    },
-                  }
-                : i
-            )
-          );
-
-          setPayOpen(false);
-          setPayTx(null);
-          setProofUri(null);
-          Alert.alert("Payment submitted", "Thanks! Waiting for the shop to confirm receipt.");
-        } catch (e: any) {
-          Alert.alert("Submission failed", e?.message ?? "Please try again.");
-        } finally {
-          setPaySubmitting(false);
-        }
-      }}
-
+        }}
       />
     </SafeAreaView>
   );
@@ -1038,7 +1170,7 @@ function PayNowModal({
 
   if (!visible) return null;
 
-  // ---- Breakdown helpers (show EVERYTHING the driver will pay) ----
+  // ---- Breakdown helpers (same as details) ----
   const raw = tx?.raw;
   const extras = (raw?.extra_items ?? []) as any[];
   const extrasTotal = Number(raw?.extra_total || 0) || 0;
@@ -1119,9 +1251,7 @@ function PayNowModal({
               <Pressable
                 key={m}
                 onPress={() => setMethod(m)}
-                className={`flex-row items-center rounded-xl border px-3 py-2 ${
-                  active ? "border-blue-600 bg-blue-50" : "border-slate-300 bg-white"
-                }`}
+                className={`flex-row items-center rounded-xl border px-3 py-2 ${active ? "border-blue-600 bg-blue-50" : "border-slate-300 bg-white"}`}
               >
                 <Ionicons name={m === "GCash" ? "wallet-outline" : "cash-outline"} size={18} color={active ? "#2563EB" : "#64748B"} />
                 <Text className={`ml-2 text-[13px] ${active ? "text-blue-700 font-semibold" : "text-slate-800"}`}>{m}</Text>

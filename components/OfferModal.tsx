@@ -646,20 +646,6 @@ export default function OfferModal({
                     alignItems: "center", 
                     marginBottom: 3 
                   }}>
-                    <Ionicons name="construct-outline" size={11} color={COLORS.sub} />
-                    <Text style={{ 
-                      marginLeft: 5, 
-                      fontSize: 11, 
-                      color: "#475569" 
-                    }}>
-                      {emergency.breakdownCause}
-                    </Text>
-                  </View>
-                  <View style={{ 
-                    flexDirection: "row", 
-                    alignItems: "center", 
-                    marginBottom: 3 
-                  }}>
                     <Ionicons name="location-outline" size={11} color={COLORS.sub} />
                     <Text style={{ 
                       marginLeft: 5, 

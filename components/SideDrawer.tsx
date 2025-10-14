@@ -40,7 +40,6 @@ const DEFAULT_ITEMS: Item[] = [
     href: "/driver/driverprofile",
     icon: "person-circle-outline",
   },
-    { label: "Notification", href: "/driver/inbox", icon: "notifications-outline" },
   {
     label: "Messages",
     href: "/driver/message",

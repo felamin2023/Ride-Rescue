@@ -261,16 +261,28 @@ export default function DriverHome() {
             </Text>
           </View>
 
-          <Pressable
-            className="p-2 rounded-lg active:opacity-80"
-            android_ripple={{
-              color: "rgba(255,255,255,0.18)",
-              borderless: true,
-            }}
-            onPress={() => setDrawerOpen(true)}
-          >
-            <Ionicons name="menu" size={24} color="#fff" />
-          </Pressable>
+          {/* RIGHT: Notifications + Burger */}
+          <View className="flex-row items-center">
+            {/* Notifications */}
+            <Pressable
+              onPress={() => router.push("/driver/inbox")}
+              className="p-2 rounded-lg mr-1 active:opacity-80"
+              android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+              hitSlop={10}
+            >
+              <Ionicons name="notifications-outline" size={22} color="#fff" />
+            </Pressable>
+
+            {/* Burger / Drawer */}
+            <Pressable
+              className="p-2 rounded-lg active:opacity-80"
+              android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+              onPress={() => setDrawerOpen(true)}
+              hitSlop={10}
+            >
+              <Ionicons name="menu" size={24} color="#fff" />
+            </Pressable>
+          </View>
         </View>
       </SafeAreaView>
 

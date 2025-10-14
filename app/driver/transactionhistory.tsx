@@ -20,6 +20,7 @@ import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { supabase } from "../../utils/supabase";
+import RateServiceModal, { RateTxMeta } from "../../components/RateServiceModal";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -89,6 +90,9 @@ type TxItem = {
   status: "pending" | "completed" | "refunded" | "failed";
   dateISO: string;
   raw: PaymentTx;
+
+  // NEW: can rate?
+  canRate?: boolean;
 };
 
 /* --------------------------------- Utils ---------------------------------- */
@@ -407,6 +411,10 @@ export default function TransactionHistory() {
   const [detailTx, setDetailTx] = useState<TxItem | null>(null);
   const [proofOpen, setProofOpen] = useState(false);
 
+  // Rating modal state (GLOBAL; can open from list or details)
+  const [rateOpen, setRateOpen] = useState(false);
+  const [rateTx, setRateTx] = useState<RateTxMeta | null>(null);
+
   // Pay Now
   const [payOpen, setPayOpen] = useState(false);
   const [payTx, setPayTx] = useState<TxItem | null>(null);
@@ -435,6 +443,7 @@ export default function TransactionHistory() {
       const { data: auth } = await supabase.auth.getUser();
       if (!auth?.user) throw new Error("Please sign in.");
 
+      // 1) Pull all transactions for this driver
       const { data: txs, error: txErr } = await supabase
         .from("payment_transaction")
         .select(
@@ -466,7 +475,17 @@ export default function TransactionHistory() {
       if (txErr) throw txErr;
       const list: PaymentTx[] = txs ?? [];
 
-      // Resolve shop names (places.owner → places.place_id → shop_details → app_user)
+      // 2) Determine which of these are already rated by this driver
+      const txIds = list.map((t) => t.transaction_id);
+      const { data: ratedRows } = await supabase
+        .from("ratings")
+        .select("transaction_id")
+        .in("transaction_id", txIds)
+        .eq("driver_user_id", auth.user.id);
+
+      const ratedSet = new Set((ratedRows ?? []).map((r: any) => r.transaction_id));
+
+      // 3) Resolve shop names (places.owner → places.place_id → shop_details → app_user)
       const receiverIds = Array.from(new Set(list.map((t) => (t.receiver_shop_id || t.shop_id)).filter(Boolean) as string[]));
       const placeByOwner = new Map<string, PlaceByOwnerRow>();
       if (receiverIds.length) {
@@ -517,6 +536,7 @@ export default function TransactionHistory() {
         users?.forEach((u) => userById.set(u.user_id, u));
       }
 
+      // 4) Map items (add canRate if paid and not rated)
       const mapped: TxItem[] = list.map((t) => {
         let title = "Mechanic/Shop";
         const ownerKey = t.receiver_shop_id ?? t.shop_id;
@@ -548,6 +568,8 @@ export default function TransactionHistory() {
 
         const desc = parts.length ? parts.join(" • ") : status === "pending" ? "Awaiting payment" : "—";
 
+        const canRate = t.status === "paid" && !ratedSet.has(t.transaction_id);
+
         return {
           id: t.transaction_id,
           title,
@@ -557,6 +579,7 @@ export default function TransactionHistory() {
           status,
           dateISO: t.created_at,
           raw: t,
+          canRate,
         };
       });
 
@@ -679,7 +702,7 @@ export default function TransactionHistory() {
           {/* Divider */}
           <View className="mx-4 h-[1px] bg-slate-100" />
 
-          {/* Bottom meta + full-width Pay Now below */}
+          {/* Bottom meta + full-width Pay Now / Rate below */}
           <View className="px-4 py-3">
             <View className="flex-row items-center justify-between">
               <View className="flex-row items-center">
@@ -704,6 +727,25 @@ export default function TransactionHistory() {
                 className="mt-2 w-full rounded-xl bg-blue-600 py-3 active:opacity-90"
               >
                 <Text className="text-center text-[14px] font-semibold text-white">PAY NOW</Text>
+              </Pressable>
+            )}
+
+            {/* NEW: Rate CTA on paid & not yet rated (uses tx, not detailTx) */}
+            {tx.status === "completed" && tx.canRate && (
+              <Pressable
+                onPress={() => {
+                  setRateTx({
+                    transaction_id: tx.id,
+                    shop_id: tx.raw.shop_id,
+                    service_id: tx.raw.service_id,
+                    emergency_id: tx.raw.emergency_id,
+                    shopTitle: tx.title,
+                  });
+                  setRateOpen(true);
+                }}
+                className="mt-2 w-full rounded-xl bg-blue-600 py-3 active:opacity-90"
+              >
+                <Text className="text-center text-[14px] font-semibold text-white">Rate this service</Text>
               </Pressable>
             )}
           </View>
@@ -794,7 +836,7 @@ export default function TransactionHistory() {
         setSortDir={setSortDir}
       />
 
-      {/* ---------- DETAILS MODAL (mirror of shop/completedrequest) ---------- */}
+      {/* ---------- DETAILS MODAL ---------- */}
       <Modal visible={detailOpen} animationType="slide" onRequestClose={() => setDetailOpen(false)}>
         <SafeAreaView className="flex-1 bg-white">
           {/* Header */}
@@ -921,7 +963,7 @@ export default function TransactionHistory() {
                   )}
                 </View>
 
-                {/* Proof button (or hint) */}
+                {/* Proof + Rate actions */}
                 <View className="mt-3 flex-row items-center justify-between">
                   <View className="flex-row items-center">
                     <Ionicons name="image-outline" size={16} color="#475569" />
@@ -932,7 +974,7 @@ export default function TransactionHistory() {
                     <Pressable onPress={() => setProofOpen(true)} className="rounded-xl border border-slate-300 px-3 py-1.5 active:opacity-90">
                       <Text className="text-[12px] font-semibold text-slate-900">View Proof</Text>
                     </Pressable>
-                  ) : (
+                  ) : detailTx.status === "pending" ? (
                     <Pressable
                       onPress={() => {
                         setPayTx(detailTx);
@@ -944,8 +986,27 @@ export default function TransactionHistory() {
                     >
                       <Text className="text-[12px] font-semibold text-slate-900">Upload Proof</Text>
                     </Pressable>
-                  )}
+                  ) : null}
                 </View>
+
+                {/* NEW: Rate button inside details (opens modal, no navigation) */}
+                {detailTx.status === "completed" && detailTx.canRate && (
+                  <Pressable
+                    onPress={() => {
+                      setRateTx({
+                        transaction_id: detailTx.id,
+                        shop_id: detailTx.raw.shop_id,
+                        service_id: detailTx.raw.service_id,
+                        emergency_id: detailTx.raw.emergency_id,
+                        shopTitle: detailTx.title,
+                      });
+                      setRateOpen(true);
+                    }}
+                    className="mt-4 items-center justify-center rounded-xl bg-blue-600 py-3 active:opacity-90"
+                  >
+                    <Text className="text-[14px] font-semibold text-white">Rate this service</Text>
+                  </Pressable>
+                )}
               </View>
             </ScrollView>
           )}
@@ -1052,6 +1113,24 @@ export default function TransactionHistory() {
           } finally {
             setPaySubmitting(false);
           }
+        }}
+      />
+
+      {/* 🔵 Rate modal (GLOBAL, outside other modals) */}
+      <RateServiceModal
+        visible={rateOpen}
+        onClose={() => setRateOpen(false)}
+        tx={rateTx}
+        onSubmitted={() => {
+          if (rateTx) {
+            // instantly hide the CTA on that transaction
+            setItems((prev) => prev.map((it) => (it.id === rateTx.transaction_id ? { ...it, canRate: false } : it)));
+            // if details is open for same tx, reflect there too
+            setDetailTx((d) => (d && d.id === rateTx.transaction_id ? { ...d, canRate: false } : d));
+          }
+          setRateTx(null);
+          setRateOpen(false);
+          Alert.alert("Thank you!", "Your review has been posted.");
         }}
       />
     </SafeAreaView>

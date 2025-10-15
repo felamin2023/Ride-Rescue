@@ -932,6 +932,59 @@ const acceptService = useCallback(
   [items, fetchSRListFor]
 );
 
+// 🔵 Cancel emergency (when no offers received within 5 min)
+const cancelEmergency = useCallback(async (emergencyId: string) => {
+  try {
+    setLoading({ visible: true, message: "Cancelling emergency…" });
+
+    const { error } = await supabase
+      .from("emergency")
+      .update({
+        emergency_status: "canceled",
+        canceled_at: new Date().toISOString(),
+      })
+      .eq("emergency_id", emergencyId);
+
+    if (error) throw error;
+
+    // Optimistic UI update
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === emergencyId ? { ...item, status: "CANCELED" } : item
+      )
+    );
+
+    // Close any open card for this emergency
+    setOpenCards((prev) => ({ ...prev, [emergencyId]: false }));
+
+  } catch (e: any) {
+    Alert.alert("Cancel failed", e?.message ?? "Please try again.");
+  } finally {
+    setLoading({ visible: false });
+  }
+}, []);
+
+// 🔵 Hide emergency (soft delete for driver)
+const hideEmergency = useCallback(async (emergencyId: string) => {
+  try {
+    setLoading({ visible: true, message: "Removing request…" });
+
+    const { error } = await supabase
+      .from("emergency")
+      .update({ driver_hidden: true })
+      .eq("emergency_id", emergencyId);
+
+    if (error) throw error;
+
+    // Remove from local state
+    setItems((prev) => prev.filter((item) => item.id !== emergencyId));
+
+  } catch (e: any) {
+    Alert.alert("Delete failed", e?.message ?? "Please try again.");
+  } finally {
+    setLoading({ visible: false });
+  }
+}, []);
   /* ----------------------------- Realtime & lifecycle ----------------------------- */
   useEffect(() => {
     const channel = supabase

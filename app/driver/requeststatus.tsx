@@ -1300,7 +1300,7 @@ const renderItem = ({ item }: { item: RequestItem }) => {
       <CenterConfirm
         visible={!!confirmAccept}
         title="Accept this request?"
-        message="This will assign the mechanic and move the emergency to in_process."
+        message="The mechanic will be notified, wait for them to arrive."
         onCancel={() => setConfirmAccept(null)}
         onConfirm={() => {
           if (confirmAccept) {

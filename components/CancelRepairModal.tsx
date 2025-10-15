@@ -6,7 +6,6 @@ import {
   Pressable,
   TextInput,
   Modal,
-  Alert,
   ScrollView,
   Platform,
 } from 'react-native';
@@ -19,10 +18,7 @@ const COLORS = {
   text: '#0F172A',
   sub: '#475569',
   muted: '#94A3B8',
-  primary: '#2563EB',
   danger: '#DC2626',
-  success: '#16A34A',
-  brand: '#0F2547',
 };
 
 const cardShadow = Platform.select({
@@ -63,32 +59,31 @@ export default function CancelRepairModal({
   const [cancelReason, setCancelReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null); // inline error, no alerts
 
   useEffect(() => {
     if (visible) {
       setCancelOption(null);
       setCancelReason('');
       setShowConfirm(false);
+      setErrorMsg(null);
     }
   }, [visible, offerId]);
 
-  // Calculate total fees based on cancellation option
-  const calculateTotalFees = (option: 'incomplete' | 'diagnose_only') => {
-    if (option === 'incomplete') {
-      // Distance fee + 50% of labor
-      return originalOffer.distance_fee + (originalOffer.labor_cost * 0.5);
-    } else {
-      // Distance fee only
-      return originalOffer.distance_fee;
-    }
+  /** Accurate currency math (in cents; NOT displayed in UI) */
+  const calcFeesCents = (option: 'incomplete' | 'diagnose_only') => {
+    if (option === 'diagnose_only') return 0;
+    const distanceC = Math.round(Number(originalOffer.distance_fee || 0) * 100);
+    const halfLaborC = Math.round(Number(originalOffer.labor_cost || 0) * 100 * 0.5);
+    return distanceC + halfLaborC;
   };
+  const calculateTotalFees = (option: 'incomplete' | 'diagnose_only') =>
+    calcFeesCents(option) / 100;
 
   const handleCancelRepair = () => {
-    if (!cancelOption) {
-      Alert.alert('Selection Required', 'Please select a cancellation option.');
-      return;
-    }
+    if (!cancelOption) return; // button is already disabled when not selected
     setShowConfirm(true);
+    setErrorMsg(null);
   };
 
   const confirmCancelRepair = async () => {
@@ -96,34 +91,26 @@ export default function CancelRepairModal({
 
     setShowConfirm(false);
     setLoading(true);
+    setErrorMsg(null);
 
     try {
-      const totalFees = calculateTotalFees(cancelOption);
-      
+      const totalFees = calculateTotalFees(cancelOption); // backend only
       await onSubmit({
         offerId,
         cancelOption,
         reason: cancelReason.trim() || undefined,
         totalFees,
       });
-
+      // Close silently — no alerts
       onClose();
-
-      Alert.alert(
-        'Repair Cancelled',
-        `The repair has been cancelled. Total fees: ₱${totalFees.toFixed(2)}`
-      );
     } catch (error: any) {
-      Alert.alert(
-        'Failed to Cancel',
-        error?.message || 'Please try again later.'
-      );
+      // No Alert — show inline error and keep the main sheet open
+      const msg = error?.message || 'Failed to cancel. Please try again.';
+      setErrorMsg(msg);
     } finally {
       setLoading(false);
     }
   };
-
-  const totalFees = cancelOption ? calculateTotalFees(cancelOption) : 0;
 
   return (
     <>
@@ -133,7 +120,10 @@ export default function CancelRepairModal({
         animationType="fade"
         onRequestClose={onClose}
       >
-        <Pressable className="flex-1 bg-black/30" onPress={onClose} />
+        <Pressable
+          className="flex-1 bg-black/30"
+          onPress={showConfirm ? undefined : onClose}
+        />
         <View
           className="w-full bg-white rounded-t-3xl px-5 pt-3 pb-5"
           style={[{ maxHeight: '88%' }, cardShadow as any]}
@@ -151,6 +141,13 @@ export default function CancelRepairModal({
             </Pressable>
           </View>
 
+          {/* Inline error message (no popups) */}
+          {errorMsg ? (
+            <View className="mb-3 rounded-xl bg-rose-50 border border-rose-200 p-3">
+              <Text className="text-[12px] text-rose-700">{errorMsg}</Text>
+            </View>
+          ) : null}
+
           <ScrollView showsVerticalScrollIndicator={false}>
             <View className="rounded-2xl border border-slate-200 bg-slate-50 p-4 mb-4">
               <Text className="text-[14px] font-semibold text-slate-900 mb-2">
@@ -166,22 +163,24 @@ export default function CancelRepairModal({
               <Text className="text-[13px] font-medium text-slate-900 mb-3">
                 Select Cancellation Option:
               </Text>
-              
+
               {/* Option 1: Incomplete Repair */}
               <Pressable
                 onPress={() => setCancelOption('incomplete')}
                 className={`rounded-2xl border p-4 mb-3 ${
-                  cancelOption === 'incomplete' 
-                    ? 'border-blue-300 bg-blue-50' 
+                  cancelOption === 'incomplete'
+                    ? 'border-blue-300 bg-blue-50'
                     : 'border-slate-300 bg-white'
                 }`}
               >
                 <View className="flex-row items-center">
-                  <View className={`w-5 h-5 rounded-full border-2 mr-3 items-center justify-center ${
-                    cancelOption === 'incomplete' 
-                      ? 'border-blue-600 bg-blue-600' 
-                      : 'border-slate-400'
-                  }`}>
+                  <View
+                    className={`w-5 h-5 rounded-full border-2 mr-3 items-center justify-center ${
+                      cancelOption === 'incomplete'
+                        ? 'border-blue-600 bg-blue-600'
+                        : 'border-slate-400'
+                    }`}
+                  >
                     {cancelOption === 'incomplete' && (
                       <View className="w-2 h-2 rounded-full bg-white" />
                     )}
@@ -193,9 +192,6 @@ export default function CancelRepairModal({
                     <Text className="text-[12px] text-slate-600">
                       Distance fee + 50% of labor fee
                     </Text>
-                    <Text className="text-[12px] text-slate-700 font-medium mt-1">
-                      Total Fees: ₱{calculateTotalFees('incomplete').toFixed(2)}
-                    </Text>
                   </View>
                 </View>
               </Pressable>
@@ -204,17 +200,19 @@ export default function CancelRepairModal({
               <Pressable
                 onPress={() => setCancelOption('diagnose_only')}
                 className={`rounded-2xl border p-4 ${
-                  cancelOption === 'diagnose_only' 
-                    ? 'border-blue-300 bg-blue-50' 
+                  cancelOption === 'diagnose_only'
+                    ? 'border-blue-300 bg-blue-50'
                     : 'border-slate-300 bg-white'
                 }`}
               >
                 <View className="flex-row items-center">
-                  <View className={`w-5 h-5 rounded-full border-2 mr-3 items-center justify-center ${
-                    cancelOption === 'diagnose_only' 
-                      ? 'border-blue-600 bg-blue-600' 
-                      : 'border-slate-400'
-                  }`}>
+                  <View
+                    className={`w-5 h-5 rounded-full border-2 mr-3 items-center justify-center ${
+                      cancelOption === 'diagnose_only'
+                        ? 'border-blue-600 bg-blue-600'
+                        : 'border-slate-400'
+                    }`}
+                  >
                     {cancelOption === 'diagnose_only' && (
                       <View className="w-2 h-2 rounded-full bg-white" />
                     )}
@@ -224,10 +222,7 @@ export default function CancelRepairModal({
                       Check or Diagnose only
                     </Text>
                     <Text className="text-[12px] text-slate-600">
-                      Distance fee only, no labor fee
-                    </Text>
-                    <Text className="text-[12px] text-slate-700 font-medium mt-1">
-                      Total Fees: ₱{calculateTotalFees('diagnose_only').toFixed(2)}
+                      No service fees will be charged
                     </Text>
                   </View>
                 </View>
@@ -269,7 +264,7 @@ export default function CancelRepairModal({
         </View>
       </Modal>
 
-      {/* Cancel Repair Confirmation Modal */}
+      {/* Confirm Cancellation (no alerts; just proceed) */}
       <Modal
         visible={showConfirm}
         transparent
@@ -294,20 +289,19 @@ export default function CancelRepairModal({
             <Text className="text-lg font-semibold text-slate-900 text-center">
               Confirm Cancellation
             </Text>
+
             <Text className="mt-2 text-[14px] text-slate-600 text-center">
-              Total Fees: ₱{totalFees.toFixed(2)}
+              {cancelOption === 'incomplete'
+                ? 'A fee will be charged (Distance fee + 50% of labor).'
+                : 'No service fees will be charged.'}
             </Text>
-            <Text className="mt-1 text-[12px] text-slate-500 text-center">
-              {cancelOption === 'incomplete' 
-                ? 'The driver will pay the distance fee + 50% of labor fee.'
-                : 'The driver will pay the distance fee only.'}
-            </Text>
-            {cancelReason && (
+
+            {cancelReason ? (
               <View className="mt-3 bg-slate-50 rounded-xl p-3">
                 <Text className="text-[12px] text-slate-600 font-medium">Reason:</Text>
                 <Text className="text-[12px] text-slate-700 mt-1">{cancelReason}</Text>
               </View>
-            )}
+            ) : null}
 
             <View className="mt-5 flex-row gap-3">
               <Pressable

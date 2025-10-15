@@ -8,7 +8,6 @@ import {
   Pressable,
   Platform,
   Alert,
-  Linking,
   Animated,
   Easing,
   Modal,
@@ -84,6 +83,7 @@ type TxRow = {
   extra_total: number;
   total_amount: number;
   status: "pending" | "to_pay" | "paid" | "canceled";
+  cancel_option: "incomplete" | "diagnose_only" | null; 
   created_at: string;
   updated_at: string | null;
   paid_at: string | null;
@@ -222,6 +222,7 @@ export default function ShopAcceptedRequests() {
 
   const [items, setItems] = useState<CardItem[]>([]);
   const [openCards, setOpenCards] = useState<Record<string, boolean>>({});
+  const [actionLocked, setActionLocked] = useState<Record<string, boolean>>({});
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [selectedEmergency, setSelectedEmergency] = useState<{ emergencyId: string; distanceKm: number } | null>(null);
@@ -353,6 +354,14 @@ export default function ShopAcceptedRequests() {
       });
 
       setItems(composed);
+      setActionLocked((prev) => {
+        const active = new Set(composed.map((c) => c.emergencyId));
+        const next = { ...prev };
+        Object.keys(next).forEach((id) => {
+          if (!active.has(id)) delete next[id];
+        });
+        return next;
+      });
     } catch (e: any) {
       Alert.alert("Unable to load", e?.message ?? "Please try again.");
     } finally {
@@ -379,16 +388,9 @@ export default function ShopAcceptedRequests() {
   );
 
   /* ----------------------------- Actions ----------------------------- */
-  const openDirections = (lat: number, lon: number) => {
-    Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`).catch(() => {});
-  };
-
-  const messageDriver = (emergencyId: string) => {
-    try { router.push({ pathname: "/shop/messages", params: { to: emergencyId } as any }); }
-    catch { router.push("/shop/messages"); }
-  };
-
   const handleMarkComplete = async (emergencyId: string, distanceKm?: number) => {
+    if (actionLocked[emergencyId]) return;
+    setActionLocked((prev) => ({ ...prev, [emergencyId]: true }));
     setSelectedEmergency({ emergencyId, distanceKm: distanceKm || 0 });
 
     const tx = await loadPaymentTx(emergencyId);
@@ -406,6 +408,8 @@ export default function ShopAcceptedRequests() {
   };
 
   const handleCancelRepair = (emergencyId: string, distanceKm?: number) => {
+    if (actionLocked[emergencyId]) return;
+    setActionLocked((prev) => ({ ...prev, [emergencyId]: true }));
     setSelectedEmergency({ emergencyId, distanceKm: distanceKm || 0 });
     setShowCancelModal(true);
   };
@@ -449,13 +453,16 @@ export default function ShopAcceptedRequests() {
       if (txErr) throw txErr;
 
       // Move card to Completed/Transactions screen
-      setItems((prev) => prev.filter((it) => it.emergencyId !== invoice.offerId));
+      setActionLocked((prev) => {
+        if (!prev[invoice.offerId]) return prev;
+        const next = { ...prev };
+        delete next[invoice.offerId];
+        return next;
+      });
       setShowPaymentModal(false);
       setSelectedEmergency(null);
       setOriginalTx(null);
-      try { router.push("/shop/completedrequest"); } catch {}
-
-      Alert.alert("Invoice sent", "Waiting for the driver to pay.");
+Alert.alert("Invoice sent", "Waiting for the driver to pay.");
     } catch (e: any) {
       Alert.alert("Update failed", e?.message ?? "Please try again.");
     } finally {
@@ -467,18 +474,23 @@ export default function ShopAcceptedRequests() {
     offerId: string; cancelOption: "incomplete" | "diagnose_only"; reason?: string; totalFees: number;
   }) => {
     try {
-      setLoading({ visible: true, message: "Cancelling repair service…" });
+      setLoading({ visible: true, message: "Cancelling repair service..." });
 
       const now = new Date().toISOString();
+      const isDiagnoseOnly = cancelData.cancelOption === "diagnose_only";
 
-      // 1) emergency -> canceled
+      // 1) emergency status update
+      const emergencyUpdate =
+        isDiagnoseOnly
+          ? { emergency_status: "completed", completed_at: now }
+          : { emergency_status: "canceled", canceled_at: now, canceled_reason: cancelData.reason || null };
       const { error: emergencyError } = await supabase
         .from("emergency")
-        .update({ emergency_status: "canceled", canceled_at: now, canceled_reason: cancelData.reason || null })
+        .update(emergencyUpdate)
         .eq("emergency_id", cancelData.offerId);
       if (emergencyError) throw emergencyError;
 
-      // 2) payment_transaction -> canceled (store reason/option & amount)
+      // 2) payment_transaction adjustments
       const { data: tx } = await supabase
         .from("payment_transaction")
         .select("transaction_id, distance_fee, labor_cost")
@@ -491,13 +503,38 @@ export default function ShopAcceptedRequests() {
       if (tx) {
         const baseDistance = Number(tx.distance_fee || 0);
         const baseLabor = Number(tx.labor_cost || 0);
-        const computed = cancelData.cancelOption === "incomplete" ? baseDistance + baseLabor * 0.5 : baseDistance;
+
+        if (isDiagnoseOnly) {
+        // OPTION 2: No fee at all; keep it visible in Completed/Transactions with no proof & no "Paid" badge
+        const { error: txErr } = await supabase
+          .from("payment_transaction")
+          .update({
+            distance_fee: 0,
+            labor_cost: 0,
+            extra_total: 0,
+            total_amount: 0,
+            status: "pending",           // not "paid" → no Paid chip; proof not required
+            cancel_option: cancelData.cancelOption,
+            cancel_reason: cancelData.reason || null,
+            paid_at: null,               // ensure it's not marked paid
+            updated_at: now,
+          })
+          .eq("transaction_id", tx.transaction_id);
+        if (txErr) throw txErr;
+      } else {
+        // OPTION 1: Distance fee + 50% of labor
+        const halfLabor = Number((baseLabor * 0.5).toFixed(2));
+        const computed = Number((baseDistance + halfLabor).toFixed(2));
 
         const { error: txErr } = await supabase
           .from("payment_transaction")
           .update({
-            total_amount: Number(computed.toFixed(2)),
-            status: "canceled",
+            // reflect the halved labor in the breakdown, not just in total
+            labor_cost: halfLabor,
+            // keep the recorded distance fee as-is
+            extra_total: 0,               // extras are not charged on cancel
+            total_amount: computed,
+            status: "to_pay",
             cancel_option: cancelData.cancelOption,
             cancel_reason: cancelData.reason || null,
             canceled_at: now,
@@ -507,11 +544,18 @@ export default function ShopAcceptedRequests() {
         if (txErr) throw txErr;
       }
 
+      }
+
       // Local UI
-      setItems((prev) => prev.map((it) => (it.emergencyId === cancelData.offerId ? { ...it, emStatus: "canceled" } : it)));
+      setActionLocked((prev) => {
+        if (!prev[cancelData.offerId]) return prev;
+        const next = { ...prev };
+        delete next[cancelData.offerId];
+        return next;
+      });
+      setItems((prev) => prev.filter((it) => it.emergencyId !== cancelData.offerId));
       setShowCancelModal(false);
       setSelectedEmergency(null);
-      Alert.alert("Repair Cancelled", `The repair has been cancelled. Total fees: ${peso(cancelData.totalFees)}`);
     } catch (e: any) {
       Alert.alert("Cancellation failed", e?.message ?? "Please try again.");
     } finally {
@@ -604,6 +648,8 @@ export default function ShopAcceptedRequests() {
     const ST = STATUS_STYLES[item.emStatus];
     const isOpen = !!openCards[item.emergencyId];
     const hasCharges = !!item.charges;
+    const buttonsVisible = item.emStatus === "in_process" && !actionLocked[item.emergencyId] && (item.charges?.txStatus === "pending" || !item.charges);
+
 
     return (
       <Pressable
@@ -682,7 +728,7 @@ export default function ShopAcceptedRequests() {
             <View className="p-4 bg-slate-50 rounded-xl border border-slate-200">
               <View className="flex-row justify-between items-center">
                 <Text className="text-slate-600 text-sm">Distance Fee</Text>
-                <Text className="text-slate-900 text-sm font-medium">{peso(item.charges!.distanceFee)} {item.charges!.ratePerKm ? `(${peso(item.charges!.ratePerKm)}/km × ${Number(item.charges!.distanceKm).toFixed(2)}km)` : ""}</Text>
+                <Text className="text-slate-900 text-sm font-medium">{peso(item.charges!.distanceFee)}</Text>
               </View>
               <View className="flex-row justify-between items-center mt-2">
                 <Text className="text-slate-600 text-sm">Labor</Text>
@@ -720,24 +766,7 @@ export default function ShopAcceptedRequests() {
           <>
             <View className="h-px bg-slate-200 my-4" />
 
-            {/* Primary actions */}
-            <View className="flex-row gap-3">
-              <Pressable onPress={() => messageDriver(item.emergencyId)} className="flex-1 rounded-xl py-2.5 items-center border border-slate-300">
-                <View className="flex-row items-center gap-1.5">
-                  <Ionicons name="chatbubbles-outline" size={16} color="#0F172A" />
-                  <Text className="text-[14px] font-semibold text-slate-900">Message</Text>
-                </View>
-              </Pressable>
-
-              <Pressable onPress={() => openDirections(item.lat, item.lon)} className="flex-1 rounded-xl py-2.5 items-center border border-slate-300">
-                <View className="flex-row items-center gap-1.5">
-                  <Ionicons name="navigate-outline" size={16} color="#0F172A" />
-                  <Text className="text-[14px] font-semibold text-slate-900">Location</Text>
-                </View>
-              </Pressable>
-            </View>
-
-            {item.emStatus === "in_process" && (
+            {buttonsVisible && (
               <View className="flex-row gap-3 mt-3">
                 <Pressable onPress={() => handleMarkComplete(item.emergencyId, item.distanceKm)} className="flex-1 rounded-xl py-2.5 px-4 bg-blue-600 items-center">
                   <Text className="text-white text-[14px] font-semibold">Complete</Text>
@@ -784,7 +813,20 @@ export default function ShopAcceptedRequests() {
           distance_fee: originalTx?.distance_fee ?? (selectedEmergency?.distanceKm || 0) * 15,
           total_cost: originalTx?.total_amount ?? ((originalTx?.labor_cost ?? 0) + (originalTx?.distance_fee ?? 0)),
         }}
-        onClose={() => { setShowPaymentModal(false); setSelectedEmergency(null); setOriginalTx(null); }}
+        onClose={() => {
+          const closingId = selectedEmergency?.emergencyId;
+          if (closingId) {
+            setActionLocked((prev) => {
+              if (!prev[closingId]) return prev;
+              const next = { ...prev };
+              delete next[closingId];
+              return next;
+            });
+          }
+          setShowPaymentModal(false);
+          setSelectedEmergency(null);
+          setOriginalTx(null);
+        }}
         onSubmit={handleInvoiceSubmit}
       />
 
@@ -797,7 +839,19 @@ export default function ShopAcceptedRequests() {
           distance_fee: (selectedEmergency?.distanceKm || 0) * 15,
           total_cost: 50 + (selectedEmergency?.distanceKm || 0) * 15,
         }}
-        onClose={() => { setShowCancelModal(false); setSelectedEmergency(null); }}
+        onClose={() => {
+          const closingId = selectedEmergency?.emergencyId;
+          if (closingId) {
+            setActionLocked((prev) => {
+              if (!prev[closingId]) return prev;
+              const next = { ...prev };
+              delete next[closingId];
+              return next;
+            });
+          }
+          setShowCancelModal(false);
+          setSelectedEmergency(null);
+        }}
         onSubmit={handleCancelSubmit}
       />
 

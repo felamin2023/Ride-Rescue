@@ -257,7 +257,7 @@ export default function DriverHome() {
               resizeMode="contain"
             />
             <Text className="text-white text-[20px] font-semibold">
-              Ride Rescue
+              RideRescue
             </Text>
           </View>
 

@@ -1,4 +1,4 @@
-// app/shop/completedrequest.tsx
+﻿// app/shop/completedrequest.tsx
 import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, Image, FlatList, Pressable, Alert, Platform, Modal, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -20,6 +20,7 @@ type TxRow = {
   total_amount: number;
   status: "to_pay" | "paid" | "canceled" | "pending";
   payment_method: string | null;
+  cancel_option: string | null;
   created_at: string;
   updated_at: string | null;
   paid_at: string | null;
@@ -43,7 +44,7 @@ const cardShadow = Platform.select({
   android: { elevation: 2 },
 });
 
-const peso = (n: number) => `₱${(Number(n) || 0).toFixed(2)}`;
+const peso = (n: number) => `\u20B1${(Number(n) || 0).toFixed(2)}`;
 
 const MONTHS_ABBR = ["Jan.", "Feb.", "Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.", "Sep.", "Oct.", "Nov.", "Dec."];
 function formatPrettyDateTime(iso: string) {
@@ -93,7 +94,7 @@ export default function CompletedRequest() {
       const { data: txs, error: txErr } = await supabase
         .from("payment_transaction")
         .select(
-          "transaction_id, emergency_id, service_id, shop_id, driver_user_id, distance_fee, labor_cost, extra_total, extra_items, total_amount, status, payment_method, created_at, updated_at, paid_at, proof_image_url"
+          "transaction_id, emergency_id, service_id, shop_id, driver_user_id, distance_fee, labor_cost, extra_total, extra_items, total_amount, status, payment_method, cancel_option, created_at, updated_at, paid_at, proof_image_url"
         )
         .eq("shop_id", srow.shop_id)
         .in("status", ["to_pay", "pending", "paid"])
@@ -210,7 +211,10 @@ export default function CompletedRequest() {
   const renderItem = ({ item }: { item: TxRowWithMeta }) => {
     const paid = item.status === "paid";
     const isExpanded = !!expanded[item.transaction_id];
-    const inSummary = paid && !isExpanded;
+    const inSummary = !isExpanded; 
+    const isNoFeeCancel =
+      item.cancel_option === "diagnose_only" || Number(item.total_amount) === 0;
+
 
     // Totals breakdown
     const rows = [
@@ -226,11 +230,11 @@ export default function CompletedRequest() {
       <View>
         {/* Card: tap to expand ONLY when already paid */}
         <Pressable
-          disabled={!paid}
-          onPress={() => toggleExpand(item.transaction_id)}
+          onPress={() => toggleExpand(item.transaction_id)} // ← everyone can expand/collapse
           className="bg-white rounded-3xl p-4 mb-2 border border-slate-200"
           style={cardShadow as any}
         >
+
           {/* -------- Summary view for PAID (collapsed) -------- */}
           {inSummary ? (
             <View>
@@ -262,7 +266,7 @@ export default function CompletedRequest() {
                     {item.driver_name}
                   </Text>
                   <Text className="mt-0.5 text-[12px] text-slate-500" numberOfLines={1}>
-                    Emergency • {item.emergency_id.slice(0, 8)}… • {formatPrettyDateTime(item.created_at)}
+                    Emergency {"\u2022"} {item.emergency_id.slice(0, 8)} {"\u2026"} {"\u2022"} {formatPrettyDateTime(item.created_at)}
                   </Text>
                 </View>
                 <Text className="ml-3 text-[14px] font-bold text-slate-900">{peso(item.total_amount)}</Text>
@@ -307,16 +311,19 @@ export default function CompletedRequest() {
                           <View key={x?.id ?? idx} className="flex-row items-baseline py-1">
                             <Text className="flex-1 text-[12px] text-slate-700">{name}</Text>
                             <Text className="text-[12px] text-slate-500 mr-2">
-                              ₱{unit.toFixed(2)} × {qty}
+                              {peso(unit)} {"\u00D7"} {qty}
                             </Text>
-                            <Text className="text-[12px] font-semibold text-slate-800">₱{line.toFixed(2)}</Text>
+                            <Text className="text-[12px] font-semibold text-slate-800">
+                              {peso(line)}    
+                            </Text>
+                            <Text className="text-[12px] font-semibold text-slate-800">â‚±{line.toFixed(2)}</Text>
                           </View>
                         );
                       })}
                       <View className="flex-row items-baseline py-1 mt-1 border-t border-slate-200 pt-2">
                         <Text className="flex-1 text-[12px] font-semibold text-slate-700">Other services total</Text>
                         <Text className="text-[12px] font-semibold text-slate-800">
-                          ₱{Number(item.extra_total || 0).toFixed(2)}
+                          â‚±{Number(item.extra_total || 0).toFixed(2)}
                         </Text>
                       </View>
                     </View>
@@ -339,7 +346,7 @@ export default function CompletedRequest() {
                     <Ionicons name="card" size={12} color="#2563EB" />
                     <Text className="ml-1 text-[11px] font-semibold text-blue-700">Paid</Text>
                   </View>
-                ) : (
+                ) :  isNoFeeCancel ? null : (
                   <View className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 flex-row items-center">
                     <Ionicons name="time" size={12} color="#D97706" />
                     <Text className="ml-1 text-[11px] font-semibold text-amber-700">
@@ -350,29 +357,21 @@ export default function CompletedRequest() {
               </View>
 
               {/* Proof button */}
-              <View className="mt-3 flex-row items-center justify-between">
-                <View className="flex-row items-center">
-                  <Ionicons name="image-outline" size={16} color="#475569" />
-                  <Text className="ml-2 text-[12px] text-slate-600">Proof of payment</Text>
+              {!isNoFeeCancel && (
+                <View className="mt-3 flex-row items-center justify-between">
+                  <Text className="text-slate-500">Proof of payment</Text>
+                  <Pressable onPress={() => openReceipt(item)}>
+                    <Text className="text-indigo-600 font-medium">View Proof</Text>
+                  </Pressable>
                 </View>
+              )}
 
-                <Pressable
-                  onPress={() =>
-                    item.proof_image_url
-                      ? openReceipt(item)
-                      : Alert.alert("No proof yet", "The driver hasn’t uploaded a receipt.")
-                  }
-                  className="rounded-xl border border-slate-300 px-3 py-1.5 active:opacity-90"
-                >
-                  <Text className="text-[12px] font-semibold text-slate-900">View Proof</Text>
-                </Pressable>
-              </View>
             </View>
           )}
         </Pressable>
 
-        {/* Payment Received button (ONLY for unpaid) */}
-        {!paid && (
+        {/* Payment Received button (ONLY for unpaid and NOT a no-fee cancel) */}
+        {!paid && !isNoFeeCancel && isExpanded && (
           <Pressable
             disabled={!item.proof_image_url || loading}
             onPress={() => markAsPaid(item)}
@@ -382,6 +381,7 @@ export default function CompletedRequest() {
             <Text className="text-[14px] font-semibold text-white">Payment Received</Text>
           </Pressable>
         )}
+
       </View>
     );
   };
@@ -421,7 +421,7 @@ export default function CompletedRequest() {
               <Ionicons name="close" size={26} color="#fff" />
             </Pressable>
             <Text className="text-white font-semibold">
-              {receiptTx?.driver_name} • {receiptTx ? peso(receiptTx.total_amount) : ""}
+              {receiptTx?.driver_name} {"\u2022"} {receiptTx ? peso(receiptTx.total_amount) : ""}
             </Text>
             <View style={{ width: 26, height: 26 }} />
           </View>
@@ -440,19 +440,22 @@ export default function CompletedRequest() {
 
           {/* Bottom action bar in modal (optional/kept) */}
           <View className="px-4 pb-8">
-            {!!receiptTx && receiptTx.status !== "paid" && (
+           {receiptTx &&
+            receiptTx.cancel_option !== "diagnose_only" &&
+            Number(receiptTx.total_amount) > 0 && (
               <Pressable
                 disabled={!receiptTx.proof_image_url || loading}
                 onPress={() => markAsPaid(receiptTx)}
-                className="w-full items-center justify-center rounded-xl bg-green-600 py-3 active:opacity-90"
-                style={{ opacity: !receiptTx.proof_image_url || loading ? 0.6 : 1 }}
+                className="mt-4 rounded-xl bg-emerald-600 px-4 py-3 items-center"
               >
-                <Text className="text-[14px] font-semibold text-white">Payment Received</Text>
+                <Text className="text-white font-semibold">Payment Received</Text>
               </Pressable>
-            )}
+          )}
           </View>
         </View>
       </Modal>
     </SafeAreaView>
   );
 }
+
+

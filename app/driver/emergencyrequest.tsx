@@ -874,7 +874,7 @@ export default function EmergencyRequest() {
               {/* Photos */}
               <View className="mt-3 rounded-2xl border border-slate-200 p-3">
                 <Text className="mb-2 text-[13px] font-medium text-slate-900">
-                  Add photos (optional) — {photos.length}/{MAX_PHOTOS}
+                  Add Image (e.g., landmark, damaged parts, etc.) — {photos.length}/{MAX_PHOTOS}
                 </Text>
 
                 <PhotosGrid />

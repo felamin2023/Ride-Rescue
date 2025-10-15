@@ -383,9 +383,63 @@ export default function ShopAcceptedRequests() {
     Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`).catch(() => {});
   };
 
-  const messageDriver = (emergencyId: string) => {
-    try { router.push({ pathname: "/shop/messages", params: { to: emergencyId } as any }); }
-    catch { router.push("/shop/messages"); }
+  // 🔵 UPDATED: Navigate directly to conversation instead of messages list
+  const messageDriver = async (emergencyId: string, driverUserId: string | null) => {
+    try {
+      setLoading({ visible: true, message: "Opening chat..." });
+
+      if (!driverUserId) {
+        Alert.alert("Error", "Driver information is not available.");
+        return;
+      }
+
+      // Check if conversation already exists for this emergency
+      const { data: existingConvs, error: convError } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("emergency_id", emergencyId)
+        .order("updated_at", { ascending: false });
+
+      if (convError) {
+        console.error("Error checking conversations:", convError);
+      }
+
+      let conversationId;
+
+      // Use the most recent existing conversation if found
+      if (existingConvs && existingConvs.length > 0) {
+        conversationId = existingConvs[0].id;
+        console.log("Found existing emergency conversation:", conversationId);
+      } else {
+        // Create new conversation for this emergency
+        const { data: newConv, error } = await supabase
+          .from("conversations")
+          .insert({
+            emergency_id: emergencyId,
+            customer_id: driverUserId, // driver is the customer in emergency context
+            driver_id: userId, // shop is the driver in emergency context
+          })
+          .select()
+          .single();
+
+        if (error) {
+          console.error("Error creating conversation:", error);
+          Alert.alert("Error", "Could not start conversation. Please try again.");
+          return;
+        }
+        conversationId = newConv.id;
+        console.log("Created new emergency conversation:", conversationId);
+      }
+
+      // 🔵 FIXED: Use the correct route that exists in your app
+      // Navigate to the driver chat screen (since that's what exists)
+      router.push(`/driver/chat/${conversationId}`);
+    } catch (error) {
+      console.error("Error in messageDriver:", error);
+      Alert.alert("Error", "Could not start conversation. Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
   };
 
   const handleMarkComplete = async (emergencyId: string, distanceKm?: number) => {
@@ -722,7 +776,11 @@ export default function ShopAcceptedRequests() {
 
             {/* Primary actions */}
             <View className="flex-row gap-3">
-              <Pressable onPress={() => messageDriver(item.emergencyId)} className="flex-1 rounded-xl py-2.5 items-center border border-slate-300">
+              {/* 🔵 UPDATED: Message Button - now passes driverUserId */}
+              <Pressable
+                onPress={() => messageDriver(item.emergencyId, item.driverUserId)}
+                className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
+              >
                 <View className="flex-row items-center gap-1.5">
                   <Ionicons name="chatbubbles-outline" size={16} color="#0F172A" />
                   <Text className="text-[14px] font-semibold text-slate-900">Message</Text>

@@ -177,6 +177,15 @@ function mapEmergencyToItem(
   };
 }
 
+
+
+
+
+
+
+
+
+
 // distance helper (km)
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   const toRad = (x: number) => (x * Math.PI) / 180;
@@ -993,13 +1002,122 @@ export default function RequestScreen() {
   const hasMyPending = (emergencyId: string) =>
     myReq[emergencyId]?.status === "pending";
 
-  const messageDriver = (it: RequestItem) => {
-    try {
-      router.push({ pathname: "/shop/messages", params: { to: it.id } as any });
-    } catch {
-      router.push("/shop/messages");
+  const messageDriver = async (it: RequestItem) => {
+  try {
+    setLoading({ visible: true, message: "Opening chat..." });
+
+    // Get current user ID (mechanic/shop)
+    const { data: auth } = await supabase.auth.getUser();
+    const currentUserId = auth?.user?.id;
+
+    if (!currentUserId) {
+      Alert.alert("Error", "Please sign in to start a conversation.");
+      setLoading({ visible: false });
+      return;
     }
-  };
+
+    // We need to get the driver's user_id for this emergency
+    const { data: emergencyData, error: emergencyError } = await supabase
+      .from("emergency")
+      .select("user_id")
+      .eq("emergency_id", it.id)
+      .single();
+
+    if (emergencyError || !emergencyData?.user_id) {
+      Alert.alert("Error", "Driver information is not available.");
+      setLoading({ visible: false });
+      return;
+    }
+
+    const driverUserId = emergencyData.user_id;
+
+    console.log("Looking for ANY conversation between:", {
+      customer_id: driverUserId,
+      driver_id: currentUserId,
+      emergency_id: it.id
+    });
+
+    // Check for ANY existing conversation (emergency OR non-emergency) between these users
+    const { data: existingConvs, error: convError } = await supabase
+      .from("conversations")
+      .select(`
+        id,
+        emergency_id,
+        shop_place_id
+      `)
+      .or(`and(customer_id.eq.${driverUserId},driver_id.eq.${currentUserId}),and(customer_id.eq.${currentUserId},driver_id.eq.${driverUserId})`)
+      .order("updated_at", { ascending: false });
+
+    if (convError) {
+      console.error("Error checking conversations:", convError);
+    }
+
+    let conversationId;
+
+    // Use the most recent existing conversation if found (regardless of emergency status)
+    if (existingConvs && existingConvs.length > 0) {
+      conversationId = existingConvs[0].id;
+      console.log("Found existing conversation:", conversationId, 
+        existingConvs[0].emergency_id ? "(emergency)" : "(non-emergency)");
+      
+      // Update the conversation timestamp to mark it as active
+      await supabase
+        .from("conversations")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", conversationId);
+    } else {
+      console.log("No existing conversation found, creating new emergency one");
+      // Create new emergency conversation
+      const { data: newConv, error } = await supabase
+        .from("conversations")
+        .insert({
+          emergency_id: it.id,
+          customer_id: driverUserId, // driver is the customer in emergency context
+          driver_id: currentUserId, // shop is the driver in emergency context
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error creating conversation:", error);
+        
+        // If there's a unique constraint violation, try to find the existing conversation again
+        if (error.code === '23505') { // unique violation
+          const { data: retryConvs } = await supabase
+            .from("conversations")
+            .select("id")
+            .or(`and(customer_id.eq.${driverUserId},driver_id.eq.${currentUserId}),and(customer_id.eq.${currentUserId},driver_id.eq.${driverUserId})`)
+            .order("updated_at", { ascending: false })
+            .limit(1);
+            
+          if (retryConvs && retryConvs.length > 0) {
+            conversationId = retryConvs[0].id;
+            console.log("Found conversation after retry:", conversationId);
+          } else {
+            throw new Error("Conversation creation failed and no existing conversation found");
+          }
+        } else {
+          throw error;
+        }
+      } else {
+        conversationId = newConv.id;
+        console.log("Created new emergency conversation:", conversationId);
+      }
+    }
+
+    if (!conversationId) {
+      throw new Error("No conversation ID available");
+    }
+
+    // Navigate to the chat screen
+    router.push(`/driver/chat/${conversationId}`);
+  } catch (error) {
+    console.error("Error in messageDriver:", error);
+    Alert.alert("Error", "Could not start conversation. Please try again.");
+  } finally {
+    setLoading({ visible: false });
+  }
+};
 
   const openViewer = (images: string[], startIndex: number) => {
     setViewerImages(images);

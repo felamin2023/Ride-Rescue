@@ -20,13 +20,14 @@ export type Message = {
 
 export type Conversation = {
   id: string;
-  emergency_id: string;
+  emergency_id: string | null;
   customer_id: string;
   driver_id: string;
   created_at: string;
   updated_at: string;
   customer_unread_count: number;
   driver_unread_count: number;
+  
 };
 
 export type ConversationWithDetails = Conversation & {

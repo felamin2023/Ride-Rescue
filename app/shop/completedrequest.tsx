@@ -393,9 +393,9 @@ export default function CompletedRequest() {
         <Pressable onPress={() => router.back()} hitSlop={8}>
           <Ionicons name="arrow-back" size={26} color="#0F172A" />
         </Pressable>
-        <Text className="text-xl font-bold text-[#0F172A]">Completed / Transactions</Text>
+        <Text className="text-xl font-bold text-[#0F172A]">Transactions</Text>
         <View className="w-6 h-6 items-center justify-center">
-          <Ionicons name="filter" size={22} color="#0F172A" />
+          <Ionicons name="filter" size={22} color="#ffff" />
         </View>
       </View>
 

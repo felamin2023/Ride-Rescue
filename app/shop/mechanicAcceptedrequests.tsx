@@ -12,6 +12,7 @@ import {
   Easing,
   Modal,
   ScrollView,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -387,6 +388,80 @@ export default function ShopAcceptedRequests() {
     [shopId]
   );
 
+  /* ----------------------------- Message & Location Functions ----------------------------- */
+  const openDirections = (lat: number, lon: number) => {
+    const scheme = Platform.select({ ios: "maps:0,0?q=", android: "geo:0,0?q=" });
+    const latLng = `${lat},${lon}`;
+    const url = Platform.select({
+      ios: `${scheme}${latLng}`,
+      android: `${scheme}${latLng}`,
+    });
+
+    if (url) {
+      Linking.openURL(url).catch(() => {
+        Alert.alert("Error", "Unable to open maps app");
+      });
+    }
+  };
+
+  // Enhanced message functionality
+  const messageDriver = async (emergencyId: string, driverUserId: string | null) => {
+    try {
+      setLoading({ visible: true, message: "Opening chat..." });
+
+      if (!driverUserId) {
+        Alert.alert("Error", "Driver information is not available.");
+        return;
+      }
+
+      // Check if conversation already exists for this emergency
+      const { data: existingConvs, error: convError } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("emergency_id", emergencyId)
+        .order("updated_at", { ascending: false });
+
+      if (convError) {
+        console.error("Error checking conversations:", convError);
+      }
+
+      let conversationId;
+
+      // Use the most recent existing conversation if found
+      if (existingConvs && existingConvs.length > 0) {
+        conversationId = existingConvs[0].id;
+        console.log("Found existing emergency conversation:", conversationId);
+      } else {
+        // Create new conversation for this emergency
+        const { data: newConv, error } = await supabase
+          .from("conversations")
+          .insert({
+            emergency_id: emergencyId,
+            customer_id: driverUserId, // driver is the customer in emergency context
+            driver_id: userId, // shop is the driver in emergency context
+          })
+          .select()
+          .single();
+
+        if (error) {
+          console.error("Error creating conversation:", error);
+          Alert.alert("Error", "Could not start conversation. Please try again.");
+          return;
+        }
+        conversationId = newConv.id;
+        console.log("Created new emergency conversation:", conversationId);
+      }
+
+      // Navigate to the chat screen
+      router.push(`/driver/chat/${conversationId}`);
+    } catch (error) {
+      console.error("Error in messageDriver:", error);
+      Alert.alert("Error", "Could not start conversation. Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  };
+
   /* ----------------------------- Actions ----------------------------- */
   const handleMarkComplete = async (emergencyId: string, distanceKm?: number) => {
     if (actionLocked[emergencyId]) return;
@@ -462,7 +537,7 @@ export default function ShopAcceptedRequests() {
       setShowPaymentModal(false);
       setSelectedEmergency(null);
       setOriginalTx(null);
-Alert.alert("Invoice sent", "Waiting for the driver to pay.");
+      Alert.alert("Invoice sent", "Waiting for the driver to pay.");
     } catch (e: any) {
       Alert.alert("Update failed", e?.message ?? "Please try again.");
     } finally {
@@ -505,45 +580,44 @@ Alert.alert("Invoice sent", "Waiting for the driver to pay.");
         const baseLabor = Number(tx.labor_cost || 0);
 
         if (isDiagnoseOnly) {
-        // OPTION 2: No fee at all; keep it visible in Completed/Transactions with no proof & no "Paid" badge
-        const { error: txErr } = await supabase
-          .from("payment_transaction")
-          .update({
-            distance_fee: 0,
-            labor_cost: 0,
-            extra_total: 0,
-            total_amount: 0,
-            status: "pending",           // not "paid" → no Paid chip; proof not required
-            cancel_option: cancelData.cancelOption,
-            cancel_reason: cancelData.reason || null,
-            paid_at: null,               // ensure it's not marked paid
-            updated_at: now,
-          })
-          .eq("transaction_id", tx.transaction_id);
-        if (txErr) throw txErr;
-      } else {
-        // OPTION 1: Distance fee + 50% of labor
-        const halfLabor = Number((baseLabor * 0.5).toFixed(2));
-        const computed = Number((baseDistance + halfLabor).toFixed(2));
+          // OPTION 2: No fee at all; keep it visible in Completed/Transactions with no proof & no "Paid" badge
+          const { error: txErr } = await supabase
+            .from("payment_transaction")
+            .update({
+              distance_fee: 0,
+              labor_cost: 0,
+              extra_total: 0,
+              total_amount: 0,
+              status: "pending",           // not "paid" → no Paid chip; proof not required
+              cancel_option: cancelData.cancelOption,
+              cancel_reason: cancelData.reason || null,
+              paid_at: null,               // ensure it's not marked paid
+              updated_at: now,
+            })
+            .eq("transaction_id", tx.transaction_id);
+          if (txErr) throw txErr;
+        } else {
+          // OPTION 1: Distance fee + 50% of labor
+          const halfLabor = Number((baseLabor * 0.5).toFixed(2));
+          const computed = Number((baseDistance + halfLabor).toFixed(2));
 
-        const { error: txErr } = await supabase
-          .from("payment_transaction")
-          .update({
-            // reflect the halved labor in the breakdown, not just in total
-            labor_cost: halfLabor,
-            // keep the recorded distance fee as-is
-            extra_total: 0,               // extras are not charged on cancel
-            total_amount: computed,
-            status: "to_pay",
-            cancel_option: cancelData.cancelOption,
-            cancel_reason: cancelData.reason || null,
-            canceled_at: now,
-            updated_at: now,
-          })
-          .eq("transaction_id", tx.transaction_id);
-        if (txErr) throw txErr;
-      }
-
+          const { error: txErr } = await supabase
+            .from("payment_transaction")
+            .update({
+              // reflect the halved labor in the breakdown, not just in total
+              labor_cost: halfLabor,
+              // keep the recorded distance fee as-is
+              extra_total: 0,               // extras are not charged on cancel
+              total_amount: computed,
+              status: "to_pay",
+              cancel_option: cancelData.cancelOption,
+              cancel_reason: cancelData.reason || null,
+              canceled_at: now,
+              updated_at: now,
+            })
+            .eq("transaction_id", tx.transaction_id);
+          if (txErr) throw txErr;
+        }
       }
 
       // Local UI
@@ -649,7 +723,6 @@ Alert.alert("Invoice sent", "Waiting for the driver to pay.");
     const isOpen = !!openCards[item.emergencyId];
     const hasCharges = !!item.charges;
     const buttonsVisible = item.emStatus === "in_process" && !actionLocked[item.emergencyId] && (item.charges?.txStatus === "pending" || !item.charges);
-
 
     return (
       <Pressable
@@ -766,13 +839,45 @@ Alert.alert("Invoice sent", "Waiting for the driver to pay.");
           <>
             <View className="h-px bg-slate-200 my-4" />
 
+            {/* Primary actions - Always visible when expanded */}
+            <View className="flex-row gap-3">
+              {/* Message Button */}
+              <Pressable
+                onPress={() => messageDriver(item.emergencyId, item.driverUserId)}
+                className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
+              >
+                <View className="flex-row items-center gap-1.5">
+                  <Ionicons name="chatbubbles-outline" size={16} color="#0F172A" />
+                  <Text className="text-[14px] font-semibold text-slate-900">Message</Text>
+                </View>
+              </Pressable>
+
+              {/* Location Button */}
+              <Pressable 
+                onPress={() => openDirections(item.lat, item.lon)} 
+                className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
+              >
+                <View className="flex-row items-center gap-1.5">
+                  <Ionicons name="navigate-outline" size={16} color="#0F172A" />
+                  <Text className="text-[14px] font-semibold text-slate-900">Location</Text>
+                </View>
+              </Pressable>
+            </View>
+
+            {/* Complete/Cancel buttons - Only for in_process status */}
             {buttonsVisible && (
               <View className="flex-row gap-3 mt-3">
-                <Pressable onPress={() => handleMarkComplete(item.emergencyId, item.distanceKm)} className="flex-1 rounded-xl py-2.5 px-4 bg-blue-600 items-center">
+                <Pressable 
+                  onPress={() => handleMarkComplete(item.emergencyId, item.distanceKm)} 
+                  className="flex-1 rounded-xl py-2.5 px-4 bg-blue-600 items-center"
+                >
                   <Text className="text-white text-[14px] font-semibold">Complete</Text>
                 </Pressable>
 
-                <Pressable onPress={() => handleCancelRepair(item.emergencyId, item.distanceKm)} className="flex-1 rounded-xl py-2.5 px-4 border border-red-600 items-center bg-red-600">
+                <Pressable 
+                  onPress={() => handleCancelRepair(item.emergencyId, item.distanceKm)} 
+                  className="flex-1 rounded-xl py-2.5 px-4 border border-red-600 items-center bg-red-600"
+                >
                   <Text className="text-white text-[14px] font-semibold">Cancel Repair</Text>
                 </Pressable>
               </View>

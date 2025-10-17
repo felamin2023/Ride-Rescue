@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { View, Text, FlatList, Pressable, RefreshControl } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "../../utils/supabase";
@@ -56,7 +56,6 @@ function timeAgo(iso: string) {
 
 export default function ShopInbox() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<NotifRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -165,17 +164,22 @@ export default function ShopInbox() {
   }, [router]);
 
   const Header = () => (
-    <View style={{ paddingTop: insets.top }} className="bg-blue-600">
-      <View className="flex-row items-center justify-between px-4 pt-3 pb-3">
-        <Pressable onPress={() => router.back()} className="p-2 rounded-lg active:opacity-80" android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}>
-          <Ionicons name="chevron-back" size={24} color="#fff" />
+    <SafeAreaView edges={["top"]} className="bg-white border-b border-slate-200">
+      <View className="flex-row items-center justify-between px-4 py-3">
+        <Pressable 
+          onPress={() => router.back()} 
+          hitSlop={8}
+          className="p-2 rounded-lg active:opacity-80"
+        >
+          <Ionicons name="arrow-back" size={24} color="#0F172A" />
         </Pressable>
-        <Text className="text-[18px] font-extrabold text-white">Inbox</Text>
-        <Pressable onPress={markAllRead} className="p-2 rounded-lg active:opacity-80" android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}>
-          <Ionicons name={unreadCount ? "mail-unread-outline" : "mail-outline"} size={22} color="#fff" />
-        </Pressable>
+        
+        <Text className="text-xl font-bold text-[#0F172A]">Notifications</Text>
+        
+        {/* Empty view to balance the layout - removed envelope icon */}
+        <View style={{ width: 40 }} />
       </View>
-    </View>
+    </SafeAreaView>
   );
 
   const Item = ({ item }: { item: NotifRow }) => {
@@ -199,10 +203,26 @@ export default function ShopInbox() {
       <Pressable
         onPress={() => open(item)}
         className={`mx-4 mb-3 rounded-2xl border p-4 ${isUnread ? "bg-white border-blue-200" : "bg-white border-slate-200"}`}
+        style={{
+          shadowColor: "#000",
+          shadowOpacity: 0.06,
+          shadowRadius: 8,
+          shadowOffset: { width: 0, height: 2 },
+          elevation: 2,
+        }}
       >
         <View className="flex-row items-start">
-          <View className="mr-3 rounded-full p-2" style={{ backgroundColor: "rgba(15,37,71,0.95)" }}>
-            <Ionicons name={icon} size={20} color={isUnread ? "rgba(15,37,71,0.95)" : "#334155"} />
+          <View 
+            className="mr-3 rounded-full p-2" 
+            style={{ 
+              backgroundColor: isUnread ? "rgba(37, 99, 235, 0.1)" : "rgba(100, 116, 139, 0.1)" 
+            }}
+          >
+            <Ionicons 
+              name={icon} 
+              size={20} 
+              color={isUnread ? "#2563EB" : "#64748B"} 
+            />
           </View>
           <View className="flex-1">
             <Text className="text-[14px] font-semibold text-slate-900" numberOfLines={2}>
@@ -225,12 +245,12 @@ export default function ShopInbox() {
         <Ionicons name="mail-outline" size={22} color="#64748B" />
       </View>
       <Text className="mt-3 text-[15px] font-semibold text-slate-800">No notifications</Text>
-      <Text className="mt-1 text-[13px] text-slate-500">You’ll see driver requests and updates here.</Text>
+      <Text className="mt-1 text-[13px] text-slate-500">You'll see driver requests and updates here.</Text>
     </View>
   );
 
   return (
-    <SafeAreaView className="flex-1 bg-[#F7F8FA]">
+    <View className="flex-1 bg-[#F4F6F8]">
       <Header />
       <FlatList
         data={rows}
@@ -240,6 +260,6 @@ export default function ShopInbox() {
         contentContainerStyle={{ paddingVertical: 8 }}
         ListEmptyComponent={loading ? undefined : Empty}
       />
-    </SafeAreaView>
+    </View>
   );
 }

@@ -16,7 +16,6 @@ import {
   StatusBar,
   Dimensions,
   Keyboard,
-  KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -435,6 +434,7 @@ export default function ChatScreen() {
   const [showImageMenu, setShowImageMenu] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [shouldScrollOnNextRender, setShouldScrollOnNextRender] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const { messages, loading, loadingMore, hasMore, sendMessage, loadMoreMessages } =
     useMessages(conversationId, userId);
@@ -448,22 +448,29 @@ export default function ChatScreen() {
     loadConversation();
   }, [conversationId]);
 
-  // Scroll to bottom when messages change and flag is set
+  // Keyboard listeners
   useEffect(() => {
-    if (shouldScrollOnNextRender && reversedMessages.length > 0) {
-      scrollToBottom(150);
-      setShouldScrollOnNextRender(false);
-    }
-  }, [reversedMessages.length, shouldScrollOnNextRender]);
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+      }
+    );
 
-  // Cleanup timeouts on unmount
-  useEffect(() => {
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+      }
+    );
+
     return () => {
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
     };
   }, []);
 
+  // Define scrollToBottom first
   const scrollToBottom = useCallback((delay: number = 100) => {
     if (scrollTimeoutRef.current) {
       clearTimeout(scrollTimeoutRef.current);
@@ -472,6 +479,29 @@ export default function ChatScreen() {
     scrollTimeoutRef.current = setTimeout(() => {
       flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
     }, delay);
+  }, []);
+
+  // Scroll to bottom when messages change and flag is set
+  useEffect(() => {
+    if (shouldScrollOnNextRender && reversedMessages.length > 0) {
+      scrollToBottom(150);
+      setShouldScrollOnNextRender(false);
+    }
+  }, [reversedMessages.length, shouldScrollOnNextRender, scrollToBottom]);
+
+  // Auto-scroll when keyboard opens
+  useEffect(() => {
+    if (keyboardHeight > 0) {
+      scrollToBottom(100);
+    }
+  }, [keyboardHeight, scrollToBottom]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    };
   }, []);
 
   async function loadUser() {
@@ -610,7 +640,7 @@ export default function ChatScreen() {
     
     // Dismiss keyboard and wait for animation
     Keyboard.dismiss();
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 0));
 
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
@@ -732,11 +762,7 @@ export default function ChatScreen() {
   const otherUserOnline = otherUser ? isOnline(otherUser.user_id) : false;
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: COLORS.surface }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
-    >
+    <View style={{ flex: 1, backgroundColor: COLORS.surface }}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.surface} />
 
       <ChatHeader
@@ -747,14 +773,20 @@ export default function ChatScreen() {
         insets={insets}
       />
 
+      {/* Main content */}
       <View style={{ flex: 1 }}>
         <FlatList
           ref={flatListRef}
           data={reversedMessages}
           keyExtractor={(item) => item.id}
           renderItem={renderMessage}
-          contentContainerStyle={{ paddingVertical: 12 }}
-          style={{ backgroundColor: COLORS.bg }}
+          contentContainerStyle={{ 
+            paddingVertical: 12,
+          }}
+          style={{ 
+            backgroundColor: COLORS.bg,
+            flex: 1,
+          }}
           inverted
           maintainVisibleContentPosition={{
             minIndexForVisible: 0,
@@ -767,6 +799,9 @@ export default function ChatScreen() {
           removeClippedSubviews={Platform.OS === "android"}
           maxToRenderPerBatch={10}
           windowSize={10}
+          ListHeaderComponent={
+            <View style={{ height: keyboardHeight > 0 ? keyboardHeight + 90 : 90 }} />
+          }
           ListFooterComponent={
             loadingMore ? (
               <View style={{ padding: 12, alignItems: "center" }}>
@@ -777,79 +812,97 @@ export default function ChatScreen() {
         />
 
         {typingUsers.length > 0 && (
-          <View style={{ paddingHorizontal: 16, paddingVertical: 8, backgroundColor: COLORS.bg }}>
+          <View style={{ 
+            position: 'absolute',
+            bottom: 80,
+            left: 0,
+            right: 0,
+            paddingHorizontal: 16, 
+            paddingVertical: 8, 
+            backgroundColor: COLORS.bg 
+          }}>
             <Text style={{ fontSize: 13, color: COLORS.sub, fontStyle: "italic" }}>
               {typingUsers[0].full_name} is typing...
             </Text>
           </View>
         )}
 
+        {/* Input bar - positioned absolutely, moves with keyboard */}
         <View
           style={{
+            position: 'absolute',
+            bottom: keyboardHeight,
+            left: 0,
+            right: 0,
             backgroundColor: COLORS.surface,
             borderTopWidth: 1,
             borderTopColor: COLORS.border,
             paddingHorizontal: 12,
-            paddingVertical: 8,
+            paddingTop: 8,
             paddingBottom: Math.max(insets.bottom, 8),
-            flexDirection: "row",
-            alignItems: "center",
           }}
         >
-          <Pressable
-            onPress={() => setShowImageMenu(!showImageMenu)}
-            disabled={sending}
-            style={{ padding: 8, marginRight: 4 }}
-          >
-            <Ionicons 
-              name="image-outline" 
-              size={24} 
-              color={sending ? COLORS.muted : COLORS.primary} 
-            />
-          </Pressable>
-
-          <TextInput
-            ref={inputRef}
-            value={inputText}
-            onChangeText={handleTextChange}
-            placeholder="Type a message..."
-            placeholderTextColor={COLORS.muted}
+          <View
             style={{
-              flex: 1,
-              backgroundColor: COLORS.bg,
-              borderRadius: 20,
-              paddingHorizontal: 16,
-              paddingVertical: 10,
-              fontSize: 15,
-              color: COLORS.text,
-              marginHorizontal: 8,
-              maxHeight: 100,
-            }}
-            multiline
-            maxLength={5000}
-            editable={!sending}
-            blurOnSubmit={false}
-            returnKeyType="default"
-          />
-
-          <Pressable
-            onPress={handleSend}
-            disabled={!inputText.trim() || sending}
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              backgroundColor: inputText.trim() && !sending ? COLORS.primary : COLORS.border,
-              justifyContent: "center",
+              flexDirection: "row",
               alignItems: "center",
             }}
           >
-            {sending ? (
-              <ActivityIndicator size="small" color="#FFF" />
-            ) : (
-              <Ionicons name="send" size={20} color={inputText.trim() ? "#FFF" : COLORS.muted} />
-            )}
-          </Pressable>
+            <Pressable
+              onPress={() => setShowImageMenu(!showImageMenu)}
+              disabled={sending}
+              style={{ padding: 8, marginRight: 4 }}
+            >
+              <Ionicons 
+                name="image-outline" 
+                size={24} 
+                color={sending ? COLORS.muted : COLORS.primary} 
+              />
+            </Pressable>
+
+            <TextInput
+              ref={inputRef}
+              value={inputText}
+              onChangeText={handleTextChange}
+              placeholder="Type a message..."
+              placeholderTextColor={COLORS.muted}
+              style={{
+                flex: 1,
+                backgroundColor: COLORS.bg,
+                borderRadius: 20,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                fontSize: 15,
+                color: COLORS.text,
+                marginHorizontal: 8,
+                maxHeight: 100,
+              }}
+              multiline
+              maxLength={5000}
+              editable={!sending}
+              blurOnSubmit={false}
+              returnKeyType="default"
+            />
+
+            <Pressable
+              onPress={handleSend}
+              disabled={!inputText.trim() || sending}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                backgroundColor: inputText.trim() && !sending ? COLORS.primary : COLORS.border,
+                justifyContent: "center",
+                alignItems: "center",
+              }}
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Ionicons name="send" size={20} color={inputText.trim() ? "#FFF" : COLORS.muted} />
+              )}
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -866,7 +919,6 @@ export default function ChatScreen() {
         imageUrl={fullscreenImage || ""}
         onClose={() => setFullscreenImage(null)}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
-

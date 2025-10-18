@@ -10,6 +10,7 @@ import {
   Linking,
   Modal,
   Platform,
+  Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -428,11 +429,21 @@ export default function VulcanizeScreen() {
   const [shops, setShops] = useState<Shop[]>([]);
   const [nearest, setNearest] = useState<Shop | null>(null);
   const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
+  const [userId, setUserId] = useState<string | null>(null); // ✅ Add user ID state
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  // Get current user
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUserId(user?.id || null);
+    };
+    getUser();
+  }, []);
 
   const toggleFilter = (k: string) => {
     setFilters((prev) => (prev[0] === k ? [] : [k])); // single-select: tap again to clear
@@ -452,11 +463,97 @@ export default function VulcanizeScreen() {
       Linking.openURL(universal).catch(() => {});
     }
   };
-  const goChat = (_s: Shop) => {
-    /* router.push(`/chat/${s.id}`) */
-  };
 
-  const openActions = useCallback((s: Shop) => {
+  // ✅ Updated goChat function to create non-emergency conversations
+// ✅ Updated goChat function to create non-emergency conversations
+// ✅ Updated goChat function to properly reuse existing conversations
+// ✅ Simplified version that checks all conversation types
+// ✅ UPDATED goChat function to check for ALL existing conversations (emergency and non-emergency)
+const goChat = async (shop: Shop) => {
+  if (!userId) {
+    Alert.alert("Not Logged In", "You need to be logged in to message a shop.");
+    return;
+  }
+
+  if (!shop.ownerId) {
+    Alert.alert("Cannot Message", "This shop doesn't have an owner account and cannot be messaged.");
+    return;
+  }
+
+  try {
+    // First, get the user_id of the shop owner from shop_details
+    const { data: shopOwner, error: ownerError } = await supabase
+      .from("shop_details")
+      .select("user_id")
+      .eq("shop_id", shop.ownerId)
+      .single();
+
+    if (ownerError || !shopOwner) {
+      Alert.alert("Error", "Could not find shop owner details.");
+      return;
+    }
+
+    const shopOwnerUserId = shopOwner.user_id;
+
+    console.log("Looking for ANY conversation between:", {
+      customer_id: shopOwnerUserId,
+      driver_id: userId,
+      shop_place_id: shop.id
+    });
+
+    // Check for ANY existing conversation (emergency OR non-emergency) between these users
+    const { data: existingConvs, error: convError } = await supabase
+      .from("conversations")
+      .select(`
+        id,
+        emergency_id,
+        shop_place_id
+      `)
+      .or(`and(customer_id.eq.${shopOwnerUserId},driver_id.eq.${userId}),and(customer_id.eq.${userId},driver_id.eq.${shopOwnerUserId})`)
+      .order("updated_at", { ascending: false });
+
+    if (convError) {
+      console.error("Error checking conversations:", convError);
+    }
+
+    let conversationId;
+
+    // Use the most recent existing conversation if found (regardless of emergency status)
+    if (existingConvs && existingConvs.length > 0) {
+      conversationId = existingConvs[0].id;
+      console.log("Found existing conversation:", conversationId, 
+        existingConvs[0].emergency_id ? "(emergency)" : "(non-emergency)");
+    } else {
+      console.log("No existing conversation found, creating new non-emergency one");
+      // Create new non-emergency conversation
+      const { data: newConv, error } = await supabase
+        .from("conversations")
+        .insert({
+          customer_id: shopOwnerUserId,
+          driver_id: userId,
+          emergency_id: null,
+          shop_place_id: shop.id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error creating conversation:", error);
+        throw error;
+      }
+      conversationId = newConv.id;
+      console.log("Created new non-emergency conversation:", conversationId);
+    }
+
+    // Navigate to chat
+    router.push(`/driver/chat/${conversationId}`);
+  } catch (error) {
+    console.error("Error creating conversation:", error);
+    Alert.alert("Error", "Could not start conversation. Please try again.");
+  }
+};
+
+const openActions = useCallback((s: Shop) => {
     setSelectedShop(s);
     setSheetOpen(true);
   }, []);
@@ -672,7 +769,7 @@ export default function VulcanizeScreen() {
       {(gotLocation === "denied" || gotLocation === "error") && (
         <View className="mx-4 mt-3 rounded-2xl bg-white p-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, panelShadow]}>
           <Text className="text-[12px] text-slate-600">
-            We couldn’t access your location. Showing vulcanizing shops without distance. Enable location in Settings to see what’s nearest.
+            We couldn't access your location. Showing vulcanizing shops without distance. Enable location in Settings to see what's nearest.
           </Text>
         </View>
       )}

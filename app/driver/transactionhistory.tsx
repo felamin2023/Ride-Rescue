@@ -12,7 +12,7 @@ import {
   Alert,
   TextInput,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
@@ -22,7 +22,7 @@ import SideDrawer from "../../components/SideDrawer";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
-  bg: "#F7F8FA",
+  bg: "#F4F6F8",
   surface: "#FFFFFF",
   border: "#E5E7EB",
   text: "#0F172A",
@@ -30,14 +30,6 @@ const COLORS = {
   primary: "#111827",
   success: "#059669",
   danger: "#DC2626",
-};
-
-const cardShadow = {
-  shadowColor: "#0F172A",
-  shadowOpacity: 0.06,
-  shadowRadius: 12,
-  shadowOffset: { width: 0, height: 6 },
-  elevation: 2,
 };
 
 /* --------------------------------- Types ---------------------------------- */
@@ -97,6 +89,27 @@ function formatPayNowDate(iso: string) {
   const day = d.getDate();
   const year = d.getFullYear();
   return `${month} ${day}, ${year}`;
+}
+
+function timeAgo(iso: string) {
+  const s = Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const units: [number, string][] = [
+    [60, "s"],
+    [60, "m"],
+    [24, "h"],
+    [7, "d"],
+    [4.345, "w"],
+    [12, "mo"],
+    [Number.MAX_SAFE_INTEGER, "y"],
+  ];
+  let val = s;
+  let unit = "s";
+  for (const [step, label] of units) {
+    if (val < step) { unit = label; break; }
+    val = Math.floor(val / step);
+    unit = label;
+  }
+  return `${val}${unit} ago`;
 }
 
 const peso = (n: number) =>
@@ -159,36 +172,30 @@ function Header({
   onBack: () => void;
   onOpenDrawer: () => void;
 }) {
-  const insets = useSafeAreaInsets();
   return (
-    <View style={{ paddingTop: insets.top, backgroundColor: "#111827" }}>
-      <View className="flex-row items-center justify-between px-4 pb-3 pt-3">
+    <SafeAreaView edges={["top"]} className="bg-white border-b border-slate-200">
+      <View className="flex-row items-center justify-between px-4 py-3">
         {/* LEFT: Back */}
-        <Pressable
-          onPress={onBack}
+        <Pressable 
+          onPress={onBack} 
+          hitSlop={8}
           className="p-2 rounded-lg active:opacity-80"
-          android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-          hitSlop={10}
         >
-          <Ionicons name="chevron-back" size={24} color="#fff" />
+          <Ionicons name="arrow-back" size={24} color="#0F172A" />
         </Pressable>
 
         {/* CENTER: Title */}
-        <Text className="text-[18px] font-extrabold text-white">Transactions</Text>
+        <Text className="text-xl font-bold text-[#0F172A]">Transactions</Text>
 
         {/* RIGHT: Burger */}
-        <View className="flex-row items-center">
-          <Pressable
-            onPress={onOpenDrawer}
-            className="p-2 rounded-lg active:opacity-80"
-            android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-            hitSlop={10}
-          >
-            <Ionicons name="menu" size={24} color="#fff" />
-          </Pressable>
-        </View>
+        <Pressable
+          hitSlop={8}
+          className="p-2 rounded-lg active:opacity-80"
+        >
+          <Ionicons name="menu" size={24} color="#ffff" />
+        </Pressable>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -375,35 +382,40 @@ export default function TransactionHistory() {
     const showPayNow = tx.status === "pending" && !tx.raw.proof_image_url && !isNoFeeCancel;
 
     return (
-      <View className="px-4">
-        <View className="mb-3 overflow-hidden rounded-2xl bg-white" style={cardShadow as any}>
-          {/* Top row */}
-          <Pressable onPress={() => openDetail(tx)} className="flex-row items-center p-4 pb-3 active:opacity-90">
-            <View className="mr-3 rounded-full bg-blue-50 p-2">
-              <Ionicons name={methodIcon[tx.method]} size={20} color={COLORS.primary} />
-            </View>
-
-            <View className="flex-1">
-              <Text className="text-[15px] font-extrabold text-slate-900" numberOfLines={1}>
-                {tx.title}
-              </Text>
-              <Text className="mt-0.5 text-[12px] text-slate-500" numberOfLines={1}>
-                {tx.desc}
-              </Text>
-            </View>
-          </Pressable>
-
-          {/* Date + status pill */}
-          <View className="px-4 py-3">
-            <View className="flex-row items-center justify-between">
-              <View className="flex-row items-center">
-                <Ionicons name="calendar-outline" size={14} color={COLORS.sub} />
-                <Text className="ml-1.5 text-[12px] text-slate-600">{formatPayNowDate(tx.dateISO)}</Text>
-              </View>
-
+      <Pressable
+        onPress={() => openDetail(tx)}
+        className={`mx-4 mb-3 rounded-2xl border p-4 bg-white border-slate-200`}
+        style={{
+          shadowColor: "#000",
+          shadowOpacity: 0.06,
+          shadowRadius: 8,
+          shadowOffset: { width: 0, height: 2 },
+          elevation: 2,
+        }}
+      >
+        <View className="flex-row items-start">
+          <View 
+            className="mr-3 rounded-full p-2" 
+            style={{ 
+              backgroundColor: "rgba(37, 99, 235, 0.1)"
+            }}
+          >
+            <Ionicons 
+              name={methodIcon[tx.method]} 
+              size={20} 
+              color="#2563EB" 
+            />
+          </View>
+          <View className="flex-1">
+            <Text className="text-[14px] font-semibold text-slate-900" numberOfLines={1}>
+              {tx.title}
+            </Text>
+            <Text className="mt-1 text-[13px] text-slate-600">{tx.desc}</Text>
+            <View className="mt-2 flex-row items-center justify-between">
+              <Text className="text-[11px] text-slate-500">{timeAgo(tx.dateISO)}</Text>
               <View className={`flex-row items-center rounded-full px-2.5 py-1 ${s.pillBg}`}>
-                <Ionicons name={statusStyle[tx.status].icon} size={14} color="black" />
-                <Text className={`ml-1 text-[12px] ${s.pillText}`}>{s.text}</Text>
+                <Ionicons name={statusStyle[tx.status].icon} size={12} color="currentColor" />
+                <Text className={`ml-1 text-[10px] ${s.pillText}`}>{s.text}</Text>
               </View>
             </View>
 
@@ -415,7 +427,7 @@ export default function TransactionHistory() {
                   setPayMethod("GCash");
                   setProofUri(null);
                 }}
-                className="mt-2 w-full rounded-xl bg-blue-600 py-3 active:opacity-90"
+                className="mt-3 w-full rounded-xl bg-blue-600 py-3 active:opacity-90"
               >
                 <Text className="text-center text-[14px] font-semibold text-white">PAY NOW</Text>
               </Pressable>
@@ -435,12 +447,12 @@ export default function TransactionHistory() {
             )}
           </View>
         </View>
-      </View>
+      </Pressable>
     );
   };
 
   const Empty = () => (
-    <View className="px-6 pt-16 items-center">
+    <View className="items-center pt-16">
       <View className="h-14 w-14 items-center justify-center rounded-full bg-slate-100">
         <Ionicons name="document-text-outline" size={22} color="#64748B" />
       </View>
@@ -450,7 +462,7 @@ export default function TransactionHistory() {
   );
 
   return (
-    <SafeAreaView className="flex-1" style={{ backgroundColor: COLORS.bg }}>
+    <View className="flex-1 bg-[#F4F6F8]">
       <Header onBack={() => router.back()} onOpenDrawer={() => setDrawerOpen(true)} />
 
       {/* List */}
@@ -481,7 +493,13 @@ export default function TransactionHistory() {
             {detailTx && (
               <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 28 }}>
                 {/* Header row */}
-                <View className="rounded-2xl border border-slate-200 bg-white p-4" style={cardShadow as any}>
+                <View className="rounded-2xl border border-slate-200 bg-white p-4" style={{
+                  shadowColor: "#000",
+                  shadowOpacity: 0.06,
+                  shadowRadius: 8,
+                  shadowOffset: { width: 0, height: 2 },
+                  elevation: 2,
+                } as any}>
                   <View className="flex-row items-center">
                     <View className="mr-3 rounded-full bg-blue-50 p-2">
                       <Ionicons name={methodIcon[detailTx.method]} size={20} color={COLORS.primary} />
@@ -513,7 +531,7 @@ export default function TransactionHistory() {
                   {/* Status pill + Rate */}
                   <View className="mt-4 flex-row items-center justify-between">
                     <View className={`flex-row items-center rounded-full px-2.5 py-1 ${statusStyle[detailTx.status].pillBg}`}>
-                      <Ionicons name={statusStyle[detailTx.status].icon} size={14} color="black" />
+                      <Ionicons name={statusStyle[detailTx.status].icon} size={14} color="currentColor" />
                       <Text className={`ml-1 text-[12px] ${statusStyle[detailTx.status].pillText}`}>
                         {statusStyle[detailTx.status].text}
                       </Text>
@@ -534,7 +552,13 @@ export default function TransactionHistory() {
                 </View>
 
                 {/* Proof section */}
-                <View className="mt-3 rounded-2xl border border-slate-200 bg-white p-4" style={cardShadow as any}>
+                <View className="mt-3 rounded-2xl border border-slate-200 bg-white p-4" style={{
+                  shadowColor: "#000",
+                  shadowOpacity: 0.06,
+                  shadowRadius: 8,
+                  shadowOffset: { width: 0, height: 2 },
+                  elevation: 2,
+                } as any}>
                   <View className="mb-2 flex-row items-center justify-between">
                     <Text className="text-[14px] font-semibold text-slate-900">Receipt / Proof of payment</Text>
                     <Pressable onPress={() => setProofOpen(true)}>
@@ -693,7 +717,7 @@ export default function TransactionHistory() {
         appName="RIDERESCUE"
         onLogout={() => console.log("logout")}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

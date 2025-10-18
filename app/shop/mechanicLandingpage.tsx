@@ -951,6 +951,11 @@ export default function RequestScreen() {
         href: "/shop/completedrequest",
         icon: "receipt-outline" as const,
       },
+      {
+        label: "Ratings & Reviews",
+        href: "/shop/ratings",
+        icon: "star-outline" as const, // Ionicons
+      },
     ],
     []
   );

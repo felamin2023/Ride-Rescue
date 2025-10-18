@@ -19,6 +19,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { supabase } from "../../utils/supabase";
 import SideDrawer from "../../components/SideDrawer";
+import RateServiceModal, { RatePayload } from "../../components/RateServiceModal";
+
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -606,14 +608,23 @@ export default function TransactionHistory() {
 
       {/* Rate Service Modal */}
       <RateServiceModal
-        visible={rateOpen}
-        onClose={() => setRateOpen(false)}
-        tx={rateTx}
-        onSaved={(txId) => {
-          setItems((prev) => prev.map((it) => (it.id === txId ? { ...it, canRate: false } : it)));
-          setDetailTx((d) => (d && d.id === txId ? { ...d, canRate: false } : d));
-        }}
-      />
+      visible={rateOpen}
+      onClose={() => setRateOpen(false)}
+      payload={
+        rateTx
+          ? {
+              transaction_id: rateTx.id,
+              emergency_id: rateTx.raw.emergency_id,
+              shop_id: rateTx.raw.shop_id,
+            }
+          : null
+      }
+      onSaved={(txId) => {
+        setItems((prev) => prev.map((it) => (it.id === txId ? { ...it, canRate: false } : it)));
+        setDetailTx((d) => (d && d.id === txId ? { ...d, canRate: false } : d));
+      }}
+    />
+
 
       {/* Pay Now Modal */}
       <PayNowModal
@@ -731,200 +742,6 @@ function Row({ label, value, bold }: { label: string; value: string; bold?: bool
   );
 }
 
-/* -------------------------- Rate Service Modal -------------------------- */
-function RateServiceModal({
-  visible,
-  onClose,
-  tx,
-  onSaved,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  tx: TxItem | null;
-  onSaved: (txId: string) => void;
-}) {
-  const [stars, setStars] = useState<number>(0);
-  const [comment, setComment] = useState<string>("");
-  const [imgUri, setImgUri] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [loadingExisting, setLoadingExisting] = useState(false);
-
-  useEffect(() => {
-    (async () => {
-      if (!visible || !tx) return;
-      setLoadingExisting(true);
-      const { data: auth } = await supabase.auth.getUser();
-      const me = auth?.user?.id;
-      const { data } = await supabase
-        .from("ratings")
-        .select("id, stars, comment, photo_url")
-        .eq("driver_user_id", me as any)
-        .eq("transaction_id", tx.id)
-        .maybeSingle();
-      if (data) {
-        setStars(data.stars ?? 0);
-        setComment(data.comment ?? "");
-        setImgUri(data.photo_url ?? null);
-      } else {
-        setStars(0);
-        setComment("");
-        setImgUri(null);
-      }
-      setLoadingExisting(false);
-    })();
-  }, [visible, tx?.id]);
-
-  const pickImage = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.85,
-    });
-    if (!res.canceled && res.assets?.length) setImgUri(res.assets[0].uri);
-  };
-  const takePhoto = async () => {
-    const res = await ImagePicker.launchCameraAsync({ quality: 0.85 });
-    if (!res.canceled && res.assets?.length) setImgUri(res.assets[0].uri);
-  };
-
-  // Expo-safe uploader to ratings_photos
-  const uploadPhoto = async (localUri: string, userId: string, txId: string) => {
-    const bucket = supabase.storage.from("ratings_photos");
-    const { ext, type: contentType } = guessExtAndMime(localUri);
-    const path = `${userId}/${txId}/rating-${Date.now()}.${ext}`;
-
-    const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
-    const arrayBuffer = base64ToArrayBuffer(base64.replace(/\r?\n/g, ""));
-
-    // 1) Try direct upload
-    try {
-      const { error } = await bucket.upload(path, arrayBuffer, { upsert: true, contentType });
-      if (error) throw error;
-    } catch {
-      // 2) Fallback: signed upload
-      const { data: sign, error: signErr } = await bucket.createSignedUploadUrl(path);
-      if (signErr) throw signErr;
-      const { error: up2Err } = await bucket.uploadToSignedUrl(path, sign.token, arrayBuffer, { upsert: true, contentType });
-      if (up2Err) throw up2Err;
-    }
-
-    const { data } = bucket.getPublicUrl(path);
-    return data.publicUrl;
-  };
-
-  const submit = async () => {
-    if (!tx) return;
-    if (!stars) {
-      Alert.alert("Pick a rating", "Please select 1 to 5 stars.");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-      const me = auth?.user?.id!;
-
-      let photoUrl: string | null = imgUri;
-      if (imgUri && imgUri.startsWith("file:")) {
-        photoUrl = await uploadPhoto(imgUri, me, tx.id);
-      }
-
-      // Build payload once
-      const payload = {
-        transaction_id: tx.id,
-        emergency_id: tx.raw.emergency_id,
-        shop_id: tx.raw.shop_id,
-        driver_user_id: me,
-        stars,
-        comment: comment?.trim() || null,
-        photo_url: photoUrl ?? null,
-      };
-
-      // One-and-done upsert on (driver_user_id, transaction_id)
-      const { error } = await supabase.from("ratings").upsert(payload, {
-        onConflict: "driver_user_id,transaction_id",
-      });
-      if (error) throw error;
-
-      onSaved(tx.id);
-      onClose();
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "Could not save rating. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  if (!visible) return null as any;
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View className="flex-1 items-center justify-end bg-black/50">
-        <View className="w-full rounded-t-2xl bg-white p-4">
-          <View className="mb-2 flex-row items-center justify-between">
-            <Text className="text-[16px] font-semibold text-slate-900">Rate this service</Text>
-            <Pressable onPress={onClose} hitSlop={8}>
-              <Ionicons name="close" size={22} color="#111827" />
-            </Pressable>
-          </View>
-
-          {loadingExisting ? (
-            <View className="py-10 items-center">
-              <Text>Loading…</Text>
-            </View>
-          ) : (
-            <>
-              {/* Stars */}
-              <View className="mb-2 flex-row items-center gap-2">
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <Pressable key={n} onPress={() => setStars(n)} hitSlop={8}>
-                    <Ionicons
-                      name={n <= stars ? "star" : "star-outline"}
-                      size={28}
-                      color={n <= stars ? "#f59e0b" : "#94A3B8"}
-                    />
-                  </Pressable>
-                ))}
-                <Text className="ml-2 text-[12px] text-slate-600">{stars || 0}/5</Text>
-              </View>
-
-              {/* Comment */}
-              <TextInput
-                className="min-h-[96px] rounded-xl border border-slate-200 p-3"
-                placeholder="Share your experience (optional)"
-                multiline
-                value={comment}
-                onChangeText={setComment}
-              />
-
-              {/* Photo */}
-              <View className="mt-3 flex-row items-center justify-between">
-                <View className="flex-row gap-2">
-                  <Pressable onPress={pickImage} className="rounded-xl bg-blue-600 px-3 py-2 active:opacity-90">
-                    <Text className="text-[12px] font-semibold text-white">Upload</Text>
-                  </Pressable>
-                  <Pressable onPress={takePhoto} className="rounded-xl border border-slate-300 px-3 py-2 active:opacity-90">
-                    <Text className="text-[12px] font-semibold text-slate-900">Take Photo</Text>
-                  </Pressable>
-                </View>
-                {imgUri ? <Image source={{ uri: imgUri }} style={{ width: 56, height: 56, borderRadius: 8 }} /> : null}
-              </View>
-
-              {/* Submit */}
-              <Pressable
-                disabled={!stars || submitting}
-                onPress={submit}
-                className="mt-4 items-center justify-center rounded-xl py-3"
-                style={{ backgroundColor: !stars || submitting ? "#9CA3AF" : "#059669", opacity: !stars || submitting ? 0.7 : 1 }}
-              >
-                <Text className="text-[14px] font-semibold text-white">{submitting ? "Saving…" : "Submit rating"}</Text>
-              </Pressable>
-            </>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-}
 
 /* ----------------------------- Pay Now Modal ----------------------------- */
 function PayNowModal({

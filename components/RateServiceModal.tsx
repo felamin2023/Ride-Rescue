@@ -1,9 +1,13 @@
+// components/RateServiceModal.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, View, Text, TouchableOpacity, TextInput, Image, ActivityIndicator, Alert } from 'react-native';
+import {
+  Modal, View, Text, TouchableOpacity, TextInput, Image,
+  ActivityIndicator, Alert,
+} from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
-import { supabase } from '../utils/supabase'; 
+import { supabase } from '../utils/supabase';
 
 export type RatePayload = {
   transaction_id: string;
@@ -12,11 +16,11 @@ export type RatePayload = {
 };
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
   let bufferLength = base64.length * 0.75;
   const len = base64.length;
-  if (base64[len - 1] === "=") bufferLength--;
-  if (base64[len - 2] === "=") bufferLength--;
+  if (base64[len - 1] === '=') bufferLength--;
+  if (base64[len - 2] === '=') bufferLength--;
   const arraybuffer = new ArrayBuffer(bufferLength);
   const bytes = new Uint8Array(arraybuffer);
   let p = 0;
@@ -44,7 +48,6 @@ function guessExtAndMime(uri: string, fallbackType = 'image/jpeg') {
     fallbackType;
   return { ext: ext || 'jpg', type };
 }
-
 
 export default function RateServiceModal({
   visible,
@@ -77,6 +80,7 @@ export default function RateServiceModal({
         .eq('driver_user_id', me)
         .eq('transaction_id', payload.transaction_id)
         .maybeSingle();
+
       if (data) {
         setStars(data.stars ?? 0);
         setComment(data.comment ?? '');
@@ -91,50 +95,77 @@ export default function RateServiceModal({
     if (visible) loadExisting();
   }, [visible, payload?.transaction_id]);
 
+  async function requestMedia() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    return status === 'granted';
+  }
+  async function requestCamera() {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    return status === 'granted';
+  }
+
   const pickImage = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 });
+    const ok = await requestMedia();
+    if (!ok) return Alert.alert('Permission needed', 'Please allow gallery access.');
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+    });
     if (!res.canceled && res.assets?.length) setImageUri(res.assets[0].uri);
   };
 
   const takePhoto = async () => {
+    const ok = await requestCamera();
+    if (!ok) return Alert.alert('Permission needed', 'Please allow camera access.');
     const res = await ImagePicker.launchCameraAsync({ quality: 0.85 });
     if (!res.canceled && res.assets?.length) setImageUri(res.assets[0].uri);
   };
 
+  // Upload to public bucket 'ratings_photos'
   const uploadPhoto = async (localUri: string, userId: string, txId: string) => {
-  const bucket = supabase.storage.from('ratings_photos');
-  const { ext, type: contentType } = guessExtAndMime(localUri);
+    const bucket = supabase.storage.from('ratings_photos');
 
-  // Read with Expo FS → base64 → ArrayBuffer
-  const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
-  const arrayBuffer = base64ToArrayBuffer(base64.replace(/\r?\n/g, ''));
+    // 🔒 make sure the request carries a valid JWT; refresh if needed
+    const { data: sess } = await supabase.auth.getSession();
+    console.log('session?', !!sess?.session, sess?.session?.user?.id?.slice(0, 8));
+    if (!sess?.session) {
+      const { data: refreshed, error: refErr } = await supabase.auth.refreshSession();
+      if (refErr || !refreshed?.session) throw new Error('Not authenticated. Please sign in again.');
+    }
 
-  const path = `${userId}/${txId}/rating-${Date.now()}.${ext}`;
+    // 🩺 quick ping to confirm Storage sees us as authenticated
+    const ping = await supabase.storage.from('ratings_photos').list(userId, { limit: 1 });
+    if (ping.error) console.warn('ratings_photos list error →', ping.error.message);
 
-  // 1) Try direct upload
-  let uploadedOk = false;
-  let lastErr: any = null;
-  try {
-    const { error } = await bucket.upload(path, arrayBuffer, { upsert: true, contentType });
-    if (error) throw error;
-    uploadedOk = true;
-  } catch (err) {
-    lastErr = err;
-  }
+    const { ext, type: contentType } = guessExtAndMime(localUri);
+    const path = `${userId}/${txId}/rating-${Date.now()}.${ext}`;
 
-  // 2) Fallback: signed upload
-  if (!uploadedOk) {
-    const { data: sign, error: signErr } = await bucket.createSignedUploadUrl(path);
-    if (signErr) throw signErr;
-    const { error: up2Err } = await bucket.uploadToSignedUrl(path, sign.token, arrayBuffer, { upsert: true, contentType });
-    if (up2Err) throw up2Err;
-  }
+    // debug + guard (must match Storage RLS)
+    console.log('[ratings upload]', { userId, txId, path, bucket: 'ratings_photos' });
+    if (!path.startsWith(`${userId}/`)) {
+      throw new Error('Upload path must start with your auth uid');
+    }
 
-  // 3) Public URL (if bucket is public)
-  const { data } = bucket.getPublicUrl(path);
-  return data.publicUrl;
-};
+    // Read file → base64 → ArrayBuffer
+    const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
+    const arrayBuffer = base64ToArrayBuffer(base64.replace(/\r?\n/g, ''));
 
+    // 1) Direct upload (overwrite OK)
+    try {
+      const { error } = await bucket.upload(path, arrayBuffer, { contentType, upsert: true });
+      if (error) throw error;
+    } catch (_err) {
+      // 2) Fallback: signed upload (also upsert)
+      const { data: sign, error: signErr } = await bucket.createSignedUploadUrl(path, { upsert: true });
+      if (signErr) throw signErr;
+      const { error: up2Err } = await bucket.uploadToSignedUrl(path, sign.token, arrayBuffer, { contentType });
+      if (up2Err) throw up2Err;
+    }
+
+    // 3) Public URL
+    const { data } = bucket.getPublicUrl(path);
+    return data.publicUrl;
+  };
 
   const submit = async () => {
     if (!payload) return;
@@ -142,30 +173,44 @@ export default function RateServiceModal({
       Alert.alert('Pick a rating', 'Please select 1 to 5 stars.');
       return;
     }
+
     setSubmitting(true);
     try {
+      const { data: auth } = await supabase.auth.getUser();
+      const me = auth?.user?.id;
+      if (!me) throw new Error('You need to sign in again to rate.');
 
-            const { data: auth } = await supabase.auth.getUser();
-            const me = auth?.user?.id!;
+      // must be PAID to satisfy your ratings insert policy
+      const { data: paymentRow, error: paymentErr } = await supabase
+        .from('payment_transaction')
+        .select('transaction_id, emergency_id, shop_id, status, driver_user_id')
+        .eq('transaction_id', payload.transaction_id)
+        .eq('driver_user_id', me)
+        .maybeSingle();
+      if (paymentErr) throw paymentErr;
+      if (!paymentRow) throw new Error('We could not find that transaction anymore.');
+      const isPaid = (paymentRow.status || '').toLowerCase() === 'paid';
+      if (!isPaid) throw new Error('Only completed (paid) services can be rated.');
 
-            let photoUrl: string | null = imageUri;
-            if (imageUri && imageUri.startsWith('file:')) {
-            photoUrl = await uploadPhoto(imageUri, me, payload.transaction_id);
-            }
+      // Upload if a new local image exists; keep existing https:// as-is
+      let photoUrl: string | null = imageUri;
+      if (imageUri && imageUri.startsWith('file:')) {
+        photoUrl = await uploadPhoto(imageUri, me, paymentRow.transaction_id);
+      }
 
-
+      // Insert or update per (driver_user_id, transaction_id)
       const { data: existing } = await supabase
         .from('ratings')
         .select('id')
         .eq('driver_user_id', me)
-        .eq('transaction_id', payload.transaction_id)
+        .eq('transaction_id', paymentRow.transaction_id)
         .maybeSingle();
 
       if (!existing) {
         const { error } = await supabase.from('ratings').insert({
-          transaction_id: payload.transaction_id,
-          emergency_id: payload.emergency_id,
-          shop_id: payload.shop_id,
+          transaction_id: paymentRow.transaction_id,
+          emergency_id: paymentRow.emergency_id,
+          shop_id: paymentRow.shop_id,
           driver_user_id: me,
           stars,
           comment: comment?.trim() || null,
@@ -175,16 +220,21 @@ export default function RateServiceModal({
       } else {
         const { error } = await supabase
           .from('ratings')
-          .update({ stars, comment: comment?.trim() || null, photo_url: photoUrl, updated_at: new Date().toISOString() })
+          .update({
+            stars,
+            comment: comment?.trim() || null,
+            photo_url: photoUrl,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', existing.id);
         if (error) throw error;
       }
 
-      // Notify shop owner
+      // Optional: notify shop owner
       const { data: shopRow } = await supabase
         .from('shop_details')
         .select('user_id')
-        .eq('shop_id', payload.shop_id)
+        .eq('shop_id', paymentRow.shop_id)
         .maybeSingle();
       if (shopRow?.user_id) {
         await supabase.from('notifications').insert({
@@ -193,11 +243,15 @@ export default function RateServiceModal({
           type: 'rating_posted',
           title: 'New rating received',
           body: `A driver left a ${stars}-star rating`,
-          data: { transaction_id: payload.transaction_id, emergency_id: payload.emergency_id, shop_id: payload.shop_id },
+          data: {
+            transaction_id: paymentRow.transaction_id,
+            emergency_id: paymentRow.emergency_id,
+            shop_id: paymentRow.shop_id,
+          },
         });
       }
 
-      onSaved?.(payload.transaction_id);
+      onSaved?.(paymentRow.transaction_id);
       onClose();
     } catch (e: any) {
       console.error(e);
@@ -215,14 +269,20 @@ export default function RateServiceModal({
           <Text style={{ fontSize: 18, fontWeight: '600', marginTop: 12 }}>Rate this service</Text>
 
           {loadingExisting ? (
-            <View style={{ paddingVertical: 24, alignItems: 'center' }}><ActivityIndicator /></View>
+            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+              <ActivityIndicator />
+            </View>
           ) : (
             <>
               {/* Stars */}
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                {[1,2,3,4,5].map((n) => (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                {[1, 2, 3, 4, 5].map((n) => (
                   <TouchableOpacity key={n} onPress={() => setStars(n)}>
-                    <Ionicons name={n <= stars ? 'star' : 'star-outline'} size={28} color={n <= stars ? '#f59e0b' : '#94A3B8'} />
+                    <Ionicons
+                      name={n <= stars ? 'star' : 'star-outline'}
+                      size={28}
+                      color={n <= stars ? '#f59e0b' : '#94A3B8'}
+                    />
                   </TouchableOpacity>
                 ))}
                 <Text style={{ marginLeft: 8, fontSize: 12, color: '#64748B' }}>{stars || 0}/5</Text>
@@ -250,15 +310,22 @@ export default function RateServiceModal({
                 {imageUri ? <Image source={{ uri: imageUri }} style={{ width: 56, height: 56, borderRadius: 8 }} /> : null}
               </View>
 
-              {/* Actions */}
-              <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
-                <TouchableOpacity onPress={onClose} style={{ flex: 1, borderWidth: 1, borderColor: '#D1D5DB', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}>
-                  <Text>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity disabled={!canSubmit || submitting} onPress={submit} style={{ flex: 1, backgroundColor: '#059669', paddingVertical: 12, borderRadius: 12, alignItems: 'center', opacity: (!canSubmit || submitting) ? 0.7 : 1 }}>
-                  <Text style={{ color: '#fff', fontWeight: '600' }}>{submitting ? 'Saving…' : 'Submit'}</Text>
-                </TouchableOpacity>
-              </View>
+              {/* Submit */}
+              <TouchableOpacity
+                disabled={!canSubmit || submitting}
+                onPress={submit}
+                style={{
+                  marginTop: 16,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  backgroundColor: !canSubmit || submitting ? '#9CA3AF' : '#2563EB',
+                  opacity: !canSubmit || submitting ? 0.7 : 1,
+                }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '600' }}>{submitting ? 'Saving…' : 'Submit rating'}</Text>
+              </TouchableOpacity>
             </>
           )}
         </View>

@@ -34,17 +34,14 @@ const cardShadow = Platform.select({
 
 /* ---------------------------------- Types --------------------------------- */
 type RatingRow = {
-  rating_id: string;
+  id: string;               // <- PRIMARY KEY in your table
   transaction_id: string;
   emergency_id: string;
-  service_id: string;
   shop_id: string;
   driver_user_id: string;
   stars: number;
-  tags: string[] | null;
   comment: string | null;
-  photo_urls: string[] | null; // array version
-  photo_url?: string | null;   // single value (fallback)
+  photo_url: string | null; // <- single photo column
   created_at: string;
   updated_at: string | null;
 };
@@ -54,14 +51,13 @@ type PlaceRow  = { place_id: string; name?: string | null; owner?: string | null
 type AppUserRow = { user_id: string; full_name?: string | null };
 
 type ReviewItem = {
-  id: string;                // rating_id
+  id: string;                // rating id
   shop_id: string;
   shopName: string;
   stars: number;
   dateISO: string;
-  tags: string[];
   comment?: string | null;
-  photos: string[];          // always public URLs
+  photos: string[];          // normalized to array for the viewer
 };
 
 /* --------------------------------- Utils ---------------------------------- */
@@ -78,10 +74,10 @@ const pickShopName = (s?: ShopRow | null, u?: AppUserRow | null, p?: PlaceRow | 
   s?.name?.trim() ||
   "Mechanic/Shop";
 
-// normalize photo paths to public URLs (supports full URLs or storage paths)
+// normalize a storage path to a public URL (no-op if already a URL)
 const toPublicUrl = (path: string): string => {
   if (!path) return "";
-  if (/^https?:\/\//i.test(path)) return path; // already URL
+  if (/^https?:\/\//i.test(path)) return path;
   const { data } = supabase.storage.from("review-attachments").getPublicUrl(path);
   return data.publicUrl || path;
 };
@@ -114,22 +110,19 @@ export default function Reviews() {
       const userId = auth?.user?.id;
       if (!userId) throw new Error("Please sign in.");
 
-      // 2) fetch MY ratings (policy ratings_select_own)
+      // 2) fetch MY ratings (one row per transaction per driver)
       const { data: rows, error } = await supabase
         .from("ratings")
         .select(
           [
-            "rating_id",
+            "id",
             "transaction_id",
             "emergency_id",
-            "service_id",
             "shop_id",
             "driver_user_id",
             "stars",
-            "tags",
             "comment",
-            "photo_urls",
-            "photo_url",           // <-- include single photo field if present
+            "photo_url",
             "created_at",
             "updated_at",
           ].join(",")
@@ -145,7 +138,7 @@ export default function Reviews() {
         return;
       }
 
-      // 3) resolve shop display names (robust)
+      // 3) resolve shop display names
       const shopIds = Array.from(new Set(list.map((r) => r.shop_id)));
 
       // places by place_id (when shop_id IS a place_id)
@@ -192,7 +185,7 @@ export default function Reviews() {
       const userById = new Map<string, AppUserRow>();
       (users ?? []).forEach((u) => userById.set(u.user_id, u));
 
-      // 4) map to view model (and normalize photo URLs)
+      // 4) map to view model (normalize single photo_url -> array)
       const mapped: ReviewItem[] = list.map((r) => {
         let title = "Mechanic/Shop";
 
@@ -214,19 +207,14 @@ export default function Reviews() {
           }
         }
 
-        // merge array photo_urls + single photo_url if present
-        const photosRawArr = Array.isArray(r.photo_urls) ? (r.photo_urls as string[]) : [];
-        const single = (r.photo_url || "").trim();
-        const merged = single ? [single, ...photosRawArr] : photosRawArr;
-        const photos = merged.map(toPublicUrl).filter(Boolean);
+        const photos = r.photo_url ? [toPublicUrl(r.photo_url)] : [];
 
         return {
-          id: r.rating_id,
+          id: r.id,
           shop_id: r.shop_id,
           shopName: title,
           stars: r.stars,
           dateISO: r.created_at,
-          tags: Array.isArray(r.tags) ? (r.tags as string[]) : [],
           comment: r.comment,
           photos,
         };
@@ -274,12 +262,6 @@ export default function Reviews() {
     </View>
   );
 
-  const Tag = ({ t }: { t: string }) => (
-    <View className="mr-1.5 mb-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-      <Text className="text-[11px] text-slate-700">{t}</Text>
-    </View>
-  );
-
   const PhotoStrip = ({ photos }: { photos: string[] }) => {
     if (!photos?.length) return null;
     return (
@@ -309,15 +291,6 @@ export default function Reviews() {
         <Ionicons name="calendar-outline" size={14} color={COLORS.sub} />
         <Text className="ml-1.5 text-[12px] text-slate-600">Reviewed {formatDate(it.dateISO)}</Text>
       </View>
-
-      {/* Tags */}
-      {it.tags?.length ? (
-        <View className="mt-2 flex-row flex-wrap">
-          {it.tags.map((t) => (
-            <Tag key={t} t={t} />
-          ))}
-        </View>
-      ) : null}
 
       {/* Comment */}
       {it.comment ? (

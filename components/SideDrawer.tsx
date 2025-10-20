@@ -105,23 +105,47 @@ export default function SideDrawer({
     }
   }, [open, opacity, translateX]);
 
-  const handleLogout = async () => {
-    try {
-      onClose(); // close drawer immediately
+const handleLogout = async () => {
+  try {
+    onClose(); // close drawer immediately
 
-      if (onLogout) {
-        await onLogout();
-      } else {
-        // Clear local session first (offline-safe), then revoke on server.
-        await supabase.auth.signOut({ scope: "local" }).catch(() => {});
-        await supabase.auth.signOut().catch(() => {});
+    // Get current user first
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user) {
+      // Update online status first - this is the most important part
+      const { error: updateError } = await supabase
+        .from("app_user")
+        .update({ 
+          is_online: false,
+        })
+        .eq("user_id", user.id);
+
+      if (updateError) {
+        console.error("Failed to update online status:", updateError);
       }
 
-      router.replace(postLogoutHref);
-    } catch (e: any) {
-      Alert.alert("Logout failed", e?.message ?? "Please try again.");
+      // Instead of trying to manage the channel directly, we'll rely on the database update
+      // The presence channel will automatically clean up when the auth session ends
     }
-  };
+
+    // Call custom logout handler if provided
+    if (onLogout) {
+      await onLogout();
+    } else {
+      // Default logout behavior - this will also disconnect any realtime channels
+      await supabase.auth.signOut();
+    }
+
+    // Navigate after everything is complete
+    router.replace(postLogoutHref);
+    
+  } catch (e: any) {
+    console.error("Logout error:", e);
+    Alert.alert("Logout failed", e?.message ?? "Please try again.");
+  }
+};
+
 
   return (
     <>

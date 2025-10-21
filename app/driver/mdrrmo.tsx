@@ -1,5 +1,5 @@
 // app/(driver)/MDRRMO.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   Linking,
   Modal,
   Platform,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -19,6 +21,7 @@ import { useRouter } from "expo-router";
 import LoadingScreen from "../../components/LoadingScreen";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
 import { supabase } from "../../utils/supabase";
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -65,7 +68,7 @@ type Facility = {
   address1: string;
   address2?: string;
   plusCode?: string;
-  avatar?: string;
+  avatar?: string; // provide a URL here to show a profile image
   lat?: number;
   lng?: number;
   distanceKm?: number;
@@ -406,12 +409,21 @@ export default function MDRRMOScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false); // global loader
+
   const [searchOpen, setSearchOpen] = useState(false);
 
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [nearest, setNearest] = useState<Facility | null>(null);
   const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
+
+  // 🔵 In-app map state (same pattern as hospital.tsx)
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [destName, setDestName] = useState<string>("");
+  const mapRef = useRef<any>(null);
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
@@ -445,6 +457,7 @@ export default function MDRRMOScreen() {
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
           maps_link: p.maps_link ?? undefined,
           phones: p.phones ?? undefined,
+          // avatar: (p as any).photo_url ?? undefined, // ← enable if you add a photo_url column
         };
       });
 
@@ -515,16 +528,43 @@ export default function MDRRMOScreen() {
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
   }, [filters, query, facilities]);
 
+  // 🔵 Open in-app satellite map (no external apps)
   const openMaps = async (s: Facility) => {
-    setBusy(true);
     try {
-      if (s.maps_link) {
-        await Linking.openURL(s.maps_link);
-      } else if (s.lat && s.lng) {
-        await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`);
-      } else if (s.address1) {
-        await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`);
+      if (typeof s.lat !== "number" || typeof s.lng !== "number") {
+        Alert.alert("Location Unavailable", "This facility doesn't have coordinates yet.");
+        return;
       }
+
+      setBusy(true);         // global modal
+      setMapBusy(true);      // in-map overlay
+
+      setDestCoords({ lat: s.lat, lon: s.lng });
+      setDestName(s.name);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please allow location access to view directions.");
+        setMapBusy(false);
+        setBusy(false);
+        return;
+      }
+
+      let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+      if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!pos) {
+        Alert.alert("Error", "Couldn't get your current location.");
+        setMapBusy(false);
+        setBusy(false);
+        return;
+      }
+
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      setMapVisible(true); // modal shows; onMapReady will clear mapBusy
+    } catch (e) {
+      console.warn("openMaps error:", e);
+      Alert.alert("Error", "Could not open map.");
+      setMapBusy(false);
     } finally {
       setBusy(false);
     }
@@ -692,8 +732,70 @@ export default function MDRRMOScreen() {
         onCall={callNumber}
       />
 
-      {/* Loading overlay */}
-      <LoadingScreen visible={busy} message="Please wait…" variant="dots" />
+      {/* 🔵 In-app Map Modal (satellite) */}
+      <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {driverCoords && destCoords ? (
+              <>
+                <MapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat,
+                    longitude: driverCoords.lon,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    if (mapRef.current && driverCoords && destCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: destCoords.lat, longitude: destCoords.lon },
+                        ],
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+                      );
+                    }
+                    setMapBusy(false);
+                  }}
+                >
+                  <Marker coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }} title="You" pinColor="red" />
+                  <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lon }} title={destName || "Destination"} pinColor="#2563EB" />
+                  <Polyline
+                    coordinates={[
+                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                      { latitude: destCoords.lat, longitude: destCoords.lon },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </MapView>
+
+                {mapBusy && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                <Pressable onPress={() => setMapVisible(false)} className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2">
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Global Loading Modal */}
+      <LoadingScreen visible={busy} message="Please wait…" variant="spinner" />
     </View>
   );
 }

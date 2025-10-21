@@ -751,24 +751,27 @@ function DetailSheet({
             </View>
 
             {showLocation ? (
-              <View className="mt-3">
-                {item.lat && item.lng ? (
-                  <View className="rounded-2xl overflow-hidden border border-slate-200">
+              <Modal visible animationType="slide">
+                <SafeAreaView className="flex-1 bg-black">
+                  <View className="flex-1">
                     <MapView
                       ref={mapRef}
-                      style={{ width: "100%", height: 220 }}
+                      style={{ flex: 1 }}
                       mapType="satellite"
                       initialRegion={{
-                        latitude: item.lat,
-                        longitude: item.lng,
-                        latitudeDelta: 0.01,
-                        longitudeDelta: 0.01,
-                      }}
+                      latitude: item.lat ?? 0,
+                      longitude: item.lng ?? 0,
+                      latitudeDelta: 0.01,
+                      longitudeDelta: 0.01,
+                    }}
                     >
                       <Marker
-                        coordinate={{ latitude: item.lat, longitude: item.lng }}
-                        title="Emergency location"
+                        coordinate={{
+                          latitude: item.lat ?? 0,
+                          longitude: item.lng ?? 0,
+                        }}
                       />
+
                       {myCoords ? (
                         <>
                           <Marker
@@ -782,42 +785,35 @@ function DetailSheet({
                           <Polyline
                             coordinates={[
                               {
-                                latitude: myCoords.lat,
-                                longitude: myCoords.lng,
+                                latitude: myCoords?.lat ?? 0,
+                                longitude: myCoords?.lng ?? 0,
                               },
-                              { latitude: item.lat, longitude: item.lng },
+                              {
+                                latitude: item.lat ?? 0,
+                                longitude: item.lng ?? 0,
+                              },
                             ]}
+
                             strokeWidth={4}
+                            strokeColor="#2563EB"
                           />
                         </>
                       ) : null}
                     </MapView>
 
-                    <View className="px-3 py-2 bg-white border-t border-slate-200">
-                      <Text className="text-[13px] text-slate-700">
-                        {typeof distanceNow === "number"
-                          ? `${distanceNow.toFixed(2)} km away`
-                          : "Distance unavailable"}
+                    <Pressable
+                      onPress={() => setShowLocation(false)}
+                      className="absolute top-4 right-4 bg-white/90 rounded-full px-3 py-1.5"
+                    >
+                      <Text className="text-[14px] font-semibold text-slate-900">
+                        Close
                       </Text>
-                      {item.landmark ? (
-                        <Text
-                          className="text-[12px] text-slate-500"
-                          numberOfLines={2}
-                        >
-                          {item.landmark}
-                        </Text>
-                      ) : null}
-                    </View>
+                    </Pressable>
                   </View>
-                ) : (
-                  <View className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <Text className="text-[13px] text-slate-700">
-                      Location not available for this request.
-                    </Text>
-                  </View>
-                )}
-              </View>
+                </SafeAreaView>
+              </Modal>
             ) : null}
+
 
             <Pressable
               disabled={isDisabled}

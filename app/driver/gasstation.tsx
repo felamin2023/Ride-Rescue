@@ -1,5 +1,5 @@
 // app/(driver)/gasstation.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,9 +7,10 @@ import {
   FlatList,
   Pressable,
   Image as RNImage,
-  Linking,
   Modal,
   Platform,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -17,6 +18,8 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "../../utils/supabase";
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
+import LoadingScreen from "../../components/LoadingScreen";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -304,16 +307,58 @@ export default function GasStationScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
-
   const [searchOpen, setSearchOpen] = useState(false);
 
-  // open maps (prefer DB maps_link if present)
-  const openMaps = (s: Shop) => {
-    if (s.maps_link) { Linking.openURL(s.maps_link).catch(() => {}); return; }
-    if (s.lat && s.lng) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
-    } else if (s.address1) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
+  // 🔵 In-app map modal state
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [shopCoords, setShopCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [mapShopName, setMapShopName] = useState<string>("");
+  const mapRef = useRef<any>(null);
+
+  // 🔵 Global loading modal
+  const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
+
+  // open in-app satellite map
+  const openMaps = async (s: Shop) => {
+    try {
+      if (typeof s.lat !== "number" || typeof s.lng !== "number") {
+        Alert.alert("Location Unavailable", "This gas station doesn't have coordinates yet.");
+        return;
+      }
+
+      setLoading({ visible: true, message: "Loading map…" });
+      setMapBusy(true);
+
+      setShopCoords({ lat: s.lat, lon: s.lng });
+      setMapShopName(s.name);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please allow location access to view directions.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+      if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!pos) {
+        Alert.alert("Error", "Couldn't get your current location.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      setMapVisible(true);
+    } catch (e) {
+      console.warn("openMaps error:", e);
+      Alert.alert("Error", "Could not open map.");
+      setMapBusy(false);
+    } finally {
+      setLoading({ visible: false });
     }
   };
 
@@ -350,8 +395,8 @@ export default function GasStationScreen() {
           rating: 0,
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
-          maps_link: p.maps_link ?? undefined,
-          avatar: p.profile_pic ?? undefined, // 👈 map image
+          maps_link: p.maps_link ?? undefined, // kept for reference (not used to open external app)
+          avatar: p.profile_pic ?? undefined,
         };
       });
 
@@ -521,6 +566,82 @@ export default function GasStationScreen() {
       {/* Bottom sheet + Details */}
       <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} />
       <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} />
+
+      {/* 🔵 In-app Map Modal (satellite) */}
+      <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {driverCoords && shopCoords ? (
+              <>
+                <MapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat,
+                    longitude: driverCoords.lon,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    if (mapRef.current && driverCoords && shopCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: shopCoords.lat, longitude: shopCoords.lon },
+                        ],
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+                      );
+                    }
+                    setMapBusy(false);
+                  }}
+                >
+                  <Marker
+                    coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }}
+                    title="You"
+                    pinColor="red"
+                  />
+                  <Marker
+                    coordinate={{ latitude: shopCoords.lat, longitude: shopCoords.lon }}
+                    title={mapShopName || "Gas Station"}
+                    pinColor="#2563EB"
+                  />
+                  <Polyline
+                    coordinates={[
+                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                      { latitude: shopCoords.lat, longitude: shopCoords.lon },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </MapView>
+
+                {mapBusy && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                <Pressable
+                  onPress={() => setMapVisible(false)}
+                  className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2"
+                >
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* 🔵 Global Loading Modal */}
+      <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />
     </View>
   );
 }

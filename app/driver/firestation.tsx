@@ -1,5 +1,5 @@
 // app/(driver)/firestation.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   Linking,
   Modal,
   Platform,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -18,6 +20,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
 import { supabase } from "../../utils/supabase";
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
+import LoadingScreen from "../../components/LoadingScreen";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -45,27 +49,11 @@ const buttonShadow = Platform.select({
   android: { elevation: 1 },
 });
 
-/* ---------------------------------- Types ---------------------------------- */
-type PlaceRow = {
-  place_id: string;
-  name: string | null;
-  category:
-    | "fire"
-    | "fire_station"
-    | "hospital"
-    | "police"
-    | "gas_station"
-    | "repair_shop"
-    | "vulcanizing"
-    | (string & {});
-  address: string | null;
-  plus_code: string | null;
-  latitude: string | number | null;
-  longitude: string | number | null;
-  maps_link: string | null;
-  phones: string[] | null; // array from DB
-};
+/* -------------------------- Avatar placeholder -------------------------- */
+const FIRE_PLACEHOLDER =
+  "https://static.vecteezy.com/system/resources/previews/049/969/895/large_2x/firefighter-design-character-illustration-in-circle-logo-free-vector.jpg";
 
+/* ---------------------------------- Types ---------------------------------- */
 type Facility = {
   id: string;
   name: string;
@@ -84,17 +72,10 @@ type Facility = {
 const FILTERS: FilterItem[] = [{ key: "fire", icon: "flame-outline", label: "Fire Station" }];
 
 /* ----------------------- Reusable: Phone chips ---------------------- */
-function PhoneChips({
-  phones,
-  onCall,
-}: {
-  phones?: string[];
-  onCall: (phone: string) => void;
-}) {
+function PhoneChips({ phones, onCall }: { phones?: string[]; onCall: (phone: string) => void }) {
   if (!phones || phones.length === 0) {
     return <Text className="text-[12px] text-slate-500">No contact numbers available</Text>;
   }
-
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 8 }}>
       {phones.map((p, idx) => (
@@ -123,7 +104,7 @@ function PhoneChips({
   );
 }
 
-/* ----------------------- Bottom Sheet ---------------------- */
+/* ----------------------- Buttons ---------------------- */
 function PrimaryButton({
   label,
   onPress,
@@ -161,6 +142,7 @@ function PrimaryButton({
   );
 }
 
+/* ----------------------- Bottom Sheet ---------------------- */
 function QuickActions({
   visible,
   onClose,
@@ -203,13 +185,7 @@ function QuickActions({
 
           <View className="flex-row items-center gap-3 pb-3">
             <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-              {facility.avatar ? (
-                <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
-              ) : (
-                <View className="h-full w-full items-center justify-center">
-                  <Ionicons name="flame-outline" size={20} color="#475569" />
-                </View>
-              )}
+              <RNImage source={{ uri: facility.avatar || FIRE_PLACEHOLDER }} style={{ width: "100%", height: "100%" }} />
             </View>
             <View className="flex-1">
               <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
@@ -271,13 +247,7 @@ function DetailsModal({
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
             <View className="flex-row items-start gap-3">
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-                {facility.avatar ? (
-                  <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
-                ) : (
-                  <View className="h-full w-full items-center justify-center">
-                    <Ionicons name="flame-outline" size={22} color="#475569" />
-                  </View>
-                )}
+                <RNImage source={{ uri: facility.avatar || FIRE_PLACEHOLDER }} style={{ width: "100%", height: "100%" }} />
               </View>
 
               <View className="flex-1">
@@ -347,13 +317,7 @@ function FacilityCard({
     >
       <View className="flex-row items-start gap-3">
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-          {facility.avatar ? (
-            <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-          ) : (
-            <View className="h-full w-full items-center justify-center">
-              <Ionicons name="flame-outline" size={22} color="#475569" />
-            </View>
-          )}
+          <RNImage source={{ uri: facility.avatar || FIRE_PLACEHOLDER }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         </View>
 
         <View className="flex-1">
@@ -416,19 +380,60 @@ export default function FireStationScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
 
-  const [searchOpen, setSearchOpen] = useState(false); // <-- control like hospital.tsx
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // 🔵 In-app map state
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [destName, setDestName] = useState<string>("");
+  const mapRef = useRef<any>(null);
+
+  // 🔵 Global loading modal
+  const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
 
   const toggleFilter = (k: string) => setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
-  const openMaps = (s: Facility) => {
-    if (s.maps_link) {
-      Linking.openURL(s.maps_link).catch(() => {});
-      return;
-    }
-    if (s.lat && s.lng) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
-    } else if (s.address1) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
+  // 🔵 Open in-app map (no external apps)
+  const openMaps = async (s: Facility) => {
+    try {
+      if (typeof s.lat !== "number" || typeof s.lng !== "number") {
+        Alert.alert("Location Unavailable", "This fire station doesn't have coordinates yet.");
+        return;
+      }
+
+      setLoading({ visible: true, message: "Loading map…" });
+      setMapBusy(true);
+
+      setDestCoords({ lat: s.lat, lon: s.lng });
+      setDestName(s.name);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please allow location access to view directions.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+      if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!pos) {
+        Alert.alert("Error", "Couldn't get your current location.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      setMapVisible(true); // modal shows; onMapReady will clear mapBusy
+    } catch (e) {
+      console.warn("openMaps error:", e);
+      Alert.alert("Error", "Could not open map.");
+      setMapBusy(false);
+    } finally {
+      setLoading({ visible: false });
     }
   };
 
@@ -450,13 +455,13 @@ export default function FireStationScreen() {
   };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch fire stations
+  // ✅ fetch fire stations (no hard-coded photo_url column)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("places")
-        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones")
+        .select("*") // ← pull whatever columns exist safely
         .in("category", ["fire", "fire_station"])
         .order("name", { ascending: true });
 
@@ -466,19 +471,21 @@ export default function FireStationScreen() {
         return;
       }
 
-      const mapped: Facility[] = (data ?? []).map((p: PlaceRow) => {
+      const mapped: Facility[] = (data ?? []).map((p: any) => {
         const lat = p.latitude != null ? Number(p.latitude) : undefined;
         const lng = p.longitude != null ? Number(p.longitude) : undefined;
         return {
           id: p.place_id,
           name: p.name ?? "Unnamed Fire Station",
-          category: "fire", // normalize
+          category: "fire",
           address1: p.address ?? "",
           plusCode: p.plus_code ?? undefined,
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
           maps_link: p.maps_link ?? undefined,
-          phones: p.phones ?? undefined,
+          phones: Array.isArray(p.phones) ? p.phones : undefined,
+          // Try multiple possible keys for your photo column; all optional
+          avatar: p.photo_url || p.avatar_url || p.image_url || p.avatar || undefined,
         };
       });
 
@@ -710,6 +717,71 @@ export default function FireStationScreen() {
         onOpenMaps={openMaps}
         onCall={callNumber}
       />
+
+      {/* 🔵 In-app Map Modal (satellite) */}
+      <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {driverCoords && destCoords ? (
+              <>
+                <MapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat,
+                    longitude: driverCoords.lon,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    if (mapRef.current && driverCoords && destCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: destCoords.lat, longitude: destCoords.lon },
+                        ],
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+                      );
+                    }
+                    setMapBusy(false);
+                  }}
+                >
+                  <Marker coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }} title="You" pinColor="red" />
+                  <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lon }} title={destName || "Fire Station"} pinColor="#2563EB" />
+                  <Polyline
+                    coordinates={[
+                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                      { latitude: destCoords.lat, longitude: destCoords.lon },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </MapView>
+
+                {mapBusy && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                <Pressable onPress={() => setMapVisible(false)} className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2">
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* 🔵 Global Loading Modal */}
+      <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />
     </View>
   );
 }

@@ -11,8 +11,7 @@ import {
   Animated,
   Easing,
   Modal,
-  ScrollView,
-  Linking,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,6 +21,7 @@ import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
 import PaymentModal from "../../components/PaymentModal";
 import CancelRepairModal from "../../components/CancelRepairModal";
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
 /* ----------------------------- Helpers ----------------------------- */
 const DEBUG_PRINTS = false;
@@ -235,6 +235,13 @@ export default function ShopAcceptedRequests() {
 
   const toggleCard = (emId: string) => setOpenCards((m) => ({ ...m, [emId]: !m[emId] }));
 
+  // 🔵 In-app Locate modal state (shop ↔ driver)
+  const [showLocateMap, setShowLocateMap] = useState(false);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mechanicCoords, setMechanicCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const mapRef = React.useRef<any>(null);
+
   /* ----------------------------- Data fetchers ----------------------------- */
   const fetchAll = useCallback(async (withSpinner: boolean) => {
     try {
@@ -334,7 +341,7 @@ export default function ShopAcceptedRequests() {
             driverAvatar,
             vehicleType: em.vehicle_type,
             info: em.breakdown_cause || "—",
-            lat: em.latitude,
+            lat: em.latitude, // driver's breakdown location
             lon: em.longitude,
             landmark,
             location: `(${em.latitude.toFixed(5)}, ${em.longitude.toFixed(5)})`,
@@ -388,23 +395,8 @@ export default function ShopAcceptedRequests() {
     [shopId]
   );
 
-  /* ----------------------------- Message & Location Functions ----------------------------- */
-  const openDirections = (lat: number, lon: number) => {
-    const scheme = Platform.select({ ios: "maps:0,0?q=", android: "geo:0,0?q=" });
-    const latLng = `${lat},${lon}`;
-    const url = Platform.select({
-      ios: `${scheme}${latLng}`,
-      android: `${scheme}${latLng}`,
-    });
-
-    if (url) {
-      Linking.openURL(url).catch(() => {
-        Alert.alert("Error", "Unable to open maps app");
-      });
-    }
-  };
-
-  // Enhanced message functionality
+  /* ----------------------------- Message & In-App Location ----------------------------- */
+  // Chat
   const messageDriver = async (emergencyId: string, driverUserId: string | null) => {
     try {
       setLoading({ visible: true, message: "Opening chat..." });
@@ -414,49 +406,85 @@ export default function ShopAcceptedRequests() {
         return;
       }
 
-      // Check if conversation already exists for this emergency
-      const { data: existingConvs, error: convError } = await supabase
+      // Check if conversation exists for this emergency
+      const { data: existingConvs } = await supabase
         .from("conversations")
         .select("id")
         .eq("emergency_id", emergencyId)
         .order("updated_at", { ascending: false });
 
-      if (convError) {
-        console.error("Error checking conversations:", convError);
-      }
-
       let conversationId;
 
-      // Use the most recent existing conversation if found
       if (existingConvs && existingConvs.length > 0) {
         conversationId = existingConvs[0].id;
-        console.log("Found existing emergency conversation:", conversationId);
       } else {
-        // Create new conversation for this emergency
         const { data: newConv, error } = await supabase
           .from("conversations")
           .insert({
             emergency_id: emergencyId,
             customer_id: driverUserId, // driver is the customer in emergency context
-            driver_id: userId, // shop is the driver in emergency context
+            driver_id: userId,         // shop is the driver
           })
           .select()
           .single();
 
         if (error) {
-          console.error("Error creating conversation:", error);
           Alert.alert("Error", "Could not start conversation. Please try again.");
           return;
         }
         conversationId = newConv.id;
-        console.log("Created new emergency conversation:", conversationId);
       }
 
-      // Navigate to the chat screen
       router.push(`/driver/chat/${conversationId}`);
     } catch (error) {
-      console.error("Error in messageDriver:", error);
       Alert.alert("Error", "Could not start conversation. Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  };
+
+  // In-app satellite map that focuses both: Shop (mechanic) & Driver
+  const openLocateMap = async (serviceId: string, driverLat: number, driverLon: number) => {
+    try {
+      setMapLoading(true);
+      setLoading({ visible: true, message: "Loading map…" });
+
+      // A) Driver coords come from card (emergency row)
+      setDriverCoords({ lat: driverLat, lon: driverLon });
+
+      // B) Mechanic (shop) coords: prefer stored SR coords; fallback to current device GPS
+      let mechLat: number | null = null;
+      let mechLon: number | null = null;
+
+      const { data: sr } = await supabase
+        .from("service_requests")
+        .select("latitude, longitude")
+        .eq("service_id", serviceId)
+        .maybeSingle();
+
+      if (sr?.latitude && sr?.longitude) {
+        mechLat = sr.latitude;
+        mechLon = sr.longitude;
+      } else {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const pos = await Location.getCurrentPositionAsync({});
+          mechLat = pos.coords.latitude;
+          mechLon = pos.coords.longitude;
+        }
+      }
+
+      if (mechLat == null || mechLon == null) {
+        Alert.alert("Error", "Mechanic location unavailable.");
+        setMapLoading(false);
+        return;
+      }
+
+      setMechanicCoords({ lat: mechLat, lon: mechLon });
+      setShowLocateMap(true);
+    } catch (err) {
+      Alert.alert("Error", "Could not open map view.");
+      setMapLoading(false);
     } finally {
       setLoading({ visible: false });
     }
@@ -476,7 +504,6 @@ export default function ShopAcceptedRequests() {
         total_amount: Number(tx.total_amount) || 0,
       });
     } else {
-      // fallback if no tx yet (rare)
       setOriginalTx({ distance_fee: (distanceKm || 0) * 15, labor_cost: 0, total_amount: (distanceKm || 0) * 15 });
     }
     setShowPaymentModal(true);
@@ -504,7 +531,6 @@ export default function ShopAcceptedRequests() {
 
       const now = new Date().toISOString();
 
-      // Base distance = tx.distance_fee; extras from modal; recompute total
       const baseDistance = Number(originalTx?.distance_fee ?? 0);
       const extraTotal = (invoice.finalServices || []).reduce((sum: number, s: any) => {
         const qty = Number(s?.qty ?? s?.quantity ?? 1) || 1;
@@ -527,7 +553,6 @@ export default function ShopAcceptedRequests() {
         .eq("transaction_id", tx.transaction_id);
       if (txErr) throw txErr;
 
-      // Move card to Completed/Transactions screen
       setActionLocked((prev) => {
         if (!prev[invoice.offerId]) return prev;
         const next = { ...prev };
@@ -580,7 +605,6 @@ export default function ShopAcceptedRequests() {
         const baseLabor = Number(tx.labor_cost || 0);
 
         if (isDiagnoseOnly) {
-          // OPTION 2: No fee at all; keep it visible in Completed/Transactions with no proof & no "Paid" badge
           const { error: txErr } = await supabase
             .from("payment_transaction")
             .update({
@@ -588,26 +612,23 @@ export default function ShopAcceptedRequests() {
               labor_cost: 0,
               extra_total: 0,
               total_amount: 0,
-              status: "pending",           // not "paid" → no Paid chip; proof not required
+              status: "pending",
               cancel_option: cancelData.cancelOption,
               cancel_reason: cancelData.reason || null,
-              paid_at: null,               // ensure it's not marked paid
+              paid_at: null,
               updated_at: now,
             })
             .eq("transaction_id", tx.transaction_id);
           if (txErr) throw txErr;
         } else {
-          // OPTION 1: Distance fee + 50% of labor
           const halfLabor = Number((baseLabor * 0.5).toFixed(2));
           const computed = Number((baseDistance + halfLabor).toFixed(2));
 
           const { error: txErr } = await supabase
             .from("payment_transaction")
             .update({
-              // reflect the halved labor in the breakdown, not just in total
               labor_cost: halfLabor,
-              // keep the recorded distance fee as-is
-              extra_total: 0,               // extras are not charged on cancel
+              extra_total: 0,
               total_amount: computed,
               status: "to_pay",
               cancel_option: cancelData.cancelOption,
@@ -620,7 +641,6 @@ export default function ShopAcceptedRequests() {
         }
       }
 
-      // Local UI
       setActionLocked((prev) => {
         if (!prev[cancelData.offerId]) return prev;
         const next = { ...prev };
@@ -679,7 +699,6 @@ export default function ShopAcceptedRequests() {
       })
       .subscribe();
 
-    // tx updates (e.g., when driver pays or proof is uploaded)
     const chTX = supabase
       .channel("tx-shop")
       .on("postgres_changes", { event: "*", schema: "public", table: "payment_transaction" }, (payload) => {
@@ -747,7 +766,7 @@ export default function ShopAcceptedRequests() {
             <Text className="text-[13px] text-slate-500 mt-0.5">Emergency Request • {item.vehicleType}</Text>
           </View>
 
-          {/* Quick total pill */}
+        {/* Quick total pill */}
           {hasCharges && (
             <View className="ml-3 rounded-full bg-slate-100 border border-slate-300 px-3 py-1">
               <Text className="text-[12px] font-semibold text-slate-900">{peso(item.charges!.totalAmount)}</Text>
@@ -839,7 +858,7 @@ export default function ShopAcceptedRequests() {
           <>
             <View className="h-px bg-slate-200 my-4" />
 
-            {/* Primary actions - Always visible when expanded */}
+            {/* Primary actions */}
             <View className="flex-row gap-3">
               {/* Message Button */}
               <Pressable
@@ -852,9 +871,9 @@ export default function ShopAcceptedRequests() {
                 </View>
               </Pressable>
 
-              {/* Location Button */}
-              <Pressable 
-                onPress={() => openDirections(item.lat, item.lon)} 
+              {/* Location Button → in-app map */}
+              <Pressable
+                onPress={() => openLocateMap(item.serviceId, item.lat, item.lon)}
                 className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
               >
                 <View className="flex-row items-center gap-1.5">
@@ -908,6 +927,79 @@ export default function ShopAcceptedRequests() {
           </View>
         }
       />
+
+      {/* 🔵 In-App Locate Map Modal (satellite, fits both users, with loader) */}
+      <Modal visible={showLocateMap} animationType="slide">
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {mechanicCoords && driverCoords ? (
+              <>
+                <MapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat,
+                    longitude: driverCoords.lon,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    if (mapRef.current && mechanicCoords && driverCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
+                        ],
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+                      );
+                    }
+                    setMapLoading(false);
+                  }}
+                >
+                  <Marker
+                    coordinate={{ latitude: mechanicCoords.lat, longitude: mechanicCoords.lon }}
+                    title="You (Shop)"
+                    pinColor="#2563EB"
+                  />
+                  <Marker
+                    coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }}
+                    title="Driver"
+                    pinColor="red"
+                  />
+                  <Polyline
+                    coordinates={[
+                      { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
+                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </MapView>
+
+                {mapLoading && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                <Pressable
+                  onPress={() => setShowLocateMap(false)}
+                  className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2"
+                >
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
 
       {/* Payment Modal */}
       <PaymentModal

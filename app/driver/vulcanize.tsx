@@ -1,5 +1,5 @@
 // app/(driver)/vulcanize.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Modal,
   Platform,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -19,6 +20,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
 import { supabase } from "../../utils/supabase";
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
+import LoadingScreen from "../../components/LoadingScreen";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -61,18 +64,18 @@ type PlaceRow = {
     | (string & {});
   address: string | null;
   plus_code: string | null;
-  latitude: string | number | null;   // numeric comes as string
-  longitude: string | number | null;  // numeric comes as string
+  latitude: string | number | null;
+  longitude: string | number | null;
   maps_link: string | null;
-  phones?: string[] | null;           // text[] in DB
-  service_for: string | null;         // "motorcycle" | "car" | "all_type"
-  owner?: string | null;              // ✅ add this (FK to app_user or similar)
+  phones?: string[] | null;
+  service_for: string | null;
+  owner?: string | null;
 };
 
 type Shop = {
   id: string;
   name: string;
-  category: "vulcanizing";
+  category: "vulcanizing" | "vulcanizing_repair";
   address1: string;
   plusCode?: string;
   avatar?: string;
@@ -82,8 +85,14 @@ type Shop = {
   distanceKm?: number;
   phones?: string[];
   serviceFor?: "motorcycle" | "car" | "all_type" | (string & {});
-  ownerId?: string | null;            // ✅ track if shop has owner
+  ownerId?: string | null;
 };
+
+
+const prettyCategory = (c: Shop["category"]) =>
+  c ? c.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" & ") : "";
+
+
 
 /* --------------------------------- Small UI -------------------------------- */
 const FILTERS: FilterItem[] = [
@@ -155,7 +164,7 @@ function QuickActions({
 }: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   const insets = useSafeAreaInsets();
   if (!shop) return null;
-  const canMessage = !!shop.ownerId; // ✅ only if there's an owner
+  const canMessage = !!shop.ownerId;
 
   return (
     <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
@@ -259,7 +268,7 @@ function DetailsModal({
   visible, shop, onClose, onOpenMaps, onMessage,
 }: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   if (!shop) return null;
-  const canMessage = !!shop.ownerId; // ✅
+  const canMessage = !!shop.ownerId;
 
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
@@ -281,9 +290,11 @@ function DetailsModal({
                   <Text className="text-[18px] text-slate-900" numberOfLines={2}>
                     {shop.name}
                   </Text>
-                  <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start">
-                    <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{shop.category}</Text>
-                  </View>
+                 <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start border border-blue-200">
+                  <Text className="text-[10px] font-bold text-[#1E3A8A]">
+                    {prettyCategory(shop.category)}
+                  </Text>
+                </View>
                 </View>
               </View>
             </View>
@@ -336,7 +347,7 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
 function ShopCard({
   shop, onLocation, onMessage, onPressCard, isNearest = false,
 }: { shop: Shop; onLocation: (s: Shop) => void; onMessage: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
-  const canMessage = !!shop.ownerId; // ✅
+  const canMessage = !!shop.ownerId;
   return (
     <Pressable
       onPress={() => onPressCard(shop)}
@@ -368,9 +379,13 @@ function ShopCard({
                   </Text>
                 </View>
               )}
-              <View className="rounded-full bg-[#F1F5FF] px-2 py-[2px]">
-                <Text className="text-[10px] font-semibold text-[#1E3A8A] capitalize">{shop.category}</Text>
-              </View>
+
+              <View className="px-2 py-1 rounded-full bg-blue-50 border border-blue-200">
+              <Text className="text-[10px] font-semibold text-[#1E3A8A]">
+                {prettyCategory(shop.category)}
+              </Text>
+            </View>
+
 
               {shop.serviceFor ? (
                 <View
@@ -423,18 +438,28 @@ function ShopCard({
 export default function VulcanizeScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  // Single-select filter for service_for; [] means "no filter"
   const [filters, setFilters] = useState<string[]>([]);
 
   const [shops, setShops] = useState<Shop[]>([]);
   const [nearest, setNearest] = useState<Shop | null>(null);
   const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
-  const [userId, setUserId] = useState<string | null>(null); // ✅ Add user ID state
+  const [userId, setUserId] = useState<string | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  // 🔵 In-app map modal state
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [shopCoords, setShopCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [mapShopName, setMapShopName] = useState<string>("");
+  const mapRef = useRef<any>(null);
+
+  // 🔵 Global loading modal (like requeststatus.tsx)
+  const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
 
   // Get current user
   useEffect(() => {
@@ -446,114 +471,109 @@ export default function VulcanizeScreen() {
   }, []);
 
   const toggleFilter = (k: string) => {
-    setFilters((prev) => (prev[0] === k ? [] : [k])); // single-select: tap again to clear
+    setFilters((prev) => (prev[0] === k ? [] : [k])); // single-select
   };
 
-  const openMaps = (s: Shop) => {
-    const addr = s.plusCode || s.address1 || s.name;
-    if (s.lat && s.lng) {
-      const q = `${s.lat},${s.lng}`;
-      const android = `geo:${q}?q=${q}`;
-      const universal = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
-      Linking.canOpenURL(android)
-        .then((ok) => Linking.openURL(ok ? android : universal))
-        .catch(() => {});
-    } else if (addr) {
-      const universal = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
-      Linking.openURL(universal).catch(() => {});
+  /* 🔵 Open in-app satellite map (no external Maps app) */
+  const openMaps = async (s: Shop) => {
+    try {
+      if (typeof s.lat !== "number" || typeof s.lng !== "number") {
+        Alert.alert("Location Unavailable", "This shop doesn't have coordinates yet.");
+        return;
+      }
+
+      setLoading({ visible: true, message: "Loading map…" }); // GLOBAL modal
+      setMapBusy(true);                                      // in-map overlay
+
+      setShopCoords({ lat: s.lat, lon: s.lng });
+      setMapShopName(s.name);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please allow location access to view directions.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+      if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!pos) {
+        Alert.alert("Error", "Couldn't get your current location.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+
+      // Show modal; when the MapView fires onMapReady it will clear mapBusy
+      setMapVisible(true);
+    } catch (e) {
+      console.warn("openMaps error:", e);
+      Alert.alert("Error", "Could not open map.");
+      setMapBusy(false);
+    } finally {
+      // hide global loader once modal is up
+      setLoading({ visible: false });
     }
   };
 
-  // ✅ Updated goChat function to create non-emergency conversations
-// ✅ Updated goChat function to create non-emergency conversations
-// ✅ Updated goChat function to properly reuse existing conversations
-// ✅ Simplified version that checks all conversation types
-// ✅ UPDATED goChat function to check for ALL existing conversations (emergency and non-emergency)
-const goChat = async (shop: Shop) => {
-  if (!userId) {
-    Alert.alert("Not Logged In", "You need to be logged in to message a shop.");
-    return;
-  }
-
-  if (!shop.ownerId) {
-    Alert.alert("Cannot Message", "This shop doesn't have an owner account and cannot be messaged.");
-    return;
-  }
-
-  try {
-    // First, get the user_id of the shop owner from shop_details
-    const { data: shopOwner, error: ownerError } = await supabase
-      .from("shop_details")
-      .select("user_id")
-      .eq("shop_id", shop.ownerId)
-      .single();
-
-    if (ownerError || !shopOwner) {
-      Alert.alert("Error", "Could not find shop owner details.");
+  // ✅ goChat (unchanged core logic)
+  const goChat = async (shop: Shop) => {
+    if (!userId) {
+      Alert.alert("Not Logged In", "You need to be logged in to message a shop.");
       return;
     }
-
-    const shopOwnerUserId = shopOwner.user_id;
-
-    console.log("Looking for ANY conversation between:", {
-      customer_id: shopOwnerUserId,
-      driver_id: userId,
-      shop_place_id: shop.id
-    });
-
-    // Check for ANY existing conversation (emergency OR non-emergency) between these users
-    const { data: existingConvs, error: convError } = await supabase
-      .from("conversations")
-      .select(`
-        id,
-        emergency_id,
-        shop_place_id
-      `)
-      .or(`and(customer_id.eq.${shopOwnerUserId},driver_id.eq.${userId}),and(customer_id.eq.${userId},driver_id.eq.${shopOwnerUserId})`)
-      .order("updated_at", { ascending: false });
-
-    if (convError) {
-      console.error("Error checking conversations:", convError);
+    if (!shop.ownerId) {
+      Alert.alert("Cannot Message", "This shop doesn't have an owner account and cannot be messaged.");
+      return;
     }
-
-    let conversationId;
-
-    // Use the most recent existing conversation if found (regardless of emergency status)
-    if (existingConvs && existingConvs.length > 0) {
-      conversationId = existingConvs[0].id;
-      console.log("Found existing conversation:", conversationId, 
-        existingConvs[0].emergency_id ? "(emergency)" : "(non-emergency)");
-    } else {
-      console.log("No existing conversation found, creating new non-emergency one");
-      // Create new non-emergency conversation
-      const { data: newConv, error } = await supabase
-        .from("conversations")
-        .insert({
-          customer_id: shopOwnerUserId,
-          driver_id: userId,
-          emergency_id: null,
-          shop_place_id: shop.id,
-        })
-        .select()
+    try {
+      const { data: shopOwner, error: ownerError } = await supabase
+        .from("shop_details")
+        .select("user_id")
+        .eq("shop_id", shop.ownerId)
         .single();
 
-      if (error) {
-        console.error("Error creating conversation:", error);
-        throw error;
+      if (ownerError || !shopOwner) {
+        Alert.alert("Error", "Could not find shop owner details.");
+        return;
       }
-      conversationId = newConv.id;
-      console.log("Created new non-emergency conversation:", conversationId);
+
+      const shopOwnerUserId = shopOwner.user_id;
+
+      const { data: existingConvs } = await supabase
+        .from("conversations")
+        .select(`id, emergency_id, shop_place_id`)
+        .or(`and(customer_id.eq.${shopOwnerUserId},driver_id.eq.${userId}),and(customer_id.eq.${userId},driver_id.eq.${shopOwnerUserId})`)
+        .order("updated_at", { ascending: false });
+
+      let conversationId: string | undefined;
+      if (existingConvs && existingConvs.length > 0) {
+        conversationId = existingConvs[0].id;
+      } else {
+        const { data: newConv, error } = await supabase
+          .from("conversations")
+          .insert({
+            customer_id: shopOwnerUserId,
+            driver_id: userId,
+            emergency_id: null,
+            shop_place_id: shop.id,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+        conversationId = newConv.id;
+      }
+      router.push(`/driver/chat/${conversationId}`);
+    } catch (error) {
+      console.error("Error creating conversation:", error);
+      Alert.alert("Error", "Could not start conversation. Please try again.");
     }
+  };
 
-    // Navigate to chat
-    router.push(`/driver/chat/${conversationId}`);
-  } catch (error) {
-    console.error("Error creating conversation:", error);
-    Alert.alert("Error", "Could not start conversation. Please try again.");
-  }
-};
-
-const openActions = useCallback((s: Shop) => {
+  const openActions = useCallback((s: Shop) => {
     setSelectedShop(s);
     setSheetOpen(true);
   }, []);
@@ -564,16 +584,16 @@ const openActions = useCallback((s: Shop) => {
   };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch vulcanizing places (+phones, +service_for, +owner)
+  // fetch vulcanizing places
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("places")
         .select(
-          "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, owner" // ✅ include owner
+          "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, owner"
         )
-        .eq("category", "vulcanizing")
+        .in("category", ["vulcanizing", "vulcanizing_repair"])
         .order("name", { ascending: true });
 
       if (error) {
@@ -583,22 +603,24 @@ const openActions = useCallback((s: Shop) => {
       }
 
       const mapped: Shop[] = (data ?? []).map((p: PlaceRow) => {
-        const lat = p.latitude != null ? Number(p.latitude) : undefined;
-        const lng = p.longitude != null ? Number(p.longitude) : undefined;
-        return {
-          id: p.place_id,
-          name: p.name ?? "Unnamed Vulcanizing",
-          category: "vulcanizing",
-          address1: p.address ?? "",
-          plusCode: p.plus_code ?? undefined,
-          rating: 0,
-          lat: Number.isFinite(lat) ? (lat as number) : undefined,
-          lng: Number.isFinite(lng) ? (lng as number) : undefined,
-          phones: Array.isArray(p.phones) ? p.phones : [],
-          serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
-          ownerId: p.owner ?? null, // ✅ set owner id (or null)
-        };
-      });
+      const lat = p.latitude != null ? Number(p.latitude) : undefined;
+      const lng = p.longitude != null ? Number(p.longitude) : undefined;
+      return {
+        id: p.place_id,
+        name: p.name ?? "Unnamed Vulcanizing",
+        category:
+          p.category === "vulcanizing_repair" ? "vulcanizing_repair" : "vulcanizing",  // ← updated
+        address1: p.address ?? "",
+        plusCode: p.plus_code ?? undefined,
+        rating: 0,
+        lat: Number.isFinite(lat) ? (lat as number) : undefined,
+        lng: Number.isFinite(lng) ? (lng as number) : undefined,
+        phones: Array.isArray(p.phones) ? p.phones : [],
+        serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
+        ownerId: p.owner ?? null,
+      };
+    });
+
 
       if (!cancelled) setShops(mapped);
     })();
@@ -652,20 +674,16 @@ const openActions = useCallback((s: Shop) => {
 
   const data = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const selected = filters[0] ?? null; // "motorcycle" | "car" | "all_type" | null
+    const selected = filters[0] ?? null;
 
     return shops
       .filter((s) => {
-        // text search
         const byText =
           !q ||
           s.name.toLowerCase().includes(q) ||
           s.address1.toLowerCase().includes(q) ||
           (s.plusCode ?? "").toLowerCase().includes(q);
-
-        // service filter: strict equality.
         const byService = !selected || (s.serviceFor ?? "").toLowerCase() === selected;
-
         return byText && byService;
       })
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
@@ -803,6 +821,82 @@ const openActions = useCallback((s: Shop) => {
 
       <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop!} onOpenMaps={openMaps} onMessage={goChat} />
       <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} onMessage={goChat} />
+
+      {/* 🔵 In-app Map Modal (satellite) */}
+      <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {driverCoords && shopCoords ? (
+              <>
+                <MapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat,
+                    longitude: driverCoords.lon,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    if (mapRef.current && driverCoords && shopCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: shopCoords.lat, longitude: shopCoords.lon },
+                        ],
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+                      );
+                    }
+                    setMapBusy(false);
+                  }}
+                >
+                  <Marker
+                    coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }}
+                    title="You"
+                    pinColor="red"
+                  />
+                  <Marker
+                    coordinate={{ latitude: shopCoords.lat, longitude: shopCoords.lon }}
+                    title={mapShopName || "Shop"}
+                    pinColor="#2563EB"
+                  />
+                  <Polyline
+                    coordinates={[
+                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                      { latitude: shopCoords.lat, longitude: shopCoords.lon },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </MapView>
+
+                {mapBusy && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                <Pressable
+                  onPress={() => setMapVisible(false)}
+                  className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2"
+                >
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* 🔵 Global Loading Modal */}
+      <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />
     </View>
   );
 }

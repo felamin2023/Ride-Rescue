@@ -12,6 +12,7 @@ import {
   Modal,
   Animated,
   Easing,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -19,6 +20,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
 import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
 /* ----------------------------- Debug helper ----------------------------- */
 const DEBUG_PRINTS = true;
@@ -544,9 +546,16 @@ export default function RequestStatus() {
     userId?: string; // app_user uuid for accepted_by
   } | null>(null);
 
-  // 🔵 NEW: confirm cancel & confirm hide
+  // confirm cancel & confirm hide
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null);
+
+  // Locate map modal
+  const [showLocateMap, setShowLocateMap] = useState(false);
+  const [mechanicCoords, setMechanicCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [mapLoading, setMapLoading] = useState(false);
+  const mapRef = React.useRef<any>(null);
 
   const toggleCard = async (emId: string, emLat: number, emLon: number) => {
     const isOpening = !openCards[emId];
@@ -744,9 +753,9 @@ export default function RequestStatus() {
           const placeId = shopToPlace[r.shop_id];
           const place = placeId ? placeMap[placeId] : undefined;
 
-          const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
-          const name = place?.name || u?.full_name || "Auto Repair Shop";
-          const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
+        const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
+        const name = place?.name || u?.full_name || "Auto Repair Shop";
+        const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
 
           const off = latestOfferByService[r.service_id];
 
@@ -864,127 +873,120 @@ export default function RequestStatus() {
     if (insErr) throw insErr;
   }
 
-  // ✅ Accept a service request (confirm first)
-// ✅ FIXED: Remove automatic conversation creation from acceptService
-const acceptService = useCallback(
-  async (opts: {
-    serviceId: string;
-    emergencyId: string;
-    userId?: string;
-  }) => {
-    const { serviceId, emergencyId, userId: acceptedByUser } = opts;
-    const now = new Date().toISOString();
+  const acceptService = useCallback(
+    async (opts: {
+      serviceId: string;
+      emergencyId: string;
+      userId?: string;
+    }) => {
+      const { serviceId, emergencyId, userId: acceptedByUser } = opts;
+      const now = new Date().toISOString();
 
+      try {
+        setLoading({ visible: true, message: "Accepting request…" });
+
+        // 1) Mark this service request as accepted
+        const { error: srErr } = await supabase
+          .from("service_requests")
+          .update({ status: "accepted", accepted_at: now })
+          .eq("service_id", serviceId)
+          .eq("emergency_id", emergencyId);
+        if (srErr) throw srErr;
+
+        const patch: Partial<EmergencyRow> & any = {
+          emergency_status: "in_process",
+          accepted_at: now,
+        };
+        if (acceptedByUser) patch.accepted_by = acceptedByUser;
+
+        const { error: emErr } = await supabase
+          .from("emergency")
+          .update(patch)
+          .eq("emergency_id", emergencyId);
+        if (emErr) throw emErr;
+
+        // Optimistic UI:
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
+          )
+        );
+
+        setReqLists((prev) => {
+          const cur = prev[emergencyId] ?? [];
+          const next = cur.filter((r) => r.service_id !== serviceId);
+          return { ...prev, [emergencyId]: next };
+        });
+        setReqCounts((prev) => ({
+          ...prev,
+          [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
+        }));
+
+        // Also refresh from server (in case there are other rows)
+        const em = items.find((i) => i.id === emergencyId);
+        if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
+      } catch (e: any) {
+        Alert.alert("Accept failed", e?.message ?? "Please try again.");
+      } finally {
+        setLoading({ visible: false });
+      }
+    },
+    [items, fetchSRListFor]
+  );
+
+  const cancelEmergency = useCallback(async (emergencyId: string) => {
     try {
-      setLoading({ visible: true, message: "Accepting request…" });
+      setLoading({ visible: true, message: "Cancelling emergency…" });
 
-      // 1) Mark this service request as accepted
-      const { error: srErr } = await supabase
-        .from("service_requests")
-        .update({ status: "accepted", accepted_at: now })
-        .eq("service_id", serviceId)
-        .eq("emergency_id", emergencyId);
-      if (srErr) throw srErr;
-
-      // 2) Update the emergency status to in_process + accepted_by + accepted_at
-      const patch: Partial<EmergencyRow> & any = {
-        emergency_status: "in_process",
-        accepted_at: now,
-      };
-      if (acceptedByUser) patch.accepted_by = acceptedByUser;
-
-      const { error: emErr } = await supabase
+      const { error } = await supabase
         .from("emergency")
-        .update(patch)
+        .update({
+          emergency_status: "canceled",
+          canceled_at: new Date().toISOString(),
+        })
         .eq("emergency_id", emergencyId);
-      if (emErr) throw emErr;
 
-      // ✅ REMOVED: Automatic conversation creation logic
-      // The conversation should only be created when user explicitly clicks "Message"
+      if (error) throw error;
 
-      // Optimistic UI:
+      // Optimistic UI update
       setItems((prev) =>
-        prev.map((it) =>
-          it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
+        prev.map((item) =>
+          item.id === emergencyId ? { ...item, status: "CANCELED" } : item
         )
       );
 
-      // This list shows only pending -> remove it + refresh counts
-      setReqLists((prev) => {
-        const cur = prev[emergencyId] ?? [];
-        const next = cur.filter((r) => r.service_id !== serviceId);
-        return { ...prev, [emergencyId]: next };
-      });
-      setReqCounts((prev) => ({
-        ...prev,
-        [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
-      }));
+      // Close any open card for this emergency
+      setOpenCards((prev) => ({ ...prev, [emergencyId]: false }));
 
-      // Also refresh from server (in case there are other rows)
-      const em = items.find((i) => i.id === emergencyId);
-      if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
     } catch (e: any) {
-      Alert.alert("Accept failed", e?.message ?? "Please try again.");
+      Alert.alert("Cancel failed", e?.message ?? "Please try again.");
     } finally {
       setLoading({ visible: false });
     }
-  },
-  [items, fetchSRListFor]
-);
+  }, []);
 
-// 🔵 Cancel emergency (when no offers received within 5 min)
-const cancelEmergency = useCallback(async (emergencyId: string) => {
-  try {
-    setLoading({ visible: true, message: "Cancelling emergency…" });
+  // 🔵 Hide emergency (soft delete for driver)
+  const hideEmergency = useCallback(async (emergencyId: string) => {
+    try {
+      setLoading({ visible: true, message: "Removing request…" });
 
-    const { error } = await supabase
-      .from("emergency")
-      .update({
-        emergency_status: "canceled",
-        canceled_at: new Date().toISOString(),
-      })
-      .eq("emergency_id", emergencyId);
+      const { error } = await supabase
+        .from("emergency")
+        .update({ driver_hidden: true })
+        .eq("emergency_id", emergencyId);
 
-    if (error) throw error;
+      if (error) throw error;
 
-    // Optimistic UI update
-    setItems((prev) =>
-      prev.map((item) =>
-        item.id === emergencyId ? { ...item, status: "CANCELED" } : item
-      )
-    );
+      // Remove from local state
+      setItems((prev) => prev.filter((item) => item.id !== emergencyId));
 
-    // Close any open card for this emergency
-    setOpenCards((prev) => ({ ...prev, [emergencyId]: false }));
+    } catch (e: any) {
+      Alert.alert("Delete failed", e?.message ?? "Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  }, []);
 
-  } catch (e: any) {
-    Alert.alert("Cancel failed", e?.message ?? "Please try again.");
-  } finally {
-    setLoading({ visible: false });
-  }
-}, []);
-
-// 🔵 Hide emergency (soft delete for driver)
-const hideEmergency = useCallback(async (emergencyId: string) => {
-  try {
-    setLoading({ visible: true, message: "Removing request…" });
-
-    const { error } = await supabase
-      .from("emergency")
-      .update({ driver_hidden: true })
-      .eq("emergency_id", emergencyId);
-
-    if (error) throw error;
-
-    // Remove from local state
-    setItems((prev) => prev.filter((item) => item.id !== emergencyId));
-
-  } catch (e: any) {
-    Alert.alert("Delete failed", e?.message ?? "Please try again.");
-  } finally {
-    setLoading({ visible: false });
-  }
-}, []);
   /* ----------------------------- Realtime & lifecycle ----------------------------- */
   useEffect(() => {
     const channel = supabase
@@ -1023,8 +1025,110 @@ const hideEmergency = useCallback(async (emergencyId: string) => {
     return () => clearInterval(id);
   }, [fetchItems]);
 
+  /* ----------------------------- Locate helpers ----------------------------- */
+  // Open Locate (from a PENDING service row – has serviceId)
+  const openLocateMapForService = async (serviceId: string) => {
+    // show modal & spinner immediately
+    setShowLocateMap(true);
+    setMapLoading(true);
+    setMechanicCoords(null);
+    setDriverCoords(null);
+
+    try {
+      // mechanic coords from the service request row
+      const { data: sr, error } = await supabase
+        .from("service_requests")
+        .select("latitude, longitude")
+        .eq("service_id", serviceId)
+        .maybeSingle();
+
+      if (error || !sr?.latitude || !sr?.longitude) {
+        Alert.alert("Error", "Mechanic location unavailable.");
+        setShowLocateMap(false);
+        setMapLoading(false);
+        return;
+      }
+      setMechanicCoords({ lat: sr.latitude, lon: sr.longitude });
+
+      // driver's current location
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please enable location access.");
+        setShowLocateMap(false);
+        setMapLoading(false);
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({});
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+    } catch (err) {
+      console.error("openLocateMapForService error:", err);
+      Alert.alert("Error", "Could not open map view.");
+      setShowLocateMap(false);
+      setMapLoading(false);
+    }
+  };
+
+  // Open Locate (after ACCEPTED – we only know emergencyId, find the accepted row)
+  const openLocateMapForAccepted = async (emergencyId: string) => {
+    // show modal & spinner immediately
+    setShowLocateMap(true);
+    setMapLoading(true);
+    setMechanicCoords(null);
+    setDriverCoords(null);
+
+    try {
+      // get the accepted service_request to locate the mechanic
+      const { data: sr, error } = await supabase
+        .from("service_requests")
+        .select("latitude, longitude")
+        .eq("emergency_id", emergencyId)
+        .eq("status", "accepted")
+        .maybeSingle();
+
+      if (error || !sr?.latitude || !sr?.longitude) {
+        Alert.alert("Error", "Mechanic location unavailable.");
+        setShowLocateMap(false);
+        setMapLoading(false);
+        return;
+      }
+      setMechanicCoords({ lat: sr.latitude, lon: sr.longitude });
+
+      // driver's current location
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please enable location access.");
+        setShowLocateMap(false);
+        setMapLoading(false);
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({});
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+    } catch (err) {
+      console.error("openLocateMapForAccepted error:", err);
+      Alert.alert("Error", "Could not open map view.");
+      setShowLocateMap(false);
+      setMapLoading(false);
+    }
+  };
+
+  // Auto-fit once BOTH coords are set (covers cases where map is already ready)
+  useEffect(() => {
+    if (showLocateMap && mechanicCoords && driverCoords && mapRef.current) {
+      mapRef.current.fitToCoordinates(
+        [
+          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+          { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
+        ],
+        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+      );
+      // if map is already ready, hide the loader here
+      setMapLoading(false);
+    }
+  }, [showLocateMap, mechanicCoords, driverCoords]);
+
   /* -------------------------- Render helpers -------------------------- */
-  const renderSRItem = (emId: string, it: SRUI) => {
+  const renderSRItem = (emId: string, it: SRUI, emLat: number, emLon: number) => {
+
     const blurred = !!revealedReject[it.service_id];
     const isExpanded = !!expandedOffers[it.service_id];
 
@@ -1064,29 +1168,41 @@ const hideEmergency = useCallback(async (emergencyId: string) => {
                     {fmtDistance(it.distanceKm)} away
                   </Text>
                 </View>
-                <View className="flex-row items-center">
+                <View className="items-end">
                   <Ionicons
                     name={isExpanded ? "chevron-up" : "chevron-down"}
                     size={16}
                     color="#64748B"
-                    className="mr-2"
+                    className="mb-2"
                   />
-                  <Pressable
-                    onPress={() =>
-                      setConfirmAccept({
-                        serviceId: it.service_id,
-                        emergencyId: emId,
-                        userId: it.user_id,
-                      })
-                    }
-                    disabled={blurred}
-                    className="rounded-xl py-2 px-4 bg-blue-600"
-                  >
-                    <Text className="text-white text-[13px] font-semibold">
-                      Accept
-                    </Text>
-                  </Pressable>
+                  <View className="flex-col space-y-2">
+                    <Pressable
+                      onPress={() =>
+                        setConfirmAccept({
+                          serviceId: it.service_id,
+                          emergencyId: emId,
+                          userId: it.user_id,
+                        })
+                      }
+                      disabled={blurred}
+                      className="rounded-xl py-2 px-5 bg-blue-600"
+                    >
+                      <Text className="text-white text-[13px] font-semibold text-center">
+                        Accept
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => openLocateMapForService(it.service_id)}
+                      className="rounded-xl py-2 px-5 bg-emerald-600"
+                    >
+                      <Text className="text-white text-[13px] font-semibold text-center">
+                        Locate
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
+
               </View>
 
               {/* Offer Details - Collapsible */}
@@ -1199,7 +1315,7 @@ const hideEmergency = useCallback(async (emergencyId: string) => {
               nestedScrollEnabled
               showsVerticalScrollIndicator
             >
-              {real.map((row) => renderSRItem(em.id, row))}
+              {real.map((row) => renderSRItem(em.id, row, em.lat, em.lon))}
             </ScrollView>
           ) : (
             <View className="flex-1 items-center justify-center py-8">
@@ -1214,140 +1330,155 @@ const hideEmergency = useCallback(async (emergencyId: string) => {
     );
   };
 
-  // ⬇️ place this right after renderSRList(...)
-const renderItem = ({ item }: { item: RequestItem }) => {
-  const waiting = item.status === "WAITING";
-  const inProcess = item.status === "IN_PROCESS";
-  const completed = item.status === "COMPLETED";
-  const canceled  = item.status === "CANCELED"; // normalized value
-  const isOpen = !!openCards[item.id];
+  // ⬇️ FlatList row
+  const renderItem = ({ item }: { item: RequestItem }) => {
+    const waiting = item.status === "WAITING";
+    const inProcess = item.status === "IN_PROCESS";
+    const completed = item.status === "COMPLETED";
+    const canceled  = item.status === "CANCELED"; // normalized value
+    const isOpen = !!openCards[item.id];
 
-  // Show "Cancel" if: waiting, age ≥ 5 min, and no pending requests
-  const ageMs = Date.now() - new Date(item.createdAtIso).getTime();
-  const hasPending = (reqCounts[item.id] ?? 0) > 0;
-  const canCancel = waiting && !hasPending && ageMs >= 5 * 60 * 1000;
+    // Show "Cancel" if: waiting, age ≥ 5 min, and no pending requests
+    const ageMs = Date.now() - new Date(item.createdAtIso).getTime();
+    const hasPending = (reqCounts[item.id] ?? 0) > 0;
+    const canCancel = waiting && !hasPending && ageMs >= 5 * 60 * 1000;
 
-  return (
-    <Pressable
-      onPress={() => toggleCard(item.id, item.lat, item.lon)}
-      className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
-      style={cardShadow as any}
-    >
-      {/* Trash on completed OR canceled (soft-hide) */}
-      {(completed || canceled) && (
-        <View className="absolute top-3 right-3">
-          <Pressable
-            onPress={() => setConfirmHideId(item.id)}
-            hitSlop={8}
-            className="p-1 rounded-full"
-          >
-            <Ionicons name="trash-outline" size={20} color="#64748B" />
-          </Pressable>
-        </View>
-      )}
-
-      <View className="flex-row items-center">
-        <Image source={{ uri: item.avatar }} className="w-12 h-12 rounded-full" />
-        <View className="ml-3 flex-1">
-          <Text className="text-[17px] font-semibold text-slate-900" numberOfLines={1}>
-            {item.name}
-          </Text>
-          <Text className="text-[13px] text-slate-500 mt-0.5">
-            Emergency Request • {item.vehicleType}
-          </Text>
-        </View>
-      </View>
-
-      <View className="h-px bg-slate-200 my-4" />
-
-      {/* Driver Info */}
-      <View className="space-y-3">
-        {item.info && item.info !== "—" && (
-          <View className="flex-row items-start">
-            <Ionicons name="document-text-outline" size={16} color="#64748B" className="mt-0.5" />
-            <View className="ml-3 flex-1">
-              <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
-              <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.info}</Text>
-            </View>
-          </View>
-        )}
-
-        <View className="flex-row items-start">
-          <Ionicons name="location-outline" size={16} color="#64748B" className="mt-0.5" />
-          <View className="ml-3 flex-1">
-            <Text className="text-slate-600 text-sm font-medium">Landmark</Text>
-            <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.landmark}</Text>
-          </View>
-        </View>
-
-        <View className="flex-row items-start">
-          <Ionicons name="map-outline" size={16} color="#64748B" className="mt-0.5" />
-          <View className="ml-3 flex-1">
-            <Text className="text-slate-600 text-sm font-medium">Location</Text>
-            <Text className="text-slate-800 text-sm mt-0.5">{item.location}</Text>
-          </View>
-        </View>
-
-        <View className="flex-row items-start">
-          <Ionicons name="calendar-outline" size={16} color="#64748B" className="mt-0.5" />
-          <View className="ml-3 flex-1">
-            <Text className="text-slate-600 text-sm font-medium">Date & Time</Text>
-            <Text className="text-slate-800 text-sm mt-0.5">{item.dateTime}</Text>
-          </View>
-        </View>
-      </View>
-
-      <View className="h-px bg-slate-200 my-4" />
-
-      <View className="flex-row items-center justify-between">
-        <View
-          className={`rounded-full px-3 py-1.5 border self-start flex-row items-center ${
-            STATUS_STYLES[item.status].bg ?? ""
-          } ${STATUS_STYLES[item.status].border ?? ""}`}
-        >
-          {item.status === "IN_PROCESS" ? (
-            <View className="mr-1.5">
-              <SpinningGear size={12} />
-            </View>
-          ) : null}
-          <Text
-            className={`text-[12px] font-medium ${
-              STATUS_STYLES[item.status].text ?? "text-slate-800"
-            }`}
-          >
-            {prettyStatus(item.status)}
-          </Text>
-        </View>
-
-        {inProcess && (
-          <Pressable
-            onPress={() => openChatForEmergency(item.id, router)}
-            className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2"
-          >
-            <Ionicons name="chatbubbles" size={14} color="#FFF" />
-            <Text className="text-white text-[13px] font-semibold ml-1.5">Message</Text>
-          </Pressable>
-        )}
-
-        {!inProcess &&
-          (canCancel ? (
+    return (
+      <Pressable
+        onPress={() => toggleCard(item.id, item.lat, item.lon)}
+        className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
+        style={cardShadow as any}
+      >
+        {/* Trash on completed OR canceled (soft-hide) */}
+        {(completed || canceled) && (
+          <View className="absolute top-3 right-3">
             <Pressable
-              onPress={() => setConfirmCancelId(item.id)}
-              className="flex-row items-center bg-rose-600 rounded-xl px-4 py-2"
+              onPress={() => setConfirmHideId(item.id)}
+              hitSlop={8}
+              className="p-1 rounded-full"
             >
-              <Ionicons name="close-circle" size={14} color="#FFF" />
-              <Text className="text-white text-[13px] font-semibold ml-1.5">Cancel</Text>
+              <Ionicons name="trash-outline" size={20} color="#64748B" />
             </Pressable>
-          ) : (
-            <Text className="text-[13px] text-slate-400">Sent {item.sentWhen}</Text>
-          ))}
-      </View>
+          </View>
+        )}
 
-      {waiting && isOpen ? renderSRList(item) : null}
-    </Pressable>
-  );
-};
+        <View className="flex-row items-center">
+          <Image source={{ uri: item.avatar }} className="w-12 h-12 rounded-full" />
+          <View className="ml-3 flex-1">
+            <Text className="text-[17px] font-semibold text-slate-900" numberOfLines={1}>
+              {item.name}
+            </Text>
+            <Text className="text-[13px] text-slate-500 mt-0.5">
+              Emergency Request • {item.vehicleType}
+            </Text>
+          </View>
+        </View>
 
+        <View className="h-px bg-slate-200 my-4" />
+
+        {/* Driver Info */}
+        <View className="space-y-3">
+          {item.info && item.info !== "—" && (
+            <View className="flex-row items-start">
+              <Ionicons name="document-text-outline" size={16} color="#64748B" className="mt-0.5" />
+              <View className="ml-3 flex-1">
+                <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
+                <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.info}</Text>
+              </View>
+            </View>
+          )}
+
+          <View className="flex-row items-start">
+            <Ionicons name="location-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Landmark</Text>
+              <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.landmark}</Text>
+            </View>
+          </View>
+
+          <View className="flex-row items-start">
+            <Ionicons name="map-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Location</Text>
+              <Text className="text-slate-800 text-sm mt-0.5">{item.location}</Text>
+            </View>
+          </View>
+
+          <View className="flex-row items-start">
+            <Ionicons name="calendar-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Date & Time</Text>
+              <Text className="text-slate-800 text-sm mt-0.5">{item.dateTime}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View className="h-px bg-slate-200 my-4" />
+
+        <View className="flex-row items-center justify-between">
+          <View
+            className={`rounded-full px-3 py-1.5 border self-start flex-row items-center ${
+              STATUS_STYLES[item.status].bg ?? ""
+            } ${STATUS_STYLES[item.status].border ?? ""}`}
+          >
+            {item.status === "IN_PROCESS" ? (
+              <View className="mr-1.5">
+                <SpinningGear size={12} />
+              </View>
+            ) : null}
+            <Text
+              className={`text-[12px] font-medium ${
+                STATUS_STYLES[item.status].text ?? "text-slate-800"
+              }`}
+            >
+              {prettyStatus(item.status)}
+            </Text>
+          </View>
+
+          {inProcess && (
+            <View className="flex-row space-x-2">
+              {/* Message Button */}
+              <Pressable
+                onPress={() => openChatForEmergency(item.id, router)}
+                className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2"
+              >
+                <Ionicons name="chatbubbles" size={14} color="#FFF" />
+                <Text className="text-white text-[13px] font-semibold ml-1.5">
+                  Message
+                </Text>
+              </Pressable>
+
+              {/* Locate Button */}
+              <Pressable
+                onPress={() => openLocateMapForAccepted(item.id)}
+                className="flex-row items-center bg-emerald-600 rounded-xl px-4 py-2"
+              >
+                <Ionicons name="navigate" size={14} color="#FFF" />
+                <Text className="text-white text-[13px] font-semibold ml-1.5">
+                  Locate
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {!inProcess &&
+            (canCancel ? (
+              <Pressable
+                onPress={() => setConfirmCancelId(item.id)}
+                className="flex-row items-center bg-rose-600 rounded-xl px-4 py-2"
+              >
+                <Ionicons name="close-circle" size={14} color="#FFF" />
+                <Text className="text-white text-[13px] font-semibold ml-1.5">Cancel</Text>
+              </Pressable>
+            ) : (
+              <Text className="text-[13px] text-slate-400">Sent {item.sentWhen}</Text>
+            ))}
+        </View>
+
+        {waiting && isOpen ? renderSRList(item) : null}
+      </Pressable>
+    );
+  };
 
   return (
     <SafeAreaView className="flex-1 bg-[#F4F6F8]">
@@ -1447,6 +1578,95 @@ const renderItem = ({ item }: { item: RequestItem }) => {
         cancelLabel="Back"
         confirmColor="#475569"
       />
+
+      {/* 🔵 Locate Map Modal */}
+      <Modal visible={showLocateMap} animationType="slide">
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {mechanicCoords && driverCoords ? (
+              <>
+                <MapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat ?? 0,
+                    longitude: driverCoords.lon ?? 0,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    // auto-fit both users, then end the loader
+                    if (mapRef.current && mechanicCoords && driverCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
+                        ],
+                        {
+                          edgePadding: { top: 80, right: 80, bottom: 80, left: 80 },
+                          animated: true,
+                        }
+                      );
+                    }
+                    setMapLoading(false);
+                  }}
+                >
+                  {/* Mechanic Marker */}
+                  <Marker
+                    coordinate={{
+                      latitude: mechanicCoords.lat ?? 0,
+                      longitude: mechanicCoords.lon ?? 0,
+                    }}
+                    title="Mechanic"
+                    pinColor="#2563EB"
+                  />
+                  {/* Driver Marker */}
+                  <Marker
+                    coordinate={{
+                      latitude: driverCoords.lat ?? 0,
+                      longitude: driverCoords.lon ?? 0,
+                    }}
+                    title="You (Driver)"
+                    pinColor="red"
+                  />
+                  {/* Connecting Line */}
+                  <Polyline
+                    coordinates={[
+                      { latitude: driverCoords.lat ?? 0, longitude: driverCoords.lon ?? 0 },
+                      { latitude: mechanicCoords.lat ?? 0, longitude: mechanicCoords.lon ?? 0 },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </MapView>
+
+                {mapLoading && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                {/* Close Button */}
+                <Pressable
+                  onPress={() => setShowLocateMap(false)}
+                  className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2"
+                >
+                  <Text className="text-[14px] font-semibold text-slate-900">
+                    Close
+                  </Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
 
       <LoadingScreen
         visible={loading.visible}

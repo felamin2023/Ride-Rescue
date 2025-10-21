@@ -1,5 +1,5 @@
 // app/(driver)/hospital.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   Linking,
   Modal,
   Platform,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -18,6 +20,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
 import { supabase } from "../../utils/supabase";
+// Use native maps directly so the map stays in-app
+import RNMapView, { Marker, Polyline } from "react-native-maps";
+import LoadingScreen from "../../components/LoadingScreen";
 
 /* ------------------------------ Design tokens ------------------------------ */
 const COLORS = {
@@ -45,6 +50,23 @@ const buttonShadow = Platform.select({
   android: { elevation: 1 },
 });
 
+/* ------------------------------ Avatars ------------------------------ */
+const HOSPITAL_AVATAR_PLACEHOLDER =
+  "https://images.unsplash.com/photo-1586773860418-d37222d8fce3?w=256&h=256&fit=crop&crop=faces&auto=format";
+
+function CircleImage({ uri, size = 56 }: { uri?: string | null; size?: number }) {
+  const [errored, setErrored] = useState(false);
+  const source = !errored && uri ? { uri } : { uri: HOSPITAL_AVATAR_PLACEHOLDER };
+  return (
+    <RNImage
+      source={source}
+      onError={() => setErrored(true)}
+      style={{ width: size, height: size, borderRadius: 999, backgroundColor: "#F1F5F9" }}
+      resizeMode="cover"
+    />
+  );
+}
+
 /* ---------------------------------- Types ---------------------------------- */
 type PlaceRow = {
   place_id: string;
@@ -55,7 +77,9 @@ type PlaceRow = {
   latitude: string | number | null;
   longitude: string | number | null;
   maps_link: string | null;
-  phones: string[] | null; // ← ARRAY from DB
+  phones: string[] | null; // array from DB
+  // If you later add an avatar column to your "places" table, you can map it into Facility.avatar
+  // avatar?: string | null;
 };
 
 type Facility = {
@@ -64,12 +88,12 @@ type Facility = {
   category: "hospital";
   address1: string;
   plusCode?: string;
-  avatar?: string;
+  avatar?: string;       // 👈 URL to the hospital profile image
   lat?: number;
   lng?: number;
   distanceKm?: number;
   maps_link?: string;
-  phones?: string[]; // ← ARRAY in-app
+  phones?: string[];
 };
 
 /* --------------------------------- Filters -------------------------------- */
@@ -188,14 +212,9 @@ function QuickActions({
           </View>
 
           <View className="flex-row items-center gap-3 pb-3">
+            {/* Avatar image (44px) */}
             <View style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-              {facility.avatar ? (
-                <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
-              ) : (
-                <View className="h-full w-full items-center justify-center">
-                  <Ionicons name="medical-outline" size={20} color="#475569" />
-                </View>
-              )}
+              <CircleImage uri={facility.avatar} size={44} />
             </View>
             <View className="flex-1">
               <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>
@@ -253,14 +272,9 @@ function DetailsModal({
         <Pressable onPress={() => {}}>
           <View className="rounded-2xl bg-white p-4" style={[{ borderWidth: 1, borderColor: COLORS.border }, panelShadow]}>
             <View className="flex-row items-start gap-3">
+              {/* Avatar image (56px) */}
               <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-                {facility.avatar ? (
-                  <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} />
-                ) : (
-                  <View className="h-full w-full items-center justify-center">
-                    <Ionicons name="medical-outline" size={22} color="#475569" />
-                  </View>
-                )}
+                <CircleImage uri={facility.avatar} size={56} />
               </View>
 
               <View className="flex-1">
@@ -329,14 +343,9 @@ function FacilityCard({
       accessibilityLabel={`Open actions for ${facility.name}`}
     >
       <View className="flex-row items-start gap-3">
+        {/* Avatar image (56px) */}
         <View style={{ width: 56, height: 56, borderRadius: 999, overflow: "hidden", backgroundColor: "#F1F5F9" }}>
-          {facility.avatar ? (
-            <RNImage source={{ uri: facility.avatar }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-          ) : (
-            <View className="h-full w-full items-center justify-center">
-              <Ionicons name="medical-outline" size={22} color="#475569" />
-            </View>
-          )}
+          <CircleImage uri={facility.avatar} size={56} />
         </View>
 
         <View className="flex-1">
@@ -399,26 +408,67 @@ export default function HospitalScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
 
-  const [searchOpen, setSearchOpen] = useState(false); // search bar toggles like your pattern
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // In-app map state
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [destName, setDestName] = useState<string>("");
+  const mapRef = useRef<any>(null);
+
+  // Global loading modal
+  const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
 
   const toggleFilter = (k: string) =>
     setFilters((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
-  const openMaps = (s: Facility) => {
-    if (s.maps_link) {
-      Linking.openURL(s.maps_link).catch(() => {});
-      return;
-    }
-    if (s.lat && s.lng) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`).catch(() => {});
-    } else if (s.address1) {
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address1)}`).catch(() => {});
+  // Open in-app satellite map (no external apps)
+  const openMaps = async (s: Facility) => {
+    try {
+      if (typeof s.lat !== "number" || typeof s.lng !== "number") {
+        Alert.alert("Location Unavailable", "This facility doesn't have coordinates yet.");
+        return;
+      }
+
+      setLoading({ visible: true, message: "Loading map…" });
+      setMapBusy(true);
+
+      setDestCoords({ lat: s.lat, lon: s.lng });
+      setDestName(s.name);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please allow location access to view directions.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      let pos = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 100 });
+      if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!pos) {
+        Alert.alert("Error", "Couldn't get your current location.");
+        setMapBusy(false);
+        setLoading({ visible: false });
+        return;
+      }
+
+      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      setMapVisible(true); // modal shows; onMapReady will clear mapBusy
+    } catch (e) {
+      console.warn("openMaps error:", e);
+      Alert.alert("Error", "Could not open map.");
+      setMapBusy(false);
+    } finally {
+      setLoading({ visible: false });
     }
   };
 
   const callNumber = (raw: string) => {
     if (!raw) return;
-    const num = raw.replace(/[^\d+]/g, ""); // keep digits and leading '+'
+    const num = raw.replace(/[^\d+]/g, "");
     if (!num) return;
     Linking.openURL(`tel:${num}`).catch(() => {});
   };
@@ -451,7 +501,8 @@ export default function HospitalScreen() {
           lat: Number.isFinite(lat) ? (lat as number) : undefined,
           lng: Number.isFinite(lng) ? (lng as number) : undefined,
           maps_link: p.maps_link ?? undefined,
-          phones: p.phones ?? undefined, // map array
+          phones: p.phones ?? undefined,
+          // avatar: p.avatar ?? undefined, // ← map this if your DB adds an avatar column
         };
       });
 
@@ -624,7 +675,7 @@ export default function HospitalScreen() {
       <FilterChips
         items={FILTERS}
         selected={filters}
-        onToggle={toggleFilter}
+        onToggle={k => setFilters(prev => (prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]))}
         containerStyle={{ paddingHorizontal: 16, marginTop: 10 }}
         gap={8}
         horizontal
@@ -661,6 +712,71 @@ export default function HospitalScreen() {
       {/* Bottom sheet + Details */}
       <QuickActions visible={sheetOpen} onClose={() => setSheetOpen(false)} facility={selectedFacility} onOpenMaps={openMaps} />
       <DetailsModal visible={detailsOpen} facility={selectedFacility} onClose={() => setDetailsOpen(false)} onOpenMaps={openMaps} onCall={callNumber} />
+
+      {/* In-app Map Modal (satellite) */}
+      <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>
+        <SafeAreaView className="flex-1 bg-black">
+          <View className="flex-1">
+            {driverCoords && destCoords ? (
+              <>
+                <RNMapView
+                  ref={mapRef}
+                  style={{ flex: 1 }}
+                  mapType="satellite"
+                  initialRegion={{
+                    latitude: driverCoords.lat,
+                    longitude: driverCoords.lon,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onMapReady={() => {
+                    if (mapRef.current && driverCoords && destCoords) {
+                      mapRef.current.fitToCoordinates(
+                        [
+                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                          { latitude: destCoords.lat, longitude: destCoords.lon },
+                        ],
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
+                      );
+                    }
+                    setMapBusy(false);
+                  }}
+                >
+                  <Marker coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }} title="You" pinColor="red" />
+                  <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lon }} title={destName || "Hospital"} pinColor="#2563EB" />
+                  <Polyline
+                    coordinates={[
+                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
+                      { latitude: destCoords.lat, longitude: destCoords.lon },
+                    ]}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                  />
+                </RNMapView>
+
+                {mapBusy && (
+                  <View className="absolute inset-0 items-center justify-center bg-black/30">
+                    <ActivityIndicator size="large" color="#FFF" />
+                    <Text className="text-white mt-3">Preparing map…</Text>
+                  </View>
+                )}
+
+                <Pressable onPress={() => setMapVisible(false)} className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2">
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View className="flex-1 items-center justify-center bg-black">
+                <ActivityIndicator size="large" color="#FFF" />
+                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
+              </View>
+            )}
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Global Loading Modal */}
+      <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />
     </View>
   );
 }

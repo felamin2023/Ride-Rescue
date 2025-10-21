@@ -21,7 +21,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import FilterChips, { type FilterItem } from "../../components/FilterChips";
 import { supabase } from "../../utils/supabase";
-import RNMapView, { Marker, Polyline } from "react-native-maps";
+// Cross-platform wrapper keeps web builds from bundling native-only maps
+import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 import LoadingScreen from "../../components/LoadingScreen";
 
 /* ------------------------------ Design tokens ------------------------------ */
@@ -724,7 +725,7 @@ export default function PoliceScreen() {
           <View className="flex-1">
             {driverCoords && destCoords ? (
               <>
-                <RNMapView
+                <MapView
                   ref={mapRef}
                   style={{ flex: 1 }}
                   mapType="satellite"
@@ -759,7 +760,7 @@ export default function PoliceScreen() {
                     strokeWidth={4}
                     strokeColor="#2563EB"
                   />
-                </RNMapView>
+                </MapView>
 
                 {mapBusy && (
                   <View className="absolute inset-0 items-center justify-center bg-black/30">

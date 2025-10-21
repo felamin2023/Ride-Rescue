@@ -86,6 +86,9 @@ export default function Login() {
         setErrors({ pw: "Login failed. Please try again." });
         return;
       }
+      
+
+
 
       // 2) Role
       const { data: profile, error: profErr } = await supabase
@@ -130,6 +133,22 @@ export default function Login() {
           return;
         }
       }
+
+
+              // SET ONLINE STATUS HERE - Before role checks
+        const { error: onlineError } = await supabase
+          .from("app_user")
+          .update({ 
+            is_online: true,
+          })
+          .eq("user_id", userId);
+
+        if (onlineError) {
+          console.error("Failed to set online status:", onlineError);
+        }
+
+
+      
 
       // 4) Proceed
       router.replace(landingPathFor(role));

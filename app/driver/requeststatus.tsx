@@ -866,6 +866,8 @@ export default function RequestStatus() {
 
   // ✅ Accept a service request (confirm first)
 // ✅ FIXED: Remove automatic conversation creation from acceptService
+// FILE: RequestStatus.tsx (or wherever your acceptService function lives)
+
 const acceptService = useCallback(
   async (opts: {
     serviceId: string;
@@ -878,58 +880,336 @@ const acceptService = useCallback(
     try {
       setLoading({ visible: true, message: "Accepting request…" });
 
-      // 1) Mark this service request as accepted
+      console.log("🟢 [ACCEPT] Starting accept process");
+      console.log("🟢 [ACCEPT] Service ID:", serviceId);
+      console.log("🟢 [ACCEPT] Emergency ID:", emergencyId);
+
+      // ════════════════════════════════════════════════════════════════
+      // CRITICAL: Get authenticated user FIRST to verify auth context
+      // ════════════════════════════════════════════════════════════════
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !user) {
+        console.error("🔴 [ACCEPT ERROR] Authentication failed:", authError);
+        throw new Error("You must be logged in to accept requests");
+      }
+
+      console.log("🟢 [ACCEPT] Authenticated driver:", user.id);
+
+      // ════════════════════════════════════════════════════════════════
+      // Get driver's name for notifications
+      // ════════════════════════════════════════════════════════════════
+      const { data: driverProfile, error: profileError } = await supabase
+        .from("app_user")
+        .select("full_name")
+        .eq("user_id", user.id)
+        .single();
+
+      if (profileError) {
+        console.warn("🟡 [ACCEPT] Failed to fetch driver profile:", profileError);
+      }
+
+      const driverName = driverProfile?.full_name || "a driver";
+      console.log("🟢 [ACCEPT] Driver name:", driverName);
+
+      // ════════════════════════════════════════════════════════════════
+      // Get ALL service requests for this emergency BEFORE any updates
+      // ════════════════════════════════════════════════════════════════
+      console.log("🟢 [ACCEPT] Fetching ALL service requests for emergency...");
+      const { data: allServiceRequests, error: srError } = await supabase
+        .from("service_requests")
+        .select("service_id, shop_id, status")
+        .eq("emergency_id", emergencyId)
+        .eq("status", "pending"); // Only get pending requests
+
+      if (srError) {
+        console.error("🔴 [ACCEPT ERROR] Failed to fetch service requests:", srError);
+        throw new Error(`Failed to fetch service requests: ${srError.message}`);
+      }
+
+      console.log("🟢 [ACCEPT] Found service requests:", allServiceRequests);
+
+      if (!allServiceRequests || allServiceRequests.length === 0) {
+        throw new Error("No pending service requests found");
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // Fetch shop details for ALL shops at once (performance optimization)
+      // ════════════════════════════════════════════════════════════════
+      const shopIds = allServiceRequests.map(sr => sr.shop_id);
+      const { data: allShopDetails, error: shopError } = await supabase
+        .from("shop_details")
+        .select("shop_id, user_id")
+        .in("shop_id", shopIds);
+
+      if (shopError) {
+        console.error("🔴 [ACCEPT ERROR] Failed to fetch shop details:", shopError);
+        throw new Error(`Failed to fetch shop details: ${shopError.message}`);
+      }
+
+      // Create map for quick lookup: shop_id -> user_id
+      const shopOwnerMap = new Map<string, string>();
+      allShopDetails?.forEach(shop => {
+        if (shop.shop_id && shop.user_id) {
+          shopOwnerMap.set(shop.shop_id, shop.user_id);
+        }
+      });
+
+      console.log("🟢 [ACCEPT] Shop owner mapping:", Object.fromEntries(shopOwnerMap));
+
+      // ════════════════════════════════════════════════════════════════
+      // Update the accepted service request
+      // ════════════════════════════════════════════════════════════════
+      console.log("🟢 [ACCEPT] Updating service request status to 'accepted'...");
       const { error: srErr } = await supabase
         .from("service_requests")
         .update({ status: "accepted", accepted_at: now })
         .eq("service_id", serviceId)
         .eq("emergency_id", emergencyId);
-      if (srErr) throw srErr;
+      
+      if (srErr) {
+        console.error("🔴 [ACCEPT ERROR] Failed to update service request:", srErr);
+        throw srErr;
+      }
+      console.log("✅ [ACCEPT] Service request marked as accepted");
 
-      // 2) Update the emergency status to in_process + accepted_by + accepted_at
-      const patch: Partial<EmergencyRow> & any = {
+      // ════════════════════════════════════════════════════════════════
+      // Update emergency status
+      // ════════════════════════════════════════════════════════════════
+      const emergencyPatch: Partial<EmergencyRow> & any = {
         emergency_status: "in_process",
         accepted_at: now,
       };
-      if (acceptedByUser) patch.accepted_by = acceptedByUser;
+      if (acceptedByUser) {
+        emergencyPatch.accepted_by = acceptedByUser;
+      }
 
+      console.log("🟢 [ACCEPT] Updating emergency status to 'in_process'...");
       const { error: emErr } = await supabase
         .from("emergency")
-        .update(patch)
+        .update(emergencyPatch)
         .eq("emergency_id", emergencyId);
-      if (emErr) throw emErr;
+      
+      if (emErr) {
+        console.error("🔴 [ACCEPT ERROR] Failed to update emergency:", emErr);
+        throw emErr;
+      }
+      console.log("✅ [ACCEPT] Emergency marked as in_process");
 
-      // ✅ REMOVED: Automatic conversation creation logic
-      // The conversation should only be created when user explicitly clicks "Message"
+      // ════════════════════════════════════════════════════════════════
+      // Send notifications to all shops
+      // ════════════════════════════════════════════════════════════════
+      console.log("🟢 [NOTIFICATION] Starting notification process...");
 
-      // Optimistic UI:
+      // Track results for debugging
+      const notificationResults: Array<{
+        serviceId: string;
+        shopId: string;
+        type: "accepted" | "rejected";
+        success: boolean;
+        error?: string;
+      }> = [];
+
+      // Process EACH service request and send appropriate notification
+      for (const request of allServiceRequests) {
+        const shopOwnerId = shopOwnerMap.get(request.shop_id);
+
+        if (!shopOwnerId) {
+          console.error("🔴 [NOTIFICATION ERROR] No shop owner found for shop:", request.shop_id);
+          notificationResults.push({
+            serviceId: request.service_id,
+            shopId: request.shop_id,
+            type: request.service_id === serviceId ? "accepted" : "rejected",
+            success: false,
+            error: "Shop owner not found",
+          });
+          continue;
+        }
+
+        // Determine if this is the accepted or rejected shop
+        const isAccepted = request.service_id === serviceId;
+        const notificationType = isAccepted ? "accepted" : "rejected";
+
+        console.log(`🟢 [NOTIFICATION] Processing ${notificationType.toUpperCase()} shop:`, {
+          serviceId: request.service_id,
+          shopId: request.shop_id,
+          shopOwnerId,
+        });
+
+        // Prepare notification data
+        const notificationData = isAccepted
+          ? {
+              from_user_id: user.id, // CRITICAL: Must match auth.uid()
+              to_user_id: shopOwnerId,
+              type: "service_request_accepted",
+              title: "Offer Accepted! 🎉",
+              body: `Your offer has been accepted by ${driverName}. You may now proceed to the location.`,
+              data: {
+                emergency_id: emergencyId,
+                service_id: serviceId,
+                driver_name: driverName,
+                event: "driver_accepted_offer",
+              },
+            }
+          : {
+              from_user_id: user.id, // CRITICAL: Must match auth.uid()
+              to_user_id: shopOwnerId,
+              type: "service_request_rejected",
+              title: "Request Closed",
+              body: `${driverName} has accepted another mechanic's offer. Thank you for your willingness to help!`,
+              data: {
+                emergency_id: emergencyId,
+                service_id: request.service_id,
+                driver_name: driverName,
+                event: "driver_chose_another_mechanic",
+              },
+            };
+
+        console.log(`🟢 [NOTIFICATION] Inserting ${notificationType} notification:`, {
+          from: user.id,
+          to: shopOwnerId,
+          type: notificationData.type,
+        });
+
+        // Insert notification with .select() to catch silent failures
+        const { data: notifData, error: notifError } = await supabase
+          .from("notifications")
+          .insert(notificationData)
+          .select(); // CRITICAL: Returns inserted row, exposes RLS errors
+
+        if (notifError) {
+          console.error(`🔴 [NOTIFICATION ERROR] ${notificationType} notification failed:`, {
+            error: notifError,
+            code: notifError.code,
+            message: notifError.message,
+            details: notifError.details,
+            hint: notifError.hint,
+          });
+
+          // Provide helpful error messages for common RLS errors
+          if (notifError.code === "42501") {
+            console.error("🔴 [RLS ERROR] Row-level security policy blocked this insert.");
+            console.error("🔴 [RLS ERROR] Check that:");
+            console.error("   1. RLS policy allows INSERT where from_user_id = auth.uid()");
+            console.error("   2. auth.uid() matches:", user.id);
+            console.error("   3. Policy uses WITH CHECK clause, not just USING");
+          }
+
+          notificationResults.push({
+            serviceId: request.service_id,
+            shopId: request.shop_id,
+            type: notificationType as "accepted" | "rejected",
+            success: false,
+            error: notifError.message,
+          });
+        } else if (!notifData || notifData.length === 0) {
+          console.error(`🔴 [NOTIFICATION ERROR] ${notificationType} notification returned no data (possible RLS block)`);
+          notificationResults.push({
+            serviceId: request.service_id,
+            shopId: request.shop_id,
+            type: notificationType as "accepted" | "rejected",
+            success: false,
+            error: "No data returned - RLS may be blocking",
+          });
+        } else {
+          console.log(`✅ [NOTIFICATION SUCCESS] ${notificationType} notification created:`, notifData[0]);
+          notificationResults.push({
+            serviceId: request.service_id,
+            shopId: request.shop_id,
+            type: notificationType as "accepted" | "rejected",
+            success: true,
+          });
+        }
+
+        // If rejected, update the service request status
+        if (!isAccepted) {
+          const { error: updateError } = await supabase
+            .from("service_requests")
+            .update({ 
+              status: "rejected", 
+              rejected_at: now,
+            })
+            .eq("service_id", request.service_id);
+
+          if (updateError) {
+            console.error("🔴 [NOTIFICATION ERROR] Failed to update rejected service request:", updateError);
+          }
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // Log notification summary
+      // ════════════════════════════════════════════════════════════════
+      const successCount = notificationResults.filter(r => r.success).length;
+      const failCount = notificationResults.filter(r => !r.success).length;
+
+      console.log("🟢 [NOTIFICATION SUMMARY]", {
+        total: notificationResults.length,
+        successful: successCount,
+        failed: failCount,
+        results: notificationResults,
+      });
+
+      // Check if accepted notification failed (critical)
+      const acceptedNotifFailed = notificationResults.find(
+        r => r.type === "accepted" && !r.success
+      );
+
+      if (acceptedNotifFailed) {
+        console.warn("⚠️ [CRITICAL WARNING] Accepted notification failed to send");
+        Alert.alert(
+          "Partial Success",
+          "Request accepted, but the mechanic may not have been notified. Please contact them directly.",
+          [{ text: "OK" }]
+        );
+      } else if (failCount > 0) {
+        console.warn(`⚠️ [WARNING] ${failCount} notification(s) failed to send`);
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // Update optimistic UI
+      // ════════════════════════════════════════════════════════════════
       setItems((prev) =>
         prev.map((it) =>
           it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
         )
       );
 
-      // This list shows only pending -> remove it + refresh counts
       setReqLists((prev) => {
         const cur = prev[emergencyId] ?? [];
         const next = cur.filter((r) => r.service_id !== serviceId);
         return { ...prev, [emergencyId]: next };
       });
+
       setReqCounts((prev) => ({
         ...prev,
         [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
       }));
 
-      // Also refresh from server (in case there are other rows)
+      // Refresh from server to ensure consistency
       const em = items.find((i) => i.id === emergencyId);
-      if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
+      if (em) {
+        await fetchSRListFor(emergencyId, em.lat, em.lon);
+      }
+
+      console.log("✅ [ACCEPT] Accept process completed successfully");
+
     } catch (e: any) {
-      Alert.alert("Accept failed", e?.message ?? "Please try again.");
+      console.error("🔴 [ACCEPT ERROR] Accept process failed:", {
+        error: e,
+        message: e?.message,
+        stack: e?.stack,
+      });
+      
+      Alert.alert(
+        "Accept failed",
+        e?.message || "An unexpected error occurred. Please try again."
+      );
     } finally {
       setLoading({ visible: false });
     }
   },
-  [items, fetchSRListFor]
+  [items, fetchSRListFor, setItems, setReqLists, setReqCounts, setLoading]
 );
 
 // 🔵 Cancel emergency (when no offers received within 5 min)

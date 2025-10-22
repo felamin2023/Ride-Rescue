@@ -31,6 +31,9 @@ export type SideDrawerProps = {
   postLogoutHref?: string;
   logoSource?: any;
   appName?: string;
+  // Add these new props for counts
+  unreadMessageCount?: number;
+  unreadNotificationCount?: number;
 };
 
 const DEFAULT_ITEMS: Item[] = [
@@ -45,7 +48,7 @@ const DEFAULT_ITEMS: Item[] = [
     href: "/driver/message",
     icon: "chatbubble-ellipses-outline",
   },
-    {
+  {
     label: "Request Status",
     href: "/driver/requeststatus",
     icon: "document-text-outline",
@@ -58,6 +61,19 @@ const DEFAULT_ITEMS: Item[] = [
   { label: "Reviews", href: "/driver/reviews", icon: "star-outline" },
 ];
 
+// Badge Component
+function Badge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  
+  return (
+    <View className="bg-red-500 rounded-full min-w-[20px] h-[20px] justify-center items-center">
+      <Text className="text-white text-[10px] font-bold px-1">
+        {count > 99 ? "99+" : count}
+      </Text>
+    </View>
+  );
+}
+
 export default function SideDrawer({
   open,
   onClose,
@@ -66,6 +82,9 @@ export default function SideDrawer({
   postLogoutHref = "/(auth)/login",
   logoSource,
   appName = "RIDERESCUE",
+  // New props with defaults
+  unreadMessageCount = 0,
+  unreadNotificationCount = 0,
 }: SideDrawerProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -105,47 +124,43 @@ export default function SideDrawer({
     }
   }, [open, opacity, translateX]);
 
-const handleLogout = async () => {
-  try {
-    onClose(); // close drawer immediately
+  const handleLogout = async () => {
+    try {
+      onClose(); // close drawer immediately
 
-    // Get current user first
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (user) {
-      // Update online status first - this is the most important part
-      const { error: updateError } = await supabase
-        .from("app_user")
-        .update({ 
-          is_online: false,
-        })
-        .eq("user_id", user.id);
+      // Get current user first
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (user) {
+        // Update online status first - this is the most important part
+        const { error: updateError } = await supabase
+          .from("app_user")
+          .update({ 
+            is_online: false,
+          })
+          .eq("user_id", user.id);
 
-      if (updateError) {
-        console.error("Failed to update online status:", updateError);
+        if (updateError) {
+          console.error("Failed to update online status:", updateError);
+        }
       }
 
-      // Instead of trying to manage the channel directly, we'll rely on the database update
-      // The presence channel will automatically clean up when the auth session ends
+      // Call custom logout handler if provided
+      if (onLogout) {
+        await onLogout();
+      } else {
+        // Default logout behavior - this will also disconnect any realtime channels
+        await supabase.auth.signOut();
+      }
+
+      // Navigate after everything is complete
+      router.replace(postLogoutHref);
+      
+    } catch (e: any) {
+      console.error("Logout error:", e);
+      Alert.alert("Logout failed", e?.message ?? "Please try again.");
     }
-
-    // Call custom logout handler if provided
-    if (onLogout) {
-      await onLogout();
-    } else {
-      // Default logout behavior - this will also disconnect any realtime channels
-      await supabase.auth.signOut();
-    }
-
-    // Navigate after everything is complete
-    router.replace(postLogoutHref);
-    
-  } catch (e: any) {
-    console.error("Logout error:", e);
-    Alert.alert("Logout failed", e?.message ?? "Please try again.");
-  }
-};
-
+  };
 
   return (
     <>
@@ -208,13 +223,34 @@ const handleLogout = async () => {
                       active ? "bg-slate-100" : "bg-transparent"
                     }`}
                   >
-                    <Ionicons
-                      name={it.icon}
-                      size={22}
-                      color={active ? "#0F2547" : "#111827"}
-                    />
+                    <View className="relative">
+                      <Ionicons
+                        name={it.icon}
+                        size={22}
+                        color={active ? "#0F2547" : "#111827"}
+                      />
+                      
+                      {/* Show badge for Messages */}
+                      {it.label === "Messages" && unreadMessageCount > 0 && (
+                        <View className="absolute -top-2 -right-2 bg-red-500 rounded-full min-w-[18px] h-[18px] justify-center items-center border-2 border-white">
+                          <Text className="text-white text-[10px] font-bold">
+                            {unreadMessageCount > 99 ? "99+" : unreadMessageCount}
+                          </Text>
+                        </View>
+                      )}
+                      
+                      {/* Show badge for Notifications */}
+                      {it.label === "Notifications" && unreadNotificationCount > 0 && (
+                        <View className="absolute -top-2 -right-2 bg-red-500 rounded-full min-w-[18px] h-[18px] justify-center items-center border-2 border-white">
+                          <Text className="text-white text-[10px] font-bold">
+                            {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                    
                     <Text
-                      className={`text-[16px] ${
+                      className={`text-[16px] flex-1 ${
                         active
                           ? "text-[#0F2547] font-semibold"
                           : "text-[#111827]"
@@ -223,6 +259,13 @@ const handleLogout = async () => {
                     >
                       {it.label}
                     </Text>
+
+                    {/* Show badge on the right side as alternative option */}
+                    {/* Uncomment below if you prefer badges on the right side */}
+                    {/* 
+                    {it.label === "Messages" && <Badge count={unreadMessageCount} />}
+                    {it.label === "Notifications" && <Badge count={unreadNotificationCount} />}
+                    */}
                   </Pressable>
                 </Link>
               );

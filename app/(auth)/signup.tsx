@@ -67,6 +67,41 @@ const SERVICES = [
   "Vulcanizing/Tire Patching",
 ];
 
+// ── Time format helpers ──────────────────────────────────────────────────
+const convertTo12Hour = (time24: string) => {
+  if (!time24 || !time24.includes(':')) return '';
+  try {
+    const [hours, minutes] = time24.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return '';
+    const period = hours >= 12 ? 'PM' : 'AM';
+    const hours12 = hours % 12 || 12;
+    return `${hours12}:${minutes.toString().padStart(2, '0')} ${period}`;
+  } catch {
+    return '';
+  }
+};
+
+const convertTo24Hour = (time12: string) => {
+  if (!time12) return '';
+  try {
+    const [time, period] = time12.split(' ');
+    if (!time || !time.includes(':')) return '';
+    
+    let [hours, minutes] = time.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return '';
+    
+    if (period === 'PM' && hours < 12) {
+      hours += 12;
+    } else if (period === 'AM' && hours === 12) {
+      hours = 0;
+    }
+    
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  } catch {
+    return '';
+  }
+};
+
 // NEW: service_for choices shown to the user (maps to DB values)
 const SERVICE_FOR_CHOICES = [
   { label: "All types of vehicles", value: "all_type" },
@@ -422,6 +457,127 @@ function ActionsDropdown({
   );
 }
 
+// Time Input Component with AM/PM Dropdown
+function TimeInput({
+  value,
+  onChange,
+  placeholder,
+  error,
+  editable = true,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+  placeholder?: string;
+  error?: string;
+  editable?: boolean;
+}) {
+  const [timeValue, setTimeValue] = useState("");
+  const [period, setPeriod] = useState<"AM" | "PM">("AM");
+  const [showPeriodDropdown, setShowPeriodDropdown] = useState(false);
+
+  // Initialize values from props
+  useEffect(() => {
+    if (value) {
+      const parts = value.split(' ');
+      if (parts.length === 2) {
+        setTimeValue(parts[0]);
+        setPeriod(parts[1] as "AM" | "PM");
+      } else {
+        setTimeValue(value);
+        setPeriod("AM");
+      }
+    } else {
+      setTimeValue("");
+      setPeriod("AM");
+    }
+  }, [value]);
+
+  const handleTimeChange = (text: string) => {
+    // Only allow numbers and colon
+    const cleaned = text.replace(/[^0-9:]/g, '');
+    
+    // Auto-insert colon after 2 digits
+    if (cleaned.length === 2 && timeValue.length === 1) {
+      setTimeValue(cleaned + ':');
+    } else if (cleaned.length === 2 && !cleaned.includes(':')) {
+      setTimeValue(cleaned + ':');
+    } else {
+      setTimeValue(cleaned);
+    }
+    
+    // Update parent component
+    if (cleaned.includes(':') && cleaned.length > 4) {
+      onChange(`${cleaned} ${period}`);
+    }
+  };
+
+  const handlePeriodChange = (newPeriod: "AM" | "PM") => {
+    setPeriod(newPeriod);
+    setShowPeriodDropdown(false);
+    if (timeValue) {
+      onChange(`${timeValue} ${newPeriod}`);
+    }
+  };
+
+  const borderCls = error ? "border-red-400" : "border-gray-300";
+
+  return (
+    <View className="gap-1.5">
+      <View
+        className={`flex-row items-center rounded-xl border ${borderCls} bg-white overflow-hidden`}
+        style={editable === false ? { opacity: 0.5 } : undefined}
+      >
+        <TextInput
+          value={timeValue}
+          onChangeText={handleTimeChange}
+          placeholder={placeholder || "hh:mm"}
+          placeholderTextColor="#808080"
+          className="flex-1 py-3 px-3 text-sm text-black"
+          keyboardType="numbers-and-punctuation"
+          editable={editable}
+          maxLength={5}
+        />
+        
+        <Pressable
+          onPress={() => setShowPeriodDropdown(true)}
+          disabled={!editable}
+          className="flex-row items-center border-l border-gray-300 px-3 py-3 bg-gray-50"
+        >
+          <Text className="text-sm text-gray-700 mr-1">{period}</Text>
+          <Ionicons name="chevron-down" size={16} color="#666" />
+        </Pressable>
+      </View>
+
+      {/* Period Dropdown Modal */}
+      <Modal visible={showPeriodDropdown} transparent animationType="fade">
+        <Pressable
+          onPress={() => setShowPeriodDropdown(false)}
+          className="flex-1 justify-center items-center bg-black/25 p-4"
+        >
+          <View className="w-32 rounded-2xl border border-gray-200 bg-white p-2">
+            <TouchableOpacity
+              onPress={() => handlePeriodChange("AM")}
+              className="px-3 py-3 border-b border-gray-100"
+            >
+              <Text className="text-sm text-gray-900">AM</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => handlePeriodChange("PM")}
+              className="px-3 py-3"
+            >
+              <Text className="text-sm text-gray-900">PM</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {error ? (
+        <Text className="text-xs text-red-500 ml-1">{error}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 /* --------------------------------- Screen --------------------------------- */
 export default function Signup() {
   useEffect(() => {
@@ -498,8 +654,8 @@ export default function Signup() {
   const [sAddress, setSAddress] = useState("");
   const [services, setServices] = useState<string[]>([]);
   const [days, setDays] = useState<string[]>([]);
-  const [openTime, setOpenTime] = useState("08:00");
-  const [closeTime, setCloseTime] = useState("22:00");
+  const [openTime, setOpenTime] = useState("08:00 AM");
+  const [closeTime, setCloseTime] = useState("10:00 PM");
   const [sPw, setSPw] = useState("");
   const [sCpw, setSCpw] = useState("");
 
@@ -589,6 +745,26 @@ useEffect(() => {
       prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
     );
   }
+
+
+  const handleSelectAllServices = () => {
+  if (services.length === SERVICES.length) {
+    setServices([]);
+  } else {
+    setServices([...SERVICES]);
+  }
+};
+
+const handleSelectAllDays = () => {
+  if (days.length === DAY_KEYS.length) {
+    setDays([]);
+  } else {
+    setDays([...DAY_KEYS]);
+  }
+};
+
+
+
 
   const addCert = (file: CertFile) => setCerts((prev) => [...prev, file]);
 
@@ -756,16 +932,29 @@ useEffect(() => {
     if (sCpw !== sPw) e.sCpw = "Passwords do not match.";
     if (services.length === 0) e.services = "Pick at least 1 service.";
     if (days.length === 0) e.days = "Pick at least 1 operating day.";
-    if (!openTime.trim() || !isTime(openTime))
-      e.openTime = "Open time (HH:MM) required.";
-    if (!closeTime.trim() || !isTime(closeTime))
-      e.closeTime = "Close time (HH:MM) required.";
-    if (isTime(openTime) && isTime(closeTime)) {
-      const [oh, om] = openTime.split(":").map(Number);
-      const [ch, cm] = closeTime.split(":").map(Number);
-      if (oh * 60 + om >= ch * 60 + cm)
-        e.closeTime = "Close time must be after open time.";
-    }
+    // Convert 12-hour to 24-hour for validation
+const openTime24 = convertTo24Hour(openTime);
+const closeTime24 = convertTo24Hour(closeTime);
+
+if (!openTime.trim()) e.openTime = "Open time required.";
+if (!closeTime.trim()) e.closeTime = "Close time required.";
+
+// Only validate time order if both times are valid
+if (openTime24 && closeTime24) {
+  const [oh, om] = openTime24.split(":").map(Number);
+  const [ch, cm] = closeTime24.split(":").map(Number);
+  if (oh * 60 + om >= ch * 60 + cm) {
+    e.closeTime = "Close time must be after open time.";
+  }
+} else {
+  // If conversion failed but times are entered, show format error
+  if (openTime.trim() && !openTime24) {
+    e.openTime = "Please use format: hh:mm AM/PM";
+  }
+  if (closeTime.trim() && !closeTime24) {
+    e.closeTime = "Please use format: hh:mm AM/PM";
+  }
+}
     if (certs.length === 0)
       e.certificate = "Upload at least one certificate/proof.";
     setErrorsS(e);
@@ -844,7 +1033,7 @@ useEffect(() => {
         setLoading(false);
         Alert.alert(
           "Not signed in",
-          "We couldn’t find your account. Please re-verify your email."
+          "We couldn't find your account. Please re-verify your email."
         );
         return;
       }
@@ -1061,7 +1250,7 @@ useEffect(() => {
         if (!placeIdToUse) throw new Error("Failed to obtain new place_id.");
       }
 
-      // 4) Upsert shop_details INCLUDING place_id now (and set is_verified=false)
+      // 4) Upsert shop_details - FIXED: Store original 12-hour format times
       const { data: upsertShop, error: upsertShopErr } = await supabase
         .from("shop_details")
         .upsert(
@@ -1069,12 +1258,12 @@ useEffect(() => {
             {
               user_id: authUserId,
               services: JSON.stringify(services),
-              certificate_url: JSON.stringify(certificateUrls), // <-- store full public URLs
-              time_open: openTime,
-              time_close: closeTime,
+              certificate_url: JSON.stringify(certificateUrls),
+              time_open: openTime, // Store original 12-hour format
+              time_close: closeTime, // Store original 12-hour format
               days: JSON.stringify(days),
               place_id: placeIdToUse,
-              is_verified: false, // <-- important: pending admin approval
+              is_verified: false,
             },
           ],
           { onConflict: "user_id" }
@@ -1562,8 +1751,8 @@ useEffect(() => {
 
               {!shopListLoading && shopOptions.length === 0 ? (
                 <Text className="text-xs text-gray-500 ml-1">
-                  No available listed shops yet. You can choose “Shop not
-                  Listed”.
+                  No available listed shops yet. You can choose "Shop not
+                  Listed".
                 </Text>
               ) : null}
 
@@ -1931,58 +2120,80 @@ useEffect(() => {
                 onBlur={() => markTouchedS("sAddress")}
               />
 
-              {/* Services */}
+              {/* Services - Updated to ScrollView Checklist */}
               <View className="mt-4 mb-2">
-                <Text className="text-sm font-semibold text-gray-900">
-                  Services offered
-                </Text>
+                <View className="flex-row justify-between items-center">
+                  <Text className="text-sm font-semibold text-gray-900">
+                    Services offered
+                  </Text>
+                  <Pressable
+                    onPress={handleSelectAllServices}
+                    className="border border-gray-300 rounded-lg px-3 py-1"
+                  >
+                    <Text className="text-xs text-gray-700">
+                      {services.length === SERVICES.length ? "Deselect All" : "Select All"}
+                    </Text>
+                  </Pressable>
+                </View>
                 {errorsS.services ? (
                   <Text className="text-xs text-red-500 mt-1">
                     {errorsS.services}
                   </Text>
                 ) : null}
               </View>
-              <View className="flex-row flex-wrap gap-2">
+
+              <ScrollView 
+                style={{ maxHeight: 200 }}
+                className="border border-gray-300 rounded-xl bg-white"
+                nestedScrollEnabled
+              >
                 {SERVICES.map((s) => {
                   const on = services.includes(s);
                   return (
                     <Pressable
                       key={s}
                       onPress={() => !shopLocked && toggleService(s)}
-                      className={`rounded-2xl border px-3 py-1.5 ${
-                        on
-                          ? "border-[#2563EB] bg-[#E6F0FF]"
-                          : "border-gray-300 bg-white"
+                      className={`flex-row items-center px-4 py-3 border-b border-gray-100 ${
+                        on ? "bg-blue-50" : "bg-white"
                       }`}
                       style={shopLocked ? { opacity: 0.5 } : undefined}
                     >
-                      <Text
-                        className={`text-xs ${
-                          on ? "text-[#0F2547]" : "text-gray-800"
-                        }`}
-                      >
+                      <View className={`h-5 w-5 border rounded-md mr-3 items-center justify-center ${
+                        on ? "bg-blue-500 border-blue-500" : "border-gray-400"
+                      }`}>
+                        {on && <Ionicons name="checkmark" size={14} color="white" />}
+                      </View>
+                      <Text className={`text-sm ${on ? "text-blue-700 font-medium" : "text-gray-800"}`}>
                         {s}
                       </Text>
                     </Pressable>
                   );
                 })}
-              </View>
+              </ScrollView>
 
-              {/* Operating days */}
+              {/* Operating days - Updated to Checklist */}
               <View className="mt-5 mb-2">
-                <Text className="text-sm font-semibold text-gray-900">
-                  Operating days
-                </Text>
+                <View className="flex-row justify-between items-center">
+                  <Text className="text-sm font-semibold text-gray-900">
+                    Operating days
+                  </Text>
+                  <Pressable
+                    onPress={handleSelectAllDays}
+                    className="border border-gray-300 rounded-lg px-3 py-1"
+                  >
+                    <Text className="text-xs text-gray-700">
+                      {days.length === DAY_KEYS.length ? "Deselect All" : "Select All"}
+                    </Text>
+                  </Pressable>
+                </View>
                 {errorsS.days ? (
                   <Text className="text-xs text-red-500 mt-1">
                     {errorsS.days}
                   </Text>
                 ) : null}
               </View>
-              <View
-                className="flex-row items-center gap-2"
-                style={shopLocked ? { opacity: 0.5 } : undefined}
-              >
+
+              <View className="border border-gray-300 rounded-xl bg-white p-3">
                 {DAY_LABELS.map((lbl, i) => {
                   const key = DAY_KEYS[i];
                   const on = days.includes(key);
@@ -1990,17 +2201,17 @@ useEffect(() => {
                     <Pressable
                       key={key}
                       onPress={() => !shopLocked && toggleDay(key)}
-                      className={`h-9 w-9 items-center justify-center rounded-full border ${
-                        on
-                          ? "border-[#2563EB] bg-[#E6F0FF]"
-                          : "border-gray-300 bg-white"
+                      className={`flex-row items-center py-2 ${
+                        i < DAY_LABELS.length - 1 ? "border-b border-gray-100" : ""
                       }`}
+                      style={shopLocked ? { opacity: 0.5 } : undefined}
                     >
-                      <Text
-                        className={`text-xs font-bold ${
-                          on ? "text-[#0F2547]" : "text-gray-800"
-                        }`}
-                      >
+                      <View className={`h-5 w-5 border rounded-md mr-3 items-center justify-center ${
+                        on ? "bg-blue-500 border-blue-500" : "border-gray-400"
+                      }`}>
+                        {on && <Ionicons name="checkmark" size={14} color="white" />}
+                      </View>
+                      <Text className={`text-sm ${on ? "text-blue-700 font-medium" : "text-gray-800"}`}>
                         {lbl}
                       </Text>
                     </Pressable>
@@ -2008,7 +2219,7 @@ useEffect(() => {
                 })}
               </View>
 
-              {/* Operating hours */}
+              {/* Operating hours - Updated with AM/PM dropdown */}
               <View className="mt-5 mb-2">
                 <Text className="text-sm font-semibold text-gray-900">
                   Operating hours
@@ -2017,22 +2228,13 @@ useEffect(() => {
               <View className="flex-row gap-3">
                 <View className="flex-1">
                   <Text className="ml-1 text-xs text-gray-600">Opens</Text>
-                  <View
-                    className={`mt-1 rounded-xl border ${
-                      errorsS.openTime ? "border-red-400" : "border-gray-300"
-                    } bg-white px-3`}
-                    style={shopLocked ? { opacity: 0.5 } : undefined}
-                  >
-                    <TextInput
-                      value={openTime}
-                      onChangeText={(t) => setOpenTime(t)}
-                      placeholder="HH:MM (24h)"
-                      placeholderTextColor="#808080"
-                      className="py-3 text-sm text-black"
-                      editable={!shopLocked}
-                      keyboardType="numbers-and-punctuation"
-                    />
-                  </View>
+                  <TimeInput
+                    value={openTime}
+                    onChange={setOpenTime}
+                    placeholder="hh:mm"
+                    error={errorsS.openTime}
+                    editable={!shopLocked}
+                  />
                   {errorsS.openTime ? (
                     <Text className="mt-1 ml-1 text-xs text-red-500">
                       {errorsS.openTime}
@@ -2042,22 +2244,13 @@ useEffect(() => {
 
                 <View className="flex-1">
                   <Text className="ml-1 text-xs text-gray-600">Closes</Text>
-                  <View
-                    className={`mt-1 rounded-xl border ${
-                      errorsS.closeTime ? "border-red-400" : "border-gray-300"
-                    } bg-white px-3`}
-                    style={shopLocked ? { opacity: 0.5 } : undefined}
-                  >
-                    <TextInput
-                      value={closeTime}
-                      onChangeText={(t) => setCloseTime(t)}
-                      placeholder="HH:MM (24h)"
-                      placeholderTextColor="#808080"
-                      className="py-3 text-sm text-black"
-                      editable={!shopLocked}
-                      keyboardType="numbers-and-punctuation"
-                    />
-                  </View>
+                  <TimeInput
+                    value={closeTime}
+                    onChange={setCloseTime}
+                    placeholder="hh:mm"
+                    error={errorsS.closeTime}
+                    editable={!shopLocked}
+                  />
                   {errorsS.closeTime ? (
                     <Text className="mt-1 ml-1 text-xs text-red-500">
                       {errorsS.closeTime}
@@ -2107,7 +2300,7 @@ useEffect(() => {
                   Business proof / certificates
                 </Text>
                 <Text className="text-xs text-gray-500">
-                  Upload at least one (DTI/BIR/Mayor’s permit, etc.).
+                  Upload at least one (DTI/BIR/Mayor's permit, etc.).
                 </Text>
                 {errorsS.certificate ? (
                   <Text className="text-xs text-red-500 mt-1">
@@ -2266,7 +2459,7 @@ useEffect(() => {
               Use camera?
             </Text>
             <Text className="text-gray-900">
-              We’ll open your camera to capture a certificate photo.
+              We'll open your camera to capture a certificate photo.
             </Text>
             <View className="mt-3 flex-row justify-end gap-2">
               <Pressable

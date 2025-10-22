@@ -180,9 +180,9 @@ export default function ConversationListScreen() {
                   >
                     {lastMsg
                       ? lastMsg.type === "image"
-                        ? "📷 Sent a Photo"
+                        ? " Sent a Photo"
                         : lastMsg.type === "location"
-                        ? "📍 Shared their Location"
+                        ? " Shared their Location"
                         : lastMsg.content
                       : "No messages yet"}
                   </Text>

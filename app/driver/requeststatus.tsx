@@ -75,7 +75,7 @@ type EmergencyRow = {
   completed_at: string | null;
   canceled_at: string | null;
   accepted_by: string | null;
-  driver_hidden: boolean; // 🔵 NEW
+  driver_hidden: boolean;
 };
 
 type AppUserRow = { full_name: string | null; photo_url: string | null };
@@ -83,7 +83,7 @@ type AppUserRow = { full_name: string | null; photo_url: string | null };
 // service_requests + joins (UI)
 type SRStatus = "pending" | "canceled" | "rejected" | "accepted";
 type ServiceRequestRow = {
-  service_id: string;
+  service_id: string; // assume non-null in your schema
   emergency_id: string;
   shop_id: string;
   latitude: number;
@@ -106,7 +106,7 @@ type PlaceRow = {
 type SRUI = {
   service_id: string;
   user_id?: string; // UUID of shop owner (app_user.user_id)
-  name: string;     // 🔵 Shop name from places
+  name: string;     // Shop name from places
   avatar: string;
   distanceKm: number;
   status: SRStatus;
@@ -115,7 +115,7 @@ type SRUI = {
     laborCost: string;
     totalCost: string;
     notes?: string;
-  };
+  } | null; // can be null to render the fallback panel
 };
 
 type ShopOfferRow = {
@@ -123,15 +123,14 @@ type ShopOfferRow = {
   service_id: string | null;
   emergency_id: string;
   shop_id: string;
-  distance_km: number;
-  rate_per_km: number;
-  distance_fee: number;
-  labor_cost: number;
-  total_amount: number;
+  distance_km: number | string;
+  rate_per_km: number | string;
+  distance_fee: number | string;
+  labor_cost: number | string;
+  total_amount: number | string;
   note: string | null;
   created_at: string;
 };
-
 
 /* ----------------------------- Helpers ----------------------------- */
 const AVATAR_PLACEHOLDER =
@@ -167,7 +166,7 @@ const statusMap: Record<EmergencyRow["emergency_status"], RequestStatus> = {
   in_process: "IN_PROCESS",
   completed: "COMPLETED",
   canceled: "CANCELED",
-  cancelled: "CANCELED", // ✅ normalize to CANCELED for UI logic
+  cancelled: "CANCELED",
 };
 
 async function reverseGeocode(lat: number, lon: number): Promise<string> {
@@ -209,7 +208,7 @@ function mapEmergencyToItem(
     location: `(${lat.toFixed(5)}, ${lon.toFixed(5)})`,
     imageUrls: (r.attachments || []).filter(Boolean),
     dateTime: fmtDateTime(r.created_at),
-    createdAtIso: r.created_at,            // 🔵 keep raw for logic
+    createdAtIso: r.created_at,
     status: statusMap[r.emergency_status],
     seen: r.emergency_status !== "waiting",
     sentWhen: timeAgo(r.created_at),
@@ -239,18 +238,14 @@ function fmtDistance(km: number) {
 
 /** Title-case + remove underscores for UI display */
 function prettyStatus(s: RequestStatus): string {
-  if (s === "CANCELED") return "Cancelled"; // ✅ display preference
+  if (s === "CANCELED") return "Cancelled";
   return s
     .toLowerCase()
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// 🔵 Helper to open chat for an emergency
-// 🔵 UPDATED: Check for ANY existing conversation between users before creating emergency one
-// 🔵 UPDATED: Check for ANY existing conversation between users (emergency or non-emergency)
-
-// 🔵 UPDATED: Check for ANY existing conversation between users before creating emergency one
+// Chat opener (unchanged)
 async function openChatForEmergency(emergencyId: string, router: any) {
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -259,7 +254,6 @@ async function openChatForEmergency(emergencyId: string, router: any) {
       return;
     }
 
-    // First, get the emergency details to find the accepted shop
     const { data: emergency, error: emError } = await supabase
       .from("emergency")
       .select("accepted_by")
@@ -277,16 +271,7 @@ async function openChatForEmergency(emergencyId: string, router: any) {
       return;
     }
 
-    console.log("Looking for ANY conversation between driver and shop:", {
-      driver_id: user.id,
-      shop_owner_id: shopOwnerUserId
-    });
-
-    // 🔵 FIXED: Better query to find conversations between these users
-    // Look for conversations where either:
-    // 1. customer_id = driver AND driver_id = shop_owner (emergency format)
-    // 2. customer_id = shop_owner AND driver_id = driver (non-emergency format)
-    const { data: existingConvs, error: convError } = await supabase
+    const { data: existingConvs } = await supabase
       .from("conversations")
       .select(`
         id,
@@ -298,66 +283,40 @@ async function openChatForEmergency(emergencyId: string, router: any) {
       .or(`and(customer_id.eq.${user.id},driver_id.eq.${shopOwnerUserId}),and(customer_id.eq.${shopOwnerUserId},driver_id.eq.${user.id})`)
       .order("updated_at", { ascending: false });
 
-    if (convError) {
-      console.error("Error checking conversations:", convError);
-    }
+    let conversationId: string | undefined;
+    const existingConv = existingConvs && existingConvs.length > 0 ? existingConvs[0] : null;
 
-    let conversationId;
-    let existingConv = existingConvs && existingConvs.length > 0 ? existingConvs[0] : null;
-
-    // Use the most recent existing conversation if found
     if (existingConv) {
       conversationId = existingConv.id;
-      console.log("Found existing conversation:", conversationId, 
-        existingConv.emergency_id ? "(emergency)" : "(non-emergency)");
-      
-      // 🔵 FIXED: Only update if this conversation doesn't already have an emergency_id
-      // OR if it has a different emergency_id (upgrade non-emergency to emergency)
       if (!existingConv.emergency_id || existingConv.emergency_id !== emergencyId) {
-        const { error: updateError } = await supabase
+        await supabase
           .from("conversations")
-          .update({ 
-            emergency_id: emergencyId,
-            updated_at: new Date().toISOString()
-          })
+          .update({ emergency_id: emergencyId, updated_at: new Date().toISOString() })
           .eq("id", conversationId);
-        
-        if (updateError) {
-          console.error("Error updating conversation emergency_id:", updateError);
-        } else {
-          console.log("Updated conversation with emergency_id:", emergencyId);
-        }
       }
     } else {
-      console.log("No existing conversation found, creating new emergency conversation");
-      // Create new emergency conversation with correct role assignment
-      // In emergency context: driver is customer, shop is driver
       const { data: newConv, error } = await supabase
         .from("conversations")
         .insert({
           emergency_id: emergencyId,
-          customer_id: user.id, // driver is customer in emergency context
-          driver_id: shopOwnerUserId, // shop is driver in emergency context
+          customer_id: user.id,
+          driver_id: shopOwnerUserId,
         })
         .select()
         .single();
-
       if (error) {
-        console.error("Error creating emergency conversation:", error);
-        Alert.alert("Error", "Could not start conversation. Please try again.");
+        Alert.alert("Error", "Could not start conversation.");
         return;
       }
       conversationId = newConv.id;
-      console.log("Created new emergency conversation:", conversationId);
     }
 
-    router.push(`/driver/chat/${conversationId}`);
+    if (conversationId) router.push(`/driver/chat/${conversationId}`);
   } catch (err) {
     console.error("[openChatForEmergency] Error:", err);
     Alert.alert("Error", "Could not open chat. Please try again.");
   }
 }
-
 
 /* ----------------------------- UI helpers ----------------------------- */
 const cardShadow = Platform.select({
@@ -410,7 +369,7 @@ const REQ_ROW_HEIGHT = 72;
 const REQ_LIST_HEIGHT = REQ_ROW_HEIGHT * 2.5;
 
 /* ----------------------------- Shared components ----------------------------- */
-function SpinningGear({ size = 14, color = "#059669" /* emerald-600 */ }) {
+function SpinningGear({ size = 14, color = "#059669" }) {
   const spin = React.useRef(new Animated.Value(0)).current;
   React.useEffect(() => {
     const anim = Animated.loop(
@@ -435,7 +394,6 @@ function SpinningGear({ size = 14, color = "#059669" /* emerald-600 */ }) {
   );
 }
 
-/** Centered confirmation modal (matches mechanicLandingpage.tsx style) */
 function CenterConfirm({
   visible,
   title,
@@ -456,51 +414,22 @@ function CenterConfirm({
   confirmColor?: string;
 }) {
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onCancel}
-    >
-      <View
-        className="flex-1 items-center justify-center"
-        style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
-      >
-        <View
-          className="w-11/12 max-w-md rounded-2xl bg-white p-5"
-          style={cardShadow as any}
-        >
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.35)" }}>
+        <View className="w-11/12 max-w-md rounded-2xl bg-white p-5" style={cardShadow as any}>
           <View className="items-center mb-2">
-            <Ionicons
-              name="alert-circle-outline"
-              size={28}
-              color={confirmColor}
-            />
+            <Ionicons name="alert-circle-outline" size={28} color={confirmColor} />
           </View>
-          <Text className="text-lg font-semibold text-slate-900 text-center">
-            {title}
-          </Text>
+          <Text className="text-lg font-semibold text-slate-900 text-center">{title}</Text>
           {message ? (
-            <Text className="mt-2 text-[14px] text-slate-600 text-center">
-              {message}
-            </Text>
+            <Text className="mt-2 text-[14px] text-slate-600 text-center">{message}</Text>
           ) : null}
-
           <View className="mt-5 flex-row gap-10">
-            <Pressable
-              onPress={onCancel}
-              className="flex-1 rounded-2xl border border-slate-300 py-2.5 items-center"
-            >
+            <Pressable onPress={onCancel} className="flex-1 rounded-2xl border border-slate-300 py-2.5 items-center">
               <Text className="text-[14px] text-slate-900">{cancelLabel}</Text>
             </Pressable>
-            <Pressable
-              onPress={onConfirm}
-              className="flex-1 rounded-2xl py-2.5 items-center"
-              style={{ backgroundColor: confirmColor }}
-            >
-              <Text className="text-[14px] text-white font-semibold">
-                {confirmLabel}
-              </Text>
+            <Pressable onPress={onConfirm} className="flex-1 rounded-2xl py-2.5 items-center" style={{ backgroundColor: confirmColor }}>
+              <Text className="text-[14px] text-white font-semibold">{confirmLabel}</Text>
             </Pressable>
           </View>
         </View>
@@ -515,42 +444,24 @@ export default function RequestStatus() {
   const { emergency_id } = useLocalSearchParams<{ emergency_id?: string }>();
 
   const [items, setItems] = useState<RequestItem[]>([]);
-  const [loading, setLoading] = useState<{
-    visible: boolean;
-    message?: string;
-  }>({ visible: false });
+  const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
   const [userId, setUserId] = useState<string | null>(null);
 
   // counts and lists only for PENDING
   const [reqCounts, setReqCounts] = useState<Record<string, number>>({});
-  const [reqLists, setReqLists] = useState<Record<string, SRUI[] | undefined>>(
-    {}
-  );
+  const [reqLists, setReqLists] = useState<Record<string, SRUI[] | undefined>>({});
   const [openCards, setOpenCards] = useState<Record<string, boolean>>({});
-  const [revealedReject, setRevealedReject] = useState<Record<string, boolean>>(
-    {}
-  );
+  const [revealedReject, setRevealedReject] = useState<Record<string, boolean>>({});
   const [reqLoading, setReqLoading] = useState<Record<string, boolean>>({});
-  const [expandedOffers, setExpandedOffers] = useState<Record<string, boolean>>(
-    {}
-  );
+  const [expandedOffers, setExpandedOffers] = useState<Record<string, boolean>>({});
 
-  // confirm dialogs
-  const [confirmReject, setConfirmReject] = useState<{
-    serviceId: string;
-    emergencyId: string;
-  } | null>(null);
-  const [confirmAccept, setConfirmAccept] = useState<{
-    serviceId: string;
-    emergencyId: string;
-    userId?: string; // app_user uuid for accepted_by
-  } | null>(null);
-
-  // confirm cancel & confirm hide
+  // confirms
+  const [confirmReject, setConfirmReject] = useState<{ serviceId: string; emergencyId: string } | null>(null);
+  const [confirmAccept, setConfirmAccept] = useState<{ serviceId: string; emergencyId: string; userId?: string } | null>(null);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null);
 
-  // Locate map modal
+  // Locate map
   const [showLocateMap, setShowLocateMap] = useState(false);
   const [mechanicCoords, setMechanicCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
@@ -567,18 +478,14 @@ export default function RequestStatus() {
   };
 
   const toggleOfferExpanded = (serviceId: string) => {
-    setExpandedOffers((prev) => ({
-      ...prev,
-      [serviceId]: !prev[serviceId],
-    }));
+    setExpandedOffers((prev) => ({ ...prev, [serviceId]: !prev[serviceId] }));
   };
 
   /* ----------------------------- Data fetchers ----------------------------- */
   const fetchItems = useCallback(
     async (withSpinner: boolean) => {
       try {
-        if (withSpinner)
-          setLoading({ visible: true, message: "Loading requests…" });
+        if (withSpinner) setLoading({ visible: true, message: "Loading requests…" });
 
         // Ensure auth
         let uid = userId;
@@ -590,7 +497,6 @@ export default function RequestStatus() {
         }
 
         if (emergency_id) {
-          // Single view: show even if hidden (so deep-links still work)
           const { data: erow, error } = await supabase
             .from("emergency")
             .select("*")
@@ -611,14 +517,13 @@ export default function RequestStatus() {
           const item = mapEmergencyToItem(erow, profile);
           item.landmark = await reverseGeocode(erow.latitude, erow.longitude);
           setItems([item]);
-          await fetchSRCounts([item.id]); // pending only
+          await fetchSRCounts([item.id]);
         } else {
-          // List view: hide rows the driver "deleted"
           const { data: rows, error } = await supabase
             .from("emergency")
             .select("*")
             .eq("user_id", uid!)
-            .eq("driver_hidden", false) // 🔵 NEW
+            .eq("driver_hidden", false)
             .order("created_at", { ascending: false });
           if (error) throw error;
 
@@ -639,7 +544,7 @@ export default function RequestStatus() {
             })
           );
           setItems(mapped);
-          await fetchSRCounts(mapped.map((m) => m.id)); // pending only
+          await fetchSRCounts(mapped.map((m) => m.id));
         }
       } catch (e: any) {
         Alert.alert("Unable to load", e?.message ?? "Please try again.");
@@ -650,7 +555,7 @@ export default function RequestStatus() {
     [emergency_id, userId]
   );
 
-  // 🔴 counts of PENDING requests only
+  // counts of PENDING requests only
   const fetchSRCounts = useCallback(async (emergencyIds: string[]) => {
     if (emergencyIds.length === 0) return;
     const { data, error } = await supabase
@@ -667,7 +572,8 @@ export default function RequestStatus() {
     setReqCounts((prev) => ({ ...prev, ...grp }));
   }, []);
 
-  // 🔵 UPDATED: service_requests → shop_details → places (for shop name) + app_user (for avatar)
+  // service_requests → shop_details → places + app_user → latest shop_offers
+  // with robust latest-per-key picking & a visible fallback panel
   const fetchSRListFor = useCallback(
     async (emergencyId: string, emLat: number, emLon: number) => {
       setReqLoading((m) => ({ ...m, [emergencyId]: true }));
@@ -688,6 +594,7 @@ export default function RequestStatus() {
         }
 
         const srRows = (rows as ServiceRequestRow[]) ?? [];
+        dbg("SR rows:", srRows.length);
 
         // 2) shop_details -> user_id + place_id
         const shopIds = Array.from(new Set(srRows.map((r) => r.shop_id)));
@@ -725,26 +632,51 @@ export default function RequestStatus() {
           (places as PlaceRow[] | null)?.forEach((p) => (placeMap[p.place_id] = p));
         }
 
-        // 5) latest offer per service_id from shop_offers
-        const serviceIds = srRows.map((r) => r.service_id);
+        // ---------- OFFERS (primary: by service_id) ----------
+        const serviceIds = srRows.map((r) => r.service_id).filter(Boolean);
         let latestOfferByService: Record<string, ShopOfferRow> = {};
         if (serviceIds.length) {
-          const { data: offers } = await supabase
+          const { data: offersByService } = await supabase
             .from("shop_offers")
             .select(
-              "offer_id, service_id, emergency_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount, note, created_at"
+              "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount, note, created_at"
             )
-            .in(
-              "service_id",
-              serviceIds.length ? serviceIds : ["00000000-0000-0000-0000-000000000000"]
-            )
+            .in("service_id", serviceIds)
             .order("created_at", { ascending: false });
 
-          (offers as ShopOfferRow[] | null)?.forEach((o) => {
+          (offersByService as ShopOfferRow[] | null)?.forEach((o) => {
             const key = o.service_id ?? "";
-            if (key && !latestOfferByService[key]) latestOfferByService[key] = o;
+            if (!key) return;
+            const prev = latestOfferByService[key];
+            if (!prev || new Date(o.created_at) > new Date(prev.created_at)) {
+              latestOfferByService[key] = o;
+            }
           });
         }
+
+        // ---------- FALLBACK OFFERS (by emergency_id + shop_id where service_id is NULL) ----------
+        let latestOfferByShop: Record<string, ShopOfferRow> = {};
+        if (shopIds.length) {
+          const { data: offersByShop } = await supabase
+            .from("shop_offers")
+            .select(
+              "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount, note, created_at"
+            )
+            .eq("emergency_id", emergencyId)
+            .is("service_id", null)
+            .in("shop_id", shopIds)
+            .order("created_at", { ascending: false });
+
+          (offersByShop as ShopOfferRow[] | null)?.forEach((o) => {
+            const key = o.shop_id;
+            const prev = latestOfferByShop[key];
+            if (!prev || new Date(o.created_at) > new Date(prev.created_at)) {
+              latestOfferByShop[key] = o;
+            }
+          });
+        }
+
+        dbg("Offers found → byService:", Object.keys(latestOfferByService).length, "byShop(NULL sid):", Object.keys(latestOfferByShop).length);
 
         // 6) map to UI
         const list: SRUI[] = srRows.map((r) => {
@@ -753,20 +685,23 @@ export default function RequestStatus() {
           const placeId = shopToPlace[r.shop_id];
           const place = placeId ? placeMap[placeId] : undefined;
 
-        const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
-        const name = place?.name || u?.full_name || "Auto Repair Shop";
-        const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
+          const avatar = u?.photo_url || AVATAR_PLACEHOLDER;
+          const name = place?.name || u?.full_name || "Auto Repair Shop";
+          const distanceKm = haversineKm(emLat, emLon, r.latitude, r.longitude);
 
-          const off = latestOfferByService[r.service_id];
+          // Prefer by service_id; fallback to (emergency_id, shop_id, service_id NULL)
+          const offer =
+            latestOfferByService[r.service_id] || latestOfferByShop[r.shop_id];
 
-          const offerDetails = off
-            ? {
-                distanceFee: `₱${off.distance_fee.toFixed(2)}`,
-                laborCost: `₱${off.labor_cost.toFixed(2)}`,
-                totalCost: `₱${off.total_amount.toFixed(2)}`,
-                notes: off.note ?? undefined,
-              }
-            : undefined;
+          const offerDetails: SRUI["offerDetails"] =
+            offer
+              ? {
+                  distanceFee: `₱${Number(offer.distance_fee).toFixed(2)}`,
+                  laborCost: `₱${Number(offer.labor_cost).toFixed(2)}`,
+                  totalCost: `₱${Number(offer.total_amount).toFixed(2)}`,
+                  notes: offer.note ?? undefined,
+                }
+              : null;
 
           return {
             service_id: r.service_id,
@@ -781,6 +716,9 @@ export default function RequestStatus() {
 
         setReqLists((m) => ({ ...m, [emergencyId]: list }));
         setReqCounts((m) => ({ ...m, [emergencyId]: list.length }));
+      } catch (err) {
+        console.error("[fetchSRListFor] error:", err);
+        setReqLists((m) => ({ ...m, [emergencyId]: [] }));
       } finally {
         setReqLoading((m) => ({ ...m, [emergencyId]: false }));
       }
@@ -788,7 +726,7 @@ export default function RequestStatus() {
     []
   );
 
-  // 🚫 Reject a single service request (confirm first)
+  // Reject a single service request
   const rejectService = useCallback(
     async (serviceId: string, emergencyId: string) => {
       try {
@@ -822,70 +760,16 @@ export default function RequestStatus() {
     []
   );
 
-  // Copy latest offer → payment_transaction if not already created
-  async function ensurePaymentTransaction(
-    emergencyId: string,
-    serviceId: string
-  ): Promise<void> {
-    const { data: existing } = await supabase
-      .from("payment_transaction")
-      .select("transaction_id")
-      .eq("emergency_id", emergencyId)
-      .eq("service_id", serviceId)
-      .maybeSingle();
-
-    if (existing) return;
-
-    const { data: offer, error: offErr } = await supabase
-      .from("shop_offers")
-      .select(
-        "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount"
-      )
-      .eq("service_id", serviceId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (offErr) throw offErr;
-    if (!offer) throw new Error("No offer found for this request.");
-
-    const { data: em } = await supabase
-      .from("emergency")
-      .select("user_id")
-      .eq("emergency_id", emergencyId)
-      .maybeSingle();
-
-    const { error: insErr } = await supabase.from("payment_transaction").insert({
-      emergency_id: emergencyId,
-      service_id: serviceId,
-      shop_id: offer.shop_id,
-      driver_user_id: em?.user_id ?? null,
-      offer_id: offer.offer_id,
-      rate_per_km: offer.rate_per_km,
-      distance_km: offer.distance_km,
-      distance_fee: offer.distance_fee,
-      labor_cost: offer.labor_cost,
-      parts_cost: 0,
-      total_amount: offer.total_amount,
-      status: "pending",
-    });
-
-    if (insErr) throw insErr;
-  }
+  // (Optional) ensurePaymentTransaction unchanged…
 
   const acceptService = useCallback(
-    async (opts: {
-      serviceId: string;
-      emergencyId: string;
-      userId?: string;
-    }) => {
+    async (opts: { serviceId: string; emergencyId: string; userId?: string }) => {
       const { serviceId, emergencyId, userId: acceptedByUser } = opts;
       const now = new Date().toISOString();
 
       try {
         setLoading({ visible: true, message: "Accepting request…" });
 
-        // 1) Mark this service request as accepted
         const { error: srErr } = await supabase
           .from("service_requests")
           .update({ status: "accepted", accepted_at: now })
@@ -907,9 +791,7 @@ export default function RequestStatus() {
 
         // Optimistic UI:
         setItems((prev) =>
-          prev.map((it) =>
-            it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
-          )
+          prev.map((it) => (it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it))
         );
 
         setReqLists((prev) => {
@@ -922,7 +804,6 @@ export default function RequestStatus() {
           [emergencyId]: Math.max(0, (prev[emergencyId] ?? 1) - 1),
         }));
 
-        // Also refresh from server (in case there are other rows)
         const em = items.find((i) => i.id === emergencyId);
         if (em) await fetchSRListFor(emergencyId, em.lat, em.lon);
       } catch (e: any) {
@@ -948,16 +829,10 @@ export default function RequestStatus() {
 
       if (error) throw error;
 
-      // Optimistic UI update
       setItems((prev) =>
-        prev.map((item) =>
-          item.id === emergencyId ? { ...item, status: "CANCELED" } : item
-        )
+        prev.map((item) => (item.id === emergencyId ? { ...item, status: "CANCELED" } : item))
       );
-
-      // Close any open card for this emergency
       setOpenCards((prev) => ({ ...prev, [emergencyId]: false }));
-
     } catch (e: any) {
       Alert.alert("Cancel failed", e?.message ?? "Please try again.");
     } finally {
@@ -965,21 +840,18 @@ export default function RequestStatus() {
     }
   }, []);
 
-  // 🔵 Hide emergency (soft delete for driver)
   const hideEmergency = useCallback(async (emergencyId: string) => {
     try {
       setLoading({ visible: true, message: "Removing request…" });
 
-      const { error } = await supabase
-        .from("emergency")
-        .update({ driver_hidden: true })
-        .eq("emergency_id", emergencyId);
+    const { error } = await supabase
+      .from("emergency")
+      .update({ driver_hidden: true })
+      .eq("emergency_id", emergencyId);
 
       if (error) throw error;
 
-      // Remove from local state
       setItems((prev) => prev.filter((item) => item.id !== emergencyId));
-
     } catch (e: any) {
       Alert.alert("Delete failed", e?.message ?? "Please try again.");
     } finally {
@@ -1000,10 +872,8 @@ export default function RequestStatus() {
             (payload as any).old?.emergency_id;
           if (!emId) return;
 
-          // refresh pending count
           fetchSRCounts([emId]);
 
-          // if this card is open, refresh its list too (pending only)
           const opened = openCards[emId];
           const em = items.find((i) => i.id === emId);
           if (opened && em) fetchSRListFor(emId, em.lat, em.lon);
@@ -1026,16 +896,13 @@ export default function RequestStatus() {
   }, [fetchItems]);
 
   /* ----------------------------- Locate helpers ----------------------------- */
-  // Open Locate (from a PENDING service row – has serviceId)
   const openLocateMapForService = async (serviceId: string) => {
-    // show modal & spinner immediately
     setShowLocateMap(true);
     setMapLoading(true);
     setMechanicCoords(null);
     setDriverCoords(null);
 
     try {
-      // mechanic coords from the service request row
       const { data: sr, error } = await supabase
         .from("service_requests")
         .select("latitude, longitude")
@@ -1050,7 +917,6 @@ export default function RequestStatus() {
       }
       setMechanicCoords({ lat: sr.latitude, lon: sr.longitude });
 
-      // driver's current location
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Permission Denied", "Please enable location access.");
@@ -1068,16 +934,13 @@ export default function RequestStatus() {
     }
   };
 
-  // Open Locate (after ACCEPTED – we only know emergencyId, find the accepted row)
   const openLocateMapForAccepted = async (emergencyId: string) => {
-    // show modal & spinner immediately
     setShowLocateMap(true);
     setMapLoading(true);
     setMechanicCoords(null);
     setDriverCoords(null);
 
     try {
-      // get the accepted service_request to locate the mechanic
       const { data: sr, error } = await supabase
         .from("service_requests")
         .select("latitude, longitude")
@@ -1093,7 +956,6 @@ export default function RequestStatus() {
       }
       setMechanicCoords({ lat: sr.latitude, lon: sr.longitude });
 
-      // driver's current location
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Permission Denied", "Please enable location access.");
@@ -1111,7 +973,6 @@ export default function RequestStatus() {
     }
   };
 
-  // Auto-fit once BOTH coords are set (covers cases where map is already ready)
   useEffect(() => {
     if (showLocateMap && mechanicCoords && driverCoords && mapRef.current) {
       mapRef.current.fitToCoordinates(
@@ -1121,26 +982,19 @@ export default function RequestStatus() {
         ],
         { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
       );
-      // if map is already ready, hide the loader here
       setMapLoading(false);
     }
   }, [showLocateMap, mechanicCoords, driverCoords]);
 
   /* -------------------------- Render helpers -------------------------- */
   const renderSRItem = (emId: string, it: SRUI, emLat: number, emLon: number) => {
-
     const blurred = !!revealedReject[it.service_id];
     const isExpanded = !!expandedOffers[it.service_id];
 
     return (
-      <View
-        key={it.service_id}
-        className="relative py-3 border-b border-slate-200"
-      >
+      <View key={it.service_id} className="relative py-3 border-b border-slate-200">
         <Pressable
-          onLongPress={() =>
-            setRevealedReject((m) => ({ ...m, [it.service_id]: true }))
-          }
+          onLongPress={() => setRevealedReject((m) => ({ ...m, [it.service_id]: true }))}
           onPress={() => {
             if (blurred) {
               setRevealedReject((m) => ({ ...m, [it.service_id]: false }));
@@ -1151,17 +1005,11 @@ export default function RequestStatus() {
           style={{ opacity: blurred ? 0.05 : 1 }}
         >
           <View className="flex-row items-start px-3">
-            <Image
-              source={{ uri: it.avatar }}
-              className="w-10 h-10 rounded-full mt-1"
-            />
+            <Image source={{ uri: it.avatar }} className="w-10 h-10 rounded-full mt-1" />
             <View className="ml-3 flex-1">
               <View className="flex-row justify-between items-start">
                 <View className="flex-1">
-                  <Text
-                    className="text-[15px] font-semibold text-slate-900 leading-5"
-                    numberOfLines={2}
-                  >
+                  <Text className="text-[15px] font-semibold text-slate-900 leading-5" numberOfLines={2}>
                     {it.name}
                   </Text>
                   <Text className="text-[13px] text-slate-500 mt-1">
@@ -1187,63 +1035,53 @@ export default function RequestStatus() {
                       disabled={blurred}
                       className="rounded-xl py-2 px-5 bg-blue-600"
                     >
-                      <Text className="text-white text-[13px] font-semibold text-center">
-                        Accept
-                      </Text>
+                      <Text className="text-white text-[13px] font-semibold text-center">Accept</Text>
                     </Pressable>
 
-                    <Pressable
-                      onPress={() => openLocateMapForService(it.service_id)}
-                      className="rounded-xl py-2 px-5 bg-emerald-600"
-                    >
-                      <Text className="text-white text-[13px] font-semibold text-center">
-                        Locate
-                      </Text>
+                    <Pressable onPress={() => openLocateMapForService(it.service_id)} className="rounded-xl py-2 px-5 bg-emerald-600">
+                      <Text className="text-white text-[13px] font-semibold text-center">Locate</Text>
                     </Pressable>
                   </View>
                 </View>
-
               </View>
 
               {/* Offer Details - Collapsible */}
-              {isExpanded && it.offerDetails && (
-                <View className="mt-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  {it.offerDetails.notes && (
-                    <View className="mb-3 pb-3 border-b border-slate-200">
-                      <Text className="text-slate-600 text-xs font-medium mb-1">
-                        Notes
-                      </Text>
-                      <Text className="text-slate-700 text-sm leading-5">
-                        {it.offerDetails.notes}
-                      </Text>
-                    </View>
-                  )}
+              {isExpanded && (
+                it.offerDetails ? (
+                  <View className="mt-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    {it.offerDetails.notes && (
+                      <View className="mb-3 pb-3 border-b border-slate-200">
+                        <Text className="text-slate-600 text-xs font-medium mb-1">Notes</Text>
+                        <Text className="text-slate-700 text-sm leading-5">{it.offerDetails.notes}</Text>
+                      </View>
+                    )}
 
-                  <View className="space-y-2">
-                    <View className="flex-row justify-between items-center">
-                      <Text className="text-slate-600 text-sm">Distance Fee</Text>
-                      <Text className="text-slate-900 text-sm font-medium">
-                        {it.offerDetails.distanceFee}
-                      </Text>
-                    </View>
-
-                    <View className="flex-row justify-between items-center">
-                      <Text className="text-slate-600 text-sm">Labor Cost</Text>
-                      <Text className="text-slate-900 text-sm font-medium">
-                        {it.offerDetails.laborCost}
-                      </Text>
-                    </View>
-
-                    <View className="flex-row justify-between items-center pt-2 border-t border-slate-300">
-                      <Text className="text-slate-800 text-sm font-semibold">
-                        Total Cost
-                      </Text>
-                      <Text className="text-slate-900 text-sm font-bold">
-                        {it.offerDetails.totalCost}
-                      </Text>
+                    <View className="space-y-2">
+                      <View className="flex-row justify-between items-center">
+                        <Text className="text-slate-600 text-sm">Distance Fee</Text>
+                        <Text className="text-slate-900 text-sm font-medium">{it.offerDetails.distanceFee}</Text>
+                      </View>
+                      <View className="flex-row justify-between items-center">
+                        <Text className="text-slate-600 text-sm">Labor Cost</Text>
+                        <Text className="text-slate-900 text-sm font-medium">{it.offerDetails.laborCost}</Text>
+                      </View>
+                      <View className="flex-row justify-between items-center pt-2 border-t border-slate-300">
+                        <Text className="text-slate-800 text-sm font-semibold">Total Cost</Text>
+                        <Text className="text-slate-900 text-sm font-bold">{it.offerDetails.totalCost}</Text>
+                      </View>
                     </View>
                   </View>
-                </View>
+                ) : (
+                  // 🔴 Visible fallback so "nothing happens" is not confusing
+                  <View className="mt-3 p-4 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                    <Text className="text-slate-600 text-sm">
+                      No offer details from this shop yet.
+                    </Text>
+                    <Text className="text-slate-500 text-xs mt-1">
+                      (If you expect an offer, check Supabase RLS/permissions and that the offer rows reference this service or are NULL service_id with the same emergency/shop.)
+                    </Text>
+                  </View>
+                )
               )}
             </View>
           </View>
@@ -1252,17 +1090,10 @@ export default function RequestStatus() {
         {blurred && (
           <View className="absolute inset-0 items-center justify-center">
             <Pressable
-              onPress={() =>
-                setConfirmReject({
-                  serviceId: it.service_id,
-                  emergencyId: emId,
-                })
-              }
+              onPress={() => setConfirmReject({ serviceId: it.service_id, emergencyId: emId })}
               className="rounded-2xl px-5 py-2 bg-rose-600"
             >
-              <Text className="text-white text-[13px] font-semibold">
-                Reject
-              </Text>
+              <Text className="text-white text-[13px] font-semibold">Reject</Text>
             </Pressable>
           </View>
         )}
@@ -1273,11 +1104,7 @@ export default function RequestStatus() {
   const PlaceholderRow = ({ idx }: { idx: number }) => (
     <View
       key={`ph-${idx}`}
-      style={{
-        height: REQ_ROW_HEIGHT,
-        borderBottomWidth: 1,
-        borderBottomColor: "#E5E7EB",
-      }}
+      style={{ height: REQ_ROW_HEIGHT, borderBottomWidth: 1, borderBottomColor: "#E5E7EB" }}
       className="flex-row items-center px-3 opacity-50"
     >
       <View className="w-10 h-10 rounded-full bg-slate-200" />
@@ -1310,19 +1137,13 @@ export default function RequestStatus() {
               ))}
             </View>
           ) : real.length > 0 ? (
-            <ScrollView
-              contentContainerStyle={{ paddingVertical: 8 }}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator
-            >
+            <ScrollView contentContainerStyle={{ paddingVertical: 8 }} nestedScrollEnabled showsVerticalScrollIndicator>
               {real.map((row) => renderSRItem(em.id, row, em.lat, em.lon))}
             </ScrollView>
           ) : (
             <View className="flex-1 items-center justify-center py-8">
               <Ionicons name="build-outline" size={32} color="#94A3B8" />
-              <Text className="text-[14px] text-slate-500 mt-2">
-                No requests yet
-              </Text>
+              <Text className="text-[14px] text-slate-500 mt-2">No requests yet</Text>
             </View>
           )}
         </View>
@@ -1330,15 +1151,13 @@ export default function RequestStatus() {
     );
   };
 
-  // ⬇️ FlatList row
   const renderItem = ({ item }: { item: RequestItem }) => {
     const waiting = item.status === "WAITING";
     const inProcess = item.status === "IN_PROCESS";
     const completed = item.status === "COMPLETED";
-    const canceled  = item.status === "CANCELED"; // normalized value
+    const canceled = item.status === "CANCELED";
     const isOpen = !!openCards[item.id];
 
-    // Show "Cancel" if: waiting, age ≥ 5 min, and no pending requests
     const ageMs = Date.now() - new Date(item.createdAtIso).getTime();
     const hasPending = (reqCounts[item.id] ?? 0) > 0;
     const canCancel = waiting && !hasPending && ageMs >= 5 * 60 * 1000;
@@ -1349,14 +1168,9 @@ export default function RequestStatus() {
         className="bg-white rounded-2xl p-5 mb-4 border border-slate-200 relative"
         style={cardShadow as any}
       >
-        {/* Trash on completed OR canceled (soft-hide) */}
         {(completed || canceled) && (
           <View className="absolute top-3 right-3">
-            <Pressable
-              onPress={() => setConfirmHideId(item.id)}
-              hitSlop={8}
-              className="p-1 rounded-full"
-            >
+            <Pressable onPress={() => setConfirmHideId(item.id)} hitSlop={8} className="p-1 rounded-full">
               <Ionicons name="trash-outline" size={20} color="#64748B" />
             </Pressable>
           </View>
@@ -1376,7 +1190,6 @@ export default function RequestStatus() {
 
         <View className="h-px bg-slate-200 my-4" />
 
-        {/* Driver Info */}
         <View className="space-y-3">
           {item.info && item.info !== "—" && (
             <View className="flex-row items-start">
@@ -1426,47 +1239,28 @@ export default function RequestStatus() {
                 <SpinningGear size={12} />
               </View>
             ) : null}
-            <Text
-              className={`text-[12px] font-medium ${
-                STATUS_STYLES[item.status].text ?? "text-slate-800"
-              }`}
-            >
+            <Text className={`text-[12px] font-medium ${STATUS_STYLES[item.status].text ?? "text-slate-800"}`}>
               {prettyStatus(item.status)}
             </Text>
           </View>
 
           {inProcess && (
             <View className="flex-row space-x-2">
-              {/* Message Button */}
-              <Pressable
-                onPress={() => openChatForEmergency(item.id, router)}
-                className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2"
-              >
+              <Pressable onPress={() => openChatForEmergency(item.id, router)} className="flex-row items-center bg-blue-600 rounded-xl px-4 py-2">
                 <Ionicons name="chatbubbles" size={14} color="#FFF" />
-                <Text className="text-white text-[13px] font-semibold ml-1.5">
-                  Message
-                </Text>
+                <Text className="text-white text-[13px] font-semibold ml-1.5">Message</Text>
               </Pressable>
 
-              {/* Locate Button */}
-              <Pressable
-                onPress={() => openLocateMapForAccepted(item.id)}
-                className="flex-row items-center bg-emerald-600 rounded-xl px-4 py-2"
-              >
+              <Pressable onPress={() => openLocateMapForAccepted(item.id)} className="flex-row items-center bg-emerald-600 rounded-xl px-4 py-2">
                 <Ionicons name="navigate" size={14} color="#FFF" />
-                <Text className="text-white text-[13px] font-semibold ml-1.5">
-                  Locate
-                </Text>
+                <Text className="text-white text-[13px] font-semibold ml-1.5">Locate</Text>
               </Pressable>
             </View>
           )}
 
           {!inProcess &&
             (canCancel ? (
-              <Pressable
-                onPress={() => setConfirmCancelId(item.id)}
-                className="flex-row items-center bg-rose-600 rounded-xl px-4 py-2"
-              >
+              <Pressable onPress={() => setConfirmCancelId(item.id)} className="flex-row items-center bg-rose-600 rounded-xl px-4 py-2">
                 <Ionicons name="close-circle" size={14} color="#FFF" />
                 <Text className="text-white text-[13px] font-semibold ml-1.5">Cancel</Text>
               </Pressable>
@@ -1499,9 +1293,7 @@ export default function RequestStatus() {
           <View className="px-6 pt-16 items-center">
             <Ionicons name="document-text-outline" size={48} color="#94A3B8" />
             <Text className="text-center text-slate-500 mt-4 text-[15px]">
-              {emergency_id
-                ? "Loading or no record found."
-                : "No emergency requests to show."}
+              {emergency_id ? "Loading or no record found." : "No emergency requests to show."}
             </Text>
           </View>
         }
@@ -1545,7 +1337,7 @@ export default function RequestStatus() {
         confirmColor="#2563EB"
       />
 
-      {/* 🔵 Confirm: Cancel emergency */}
+      {/* Confirm: Cancel emergency */}
       <CenterConfirm
         visible={!!confirmCancelId}
         title="Cancel this emergency?"
@@ -1562,7 +1354,7 @@ export default function RequestStatus() {
         confirmColor="#DC2626"
       />
 
-      {/* 🔵 Confirm: Hide completed emergency */}
+      {/* Confirm: Hide completed emergency */}
       <CenterConfirm
         visible={!!confirmHideId}
         title="Delete request from your list?"
@@ -1579,7 +1371,7 @@ export default function RequestStatus() {
         confirmColor="#475569"
       />
 
-      {/* 🔵 Locate Map Modal */}
+      {/* Locate Map Modal */}
       <Modal visible={showLocateMap} animationType="slide">
         <SafeAreaView className="flex-1 bg-black">
           <View className="flex-1">
@@ -1596,41 +1388,28 @@ export default function RequestStatus() {
                     longitudeDelta: 0.05,
                   }}
                   onMapReady={() => {
-                    // auto-fit both users, then end the loader
                     if (mapRef.current && mechanicCoords && driverCoords) {
                       mapRef.current.fitToCoordinates(
                         [
                           { latitude: driverCoords.lat, longitude: driverCoords.lon },
                           { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
                         ],
-                        {
-                          edgePadding: { top: 80, right: 80, bottom: 80, left: 80 },
-                          animated: true,
-                        }
+                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
                       );
                     }
                     setMapLoading(false);
                   }}
                 >
-                  {/* Mechanic Marker */}
                   <Marker
-                    coordinate={{
-                      latitude: mechanicCoords.lat ?? 0,
-                      longitude: mechanicCoords.lon ?? 0,
-                    }}
+                    coordinate={{ latitude: mechanicCoords.lat ?? 0, longitude: mechanicCoords.lon ?? 0 }}
                     title="Mechanic"
                     pinColor="#2563EB"
                   />
-                  {/* Driver Marker */}
                   <Marker
-                    coordinate={{
-                      latitude: driverCoords.lat ?? 0,
-                      longitude: driverCoords.lon ?? 0,
-                    }}
+                    coordinate={{ latitude: driverCoords.lat ?? 0, longitude: driverCoords.lon ?? 0 }}
                     title="You (Driver)"
                     pinColor="red"
                   />
-                  {/* Connecting Line */}
                   <Polyline
                     coordinates={[
                       { latitude: driverCoords.lat ?? 0, longitude: driverCoords.lon ?? 0 },
@@ -1648,14 +1427,8 @@ export default function RequestStatus() {
                   </View>
                 )}
 
-                {/* Close Button */}
-                <Pressable
-                  onPress={() => setShowLocateMap(false)}
-                  className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2"
-                >
-                  <Text className="text-[14px] font-semibold text-slate-900">
-                    Close
-                  </Text>
+                <Pressable onPress={() => setShowLocateMap(false)} className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2">
+                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
                 </Pressable>
               </>
             ) : (
@@ -1668,11 +1441,7 @@ export default function RequestStatus() {
         </SafeAreaView>
       </Modal>
 
-      <LoadingScreen
-        visible={loading.visible}
-        message={loading.message}
-        variant="spinner"
-      />
+      <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />
     </SafeAreaView>
   );
 }

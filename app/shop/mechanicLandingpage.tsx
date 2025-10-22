@@ -29,6 +29,8 @@ import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import SideDrawer from "../../components/SideDrawer";
 import LoadingScreen from "../../components/LoadingScreen";
+import { useUnreadMessageCount } from "../../hooks/useUnreadMessageCount"; 
+import { useUnreadNotificationCount } from "../../hooks/useUnreadNotificationCount"; 
 import { supabase } from "../../utils/supabase";
 
 // ✅ use the cross-platform wrapper instead of react-native-maps
@@ -911,6 +913,9 @@ export default function RequestScreen() {
   const [rows, setRows] = useState<RequestItem[]>([]);
   const [selected, setSelected] = useState<RequestItem | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const unreadMessageCount = useUnreadMessageCount();
+  const unreadNotificationCount = useUnreadNotificationCount();
+  
 
   // mechanic's current coords (used for distance)
   const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(
@@ -1641,6 +1646,7 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         items={MECH_ITEMS}
         logoSource={require("../../assets/images/logo2.png")}
         appName="RIDERESCUE"
+        unreadMessageCount={unreadMessageCount}
         onLogout={() => {
           setDrawerOpen(false);
           router.replace("/(auth)/login");
@@ -1662,25 +1668,63 @@ const handleOfferSubmit = async (offerData: OfferData) => {
 
           
   <View className="flex-row items-center">
-    {/* Notifications */}
-    <Pressable
-      onPress={() => router.push("/shop/inbox")}
-      className="p-2 rounded-lg mr-1 active:opacity-80"
-      android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-      hitSlop={10}
+    {/* Notifications with Number Badge */}
+<Pressable
+  onPress={() => router.push("/driver/inbox")}
+  className="p-2 rounded-lg mr-1 active:opacity-80 relative"
+  android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+  hitSlop={10}
+>
+  <Ionicons name="notifications-outline" size={26} color="#fff" />
+  {unreadNotificationCount > 0 && (
+    <View
+      className="absolute rounded-full bg-red-500 items-center justify-center"
+      style={{
+        minWidth: 18,
+        height: 18,
+        top: 4,
+        right: 4,
+        borderWidth: 2,
+        borderColor: COLORS.brand,
+        paddingHorizontal: 4,
+      }}
     >
-      <Ionicons name="notifications-outline" size={22} color="#fff" />
-    </Pressable>
+      <Text
+        style={{
+          color: '#FFFFFF',
+          fontSize: 10,
+          fontWeight: '700',
+        }}
+      >
+        {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+      </Text>
+    </View>
+  )}
+</Pressable>
 
-    {/* Burger / Drawer */}
-    <Pressable
-      className="p-2 rounded-lg active:opacity-80"
-      android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-      onPress={() => setDrawerOpen(true)}
-      hitSlop={10}
-    >
-      <Ionicons name="menu" size={24} color="#fff" />
-    </Pressable>
+
+{/* Burger / Drawer with Badge */}
+<Pressable
+  className="p-2 rounded-lg active:opacity-80 relative"
+  android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+  onPress={() => setDrawerOpen(true)}
+  hitSlop={10}
+>
+  <Ionicons name="menu" size={24} color="#fff" />
+  {unreadMessageCount > 0 && (
+    <View
+      className="absolute rounded-full bg-red-500"
+      style={{
+        width: 10,
+        height: 10,
+        top: 2,      // ✅ Changed from 4 to 2
+        right: 2,    // ✅ Changed from 4 to 2
+        borderWidth: 2,
+        borderColor: COLORS.brand,
+      }}
+    />
+  )}
+</Pressable>
   </View>
 
         </View>

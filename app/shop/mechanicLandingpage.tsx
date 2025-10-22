@@ -1490,6 +1490,9 @@ export default function RequestScreen() {
 const RATE_PER_KM = 15;          // PHP per km
 const MINIMUM_DISTANCE_KM = 1.0; // bill minimum 1km
 
+// FILE: app/shop/mechanicLandingpage.tsx
+// REPLACE your entire handleOfferSubmit function with this
+
 const handleOfferSubmit = async (offerData: OfferData) => {
   if (!selectedEmergencyForOffer || !shopId) return;
 
@@ -1500,9 +1503,100 @@ const handleOfferSubmit = async (offerData: OfferData) => {
     const lat = myCoords?.lat ?? 0;
     const lng = myCoords?.lng ?? 0;
 
-    // 1) Ensure a service_requests row exists (or revive a canceled one)
-    let serviceId: string | null = null;
+    // ════════════════════════════════════════════════════════════════
+    // STEP 1: Get authenticated user (mechanic/shop owner)
+    // ════════════════════════════════════════════════════════════════
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      throw new Error("You must be logged in to send offers");
+    }
 
+    console.log("🔵 [OFFER] Mechanic user ID:", user.id);
+
+    // ════════════════════════════════════════════════════════════════
+    // STEP 2: Get shop/mechanic name for notification (with fallbacks)
+    // ════════════════════════════════════════════════════════════════
+    let shopName = "A Mechanic";
+
+    const { data: shopData, error: shopError } = await supabase
+      .from("shop_details")
+      .select(`
+        shop_id,
+        place_id,
+        user_id,
+        places (
+          name
+        )
+      `)
+      .eq("shop_id", shopId)
+      .single();
+
+    if (shopError) {
+      console.error("🔴 [SHOP ERROR] Failed to fetch shop details:", shopError);
+    }
+
+    // Debug logging to see what we're getting
+    console.log("🔵 [DEBUG] Shop data response:", {
+      shop_id: shopData?.shop_id,
+      place_id: shopData?.place_id,
+      user_id: shopData?.user_id,
+      places: shopData?.places,
+      places_is_array: Array.isArray(shopData?.places),
+    });
+
+    // Try multiple ways to get the shop name
+    if (shopData?.places) {
+      // Handle both array and object responses from Supabase
+      if (Array.isArray(shopData.places) && shopData.places.length > 0 && shopData.places[0]?.name) {
+        shopName = shopData.places[0].name;
+        console.log("🔵 [OFFER] Using shop name from places (array):", shopName);
+      } else if (typeof shopData.places === 'object' && !Array.isArray(shopData.places) && 'name' in shopData.places) {
+        shopName = (shopData.places as { name: string }).name;
+        console.log("🔵 [OFFER] Using shop name from places (object):", shopName);
+      }
+    }
+
+    // If no shop name from places, fallback to mechanic's name
+    if (shopName === "A Mechanic" && shopData?.user_id) {
+      console.log("🔵 [OFFER] No place name found, fetching mechanic name from app_user");
+      
+      const { data: userProfile, error: userError } = await supabase
+        .from("app_user")
+        .select("full_name")
+        .eq("user_id", shopData.user_id)
+        .single();
+
+      if (userError) {
+        console.error("🔴 [USER ERROR] Failed to fetch mechanic name:", userError);
+      } else if (userProfile?.full_name) {
+        shopName = userProfile.full_name;
+        console.log("🔵 [OFFER] Using mechanic name from app_user:", shopName);
+      }
+    }
+
+    console.log("🔵 [OFFER] ✅ Final shop name that will be used:", shopName);
+
+    // ════════════════════════════════════════════════════════════════
+    // STEP 3: Get driver's user_id from the emergency
+    // ════════════════════════════════════════════════════════════════
+    const { data: emergencyData, error: emergencyError } = await supabase
+      .from("emergency")
+      .select("user_id")
+      .eq("emergency_id", emergencyId)
+      .single();
+
+    if (emergencyError || !emergencyData?.user_id) {
+      throw new Error("Failed to find driver for this emergency");
+    }
+
+    const driverUserId = emergencyData.user_id;
+    console.log("🔵 [OFFER] Driver user ID:", driverUserId);
+
+    // ════════════════════════════════════════════════════════════════
+    // STEP 4: Ensure service_requests row exists (or revive canceled)
+    // ════════════════════════════════════════════════════════════════
+    let serviceId: string | null = null;
     const { data: existing } = await supabase
       .from("service_requests")
       .select("service_id, status")
@@ -1539,7 +1633,9 @@ const handleOfferSubmit = async (offerData: OfferData) => {
       serviceId = ins.service_id;
     }
 
-    // 2) Compute distance + price with fallback (min 1.0 km)
+    // ════════════════════════════════════════════════════════════════
+    // STEP 5: Compute distance + price with fallback (min 1.0 km)
+    // ════════════════════════════════════════════════════════════════
     const dKm =
       selectedEmergencyForOffer.distanceKm ??
       (myCoords &&
@@ -1557,7 +1653,16 @@ const handleOfferSubmit = async (offerData: OfferData) => {
     const distanceFee = billableKm * RATE_PER_KM;
     const total = distanceFee + offerData.laborCost;
 
-    // 3) Insert offer into shop_offers
+    console.log("🔵 [OFFER] Offer details:", {
+      distanceKm: billableKm,
+      distanceFee,
+      laborCost: offerData.laborCost,
+      total,
+    });
+
+    // ════════════════════════════════════════════════════════════════
+    // STEP 6: Insert offer into shop_offers
+    // ════════════════════════════════════════════════════════════════
     const { error: offerErr } = await supabase.from("shop_offers").insert({
       emergency_id: emergencyId,
       service_id: serviceId,
@@ -1569,9 +1674,71 @@ const handleOfferSubmit = async (offerData: OfferData) => {
       total_amount: Number(total.toFixed(2)),
       note: offerData.note || null,
     });
-    if (offerErr) throw offerErr;
 
-    // reflect locally (same as before)
+    if (offerErr) {
+      console.error("🔴 [OFFER ERROR] Failed to insert offer:", offerErr);
+      throw offerErr;
+    }
+
+    console.log("✅ [OFFER] Offer inserted successfully");
+
+    // ════════════════════════════════════════════════════════════════
+    // STEP 7: Send notification to driver
+    // ════════════════════════════════════════════════════════════════
+    console.log("🔵 [NOTIFICATION] Sending offer notification to driver:", driverUserId);
+    console.log("🔵 [NOTIFICATION] Using shop name:", shopName);
+
+    const { data: notifData, error: notifError } = await supabase
+      .from("notifications")
+      .insert({
+        from_user_id: user.id,
+        to_user_id: driverUserId,
+        type: "new_offer_received",
+        title: "New Service Quote",
+        body: `${shopName} has sent you a service quote for ₱${total.toFixed(2)}`,
+        data: {
+          emergency_id: emergencyId,
+          service_id: serviceId,
+          shop_id: shopId,
+          shop_name: shopName,
+          total_amount: total,
+          distance_km: billableKm,
+          labor_cost: offerData.laborCost,
+          note: offerData.note || null,
+          event: "mechanic_sent_offer",
+        },
+      })
+      .select();
+
+    if (notifError) {
+      console.error("🔴 [NOTIFICATION ERROR] Failed to send notification:", {
+        error: notifError,
+        code: notifError.code,
+        message: notifError.message,
+        details: notifError.details,
+        hint: notifError.hint,
+      });
+
+      if (notifError.code === "42501") {
+        console.error("🔴 [RLS ERROR] Notification blocked by RLS policy");
+        console.error("🔴 [RLS ERROR] Check that auth.uid() =", user.id);
+      } else if (notifError.code === "23514") {
+        console.error("🔴 [CHECK CONSTRAINT ERROR] Notification type not allowed");
+        console.error("🔴 [CHECK CONSTRAINT ERROR] Make sure 'new_offer_received' is in the CHECK constraint");
+      }
+
+      console.warn("⚠️ [WARNING] Offer sent but driver notification failed");
+    } else if (!notifData || notifData.length === 0) {
+      console.error("🔴 [NOTIFICATION ERROR] No data returned (possible RLS block)");
+      console.warn("⚠️ [WARNING] Offer sent but driver notification may not have been delivered");
+    } else {
+      console.log("✅ [NOTIFICATION SUCCESS] Driver notified:", notifData[0]);
+      console.log("✅ [NOTIFICATION SUCCESS] Shop name in notification:", notifData[0].data?.shop_name);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // STEP 8: Update local state
+    // ════════════════════════════════════════════════════════════════
     setMyReq((m) => ({
       ...m,
       [emergencyId]: { service_id: serviceId!, status: "pending" },
@@ -1581,7 +1748,14 @@ const handleOfferSubmit = async (offerData: OfferData) => {
     showToast("Offer sent successfully!");
     setOfferModalVisible(false);
     setSelectedEmergencyForOffer(null);
+
+    console.log("✅ [OFFER] Complete offer submission process finished");
   } catch (e: any) {
+    console.error("🔴 [OFFER ERROR] Offer submission failed:", {
+      error: e,
+      message: e?.message,
+      stack: e?.stack,
+    });
     setLoading({ visible: false });
     Alert.alert("Failed to send offer", e?.message ?? "Please try again.");
   }

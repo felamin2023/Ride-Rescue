@@ -748,6 +748,7 @@ useEffect(() => {
 
 
   const handleSelectAllServices = () => {
+  if (shopLocked) return; // Add this line
   if (services.length === SERVICES.length) {
     setServices([]);
   } else {
@@ -756,6 +757,7 @@ useEffect(() => {
 };
 
 const handleSelectAllDays = () => {
+  if (shopLocked) return; // Add this line
   if (days.length === DAY_KEYS.length) {
     setDays([]);
   } else {
@@ -2121,27 +2123,31 @@ if (openTime24 && closeTime24) {
               />
 
               {/* Services - Updated to ScrollView Checklist */}
-              <View className="mt-4 mb-2">
-                <View className="flex-row justify-between items-center">
-                  <Text className="text-sm font-semibold text-gray-900">
-                    Services offered
+            <View className="mt-4 mb-2">
+              <View className="flex-row justify-between items-center">
+                <Text className="text-sm font-semibold text-gray-900">
+                  Services offered
+                </Text>
+                <Pressable
+                  onPress={handleSelectAllServices}
+                  disabled={shopLocked}
+                  className={`border border-gray-300 rounded-lg px-3 py-1 ${
+                    shopLocked ? "opacity-50" : ""
+                  }`}
+                >
+                  <Text className={`text-xs ${
+                    shopLocked ? "text-gray-400" : "text-gray-700"
+                  }`}>
+                    {services.length === SERVICES.length ? "Deselect All" : "Select All"}
                   </Text>
-                  <Pressable
-                    onPress={handleSelectAllServices}
-                    className="border border-gray-300 rounded-lg px-3 py-1"
-                  >
-                    <Text className="text-xs text-gray-700">
-                      {services.length === SERVICES.length ? "Deselect All" : "Select All"}
-                    </Text>
-                  </Pressable>
-                </View>
-                {errorsS.services ? (
-                  <Text className="text-xs text-red-500 mt-1">
-                    {errorsS.services}
-                  </Text>
-                ) : null}
+                </Pressable>
               </View>
-
+              {errorsS.services ? (
+                <Text className="text-xs text-red-500 mt-1">
+                  {errorsS.services}
+                </Text>
+              ) : null}
+            </View>
               <ScrollView 
                 style={{ maxHeight: 200 }}
                 className="border border-gray-300 rounded-xl bg-white"
@@ -2179,9 +2185,14 @@ if (openTime24 && closeTime24) {
                   </Text>
                   <Pressable
                     onPress={handleSelectAllDays}
-                    className="border border-gray-300 rounded-lg px-3 py-1"
+                    disabled={shopLocked}
+                    className={`border border-gray-300 rounded-lg px-3 py-1 ${
+                      shopLocked ? "opacity-50" : ""
+                    }`}
                   >
-                    <Text className="text-xs text-gray-700">
+                    <Text className={`text-xs ${
+                      shopLocked ? "text-gray-400" : "text-gray-700"
+                    }`}>
                       {days.length === DAY_KEYS.length ? "Deselect All" : "Select All"}
                     </Text>
                   </Pressable>
@@ -2192,6 +2203,7 @@ if (openTime24 && closeTime24) {
                   </Text>
                 ) : null}
               </View>
+
 
               <View className="border border-gray-300 rounded-xl bg-white p-3">
                 {DAY_LABELS.map((lbl, i) => {
@@ -2375,7 +2387,7 @@ if (openTime24 && closeTime24) {
 
               {!shopEmailVerified && !driverEmailVerified ? (
                 <Text className="mt-2 text-xs text-gray-500">
-                  Verify your email first to enable the form.
+                  You need to verify your email first to enable the form.
                 </Text>
               ) : null}
             </>

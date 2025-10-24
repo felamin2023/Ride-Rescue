@@ -838,8 +838,8 @@ useEffect(() => {
                   <Text className="text-[13px] text-slate-700">—</Text>
                 )}
                 <View style={{ flexDirection: "row", flexWrap: "wrap" as any, columnGap: 10, rowGap: 6 }}>
-                  <Field label="Opens (24h)" value={selected?.opensAt} style={{ width: "auto", minWidth: 140 }} />
-                  <Field label="Closes (24h)" value={selected?.closesAt} style={{ width: "auto", minWidth: 140 }} />
+                  <Field label="Opens (12hr)" value={selected?.opensAt} style={{ width: "auto", minWidth: 140 }} />
+                  <Field label="Closes (12hr)" value={selected?.closesAt} style={{ width: "auto", minWidth: 140 }} />
                 </View>
               </View>
 

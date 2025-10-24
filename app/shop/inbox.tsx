@@ -160,7 +160,7 @@ export default function ShopInbox() {
     }
 
     // fallback
-    router.push("/shop/mechanicLandingpage");
+    // router.push("/shop/inbox");
   }, [router]);
 
   const Header = () => (

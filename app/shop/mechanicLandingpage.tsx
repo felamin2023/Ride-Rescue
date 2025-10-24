@@ -1844,7 +1844,7 @@ const handleOfferSubmit = async (offerData: OfferData) => {
   <View className="flex-row items-center">
     {/* Notifications with Number Badge */}
 <Pressable
-  onPress={() => router.push("/driver/inbox")}
+  onPress={() => router.push("/shop/inbox")}
   className="p-2 rounded-lg mr-1 active:opacity-80 relative"
   android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
   hitSlop={10}

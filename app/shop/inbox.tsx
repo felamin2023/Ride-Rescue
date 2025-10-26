@@ -149,7 +149,7 @@ export default function ShopInbox() {
 
     // 3) System: payment proof uploaded → also check in accepted-requests (where you'd verify/mark paid)
     if (n.type === "system" && n?.data?.event === "payment_proof_uploaded") {
-      router.push("/shop/mechanicAcceptedrequests");
+      router.push("/shop/completedrequests");
       return;
     }
 

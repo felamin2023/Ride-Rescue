@@ -19,12 +19,11 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../utils/supabase'; // adjust if your path differs
 
-
 type RatingRow = {
   id: string;
   stars: number;
   comment: string | null;
-  photo_url: string | null;
+  photo_urls: string[]; // Changed from photo_url to photo_urls array
   created_at: string;
   driver_user_id: string;
   driver_photo_url: string | null;
@@ -34,7 +33,6 @@ type RatingRow = {
   emergency_status: string;
   tags: string[] | null;
 };
-
 
 // Predefined tag lists - positive service feedback
 const LIKE_SERVICE_TAGS = [
@@ -52,7 +50,6 @@ const LIKE_SERVICE_TAGS = [
   "Clear post-repair tips",
 ];
 
-
 // Predefined tag lists - negative service feedback
 const DISLIKE_SERVICE_TAGS = [
   "Slow response",
@@ -69,11 +66,9 @@ const DISLIKE_SERVICE_TAGS = [
   "Unclear explanation",
 ];
 
-
 // ============================================================================
 // IMAGE VIEWER MODAL - DARK THEME WITH LEFT COUNTER
 // ============================================================================
-
 
 interface ImageViewerModalProps {
   visible: boolean;
@@ -81,7 +76,6 @@ interface ImageViewerModalProps {
   startIndex?: number;
   onClose: () => void;
 }
-
 
 function ImageViewerModal({
   visible,
@@ -93,7 +87,6 @@ function ImageViewerModal({
   const scrollRef = useRef<ScrollView>(null);
   const [index, setIndex] = useState(startIndex);
 
-
   useEffect(() => {
     if (visible) {
       setIndex(startIndex);
@@ -103,15 +96,12 @@ function ImageViewerModal({
     }
   }, [visible, startIndex, width]);
 
-
   const onScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const i = Math.round(e.nativeEvent.contentOffset.x / width);
     setIndex(Math.min(Math.max(i, 0), images.length - 1));
   };
 
-
   if (!visible) return null;
-
 
   return (
     <Modal
@@ -158,7 +148,6 @@ function ImageViewerModal({
             </Text>
           </View>
 
-
           <Pressable
             onPress={onClose}
             hitSlop={8}
@@ -174,7 +163,6 @@ function ImageViewerModal({
           >
             <Ionicons name="close" size={22} color="#FFFFFF" />
           </Pressable>
-
 
           <ScrollView
             ref={scrollRef}
@@ -215,34 +203,28 @@ function ImageViewerModal({
   );
 }
 
-
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-
 
 export default function ShopRatings() {
   const router = useRouter();
   const [rows, setRows] = useState<RatingRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-
   // Image viewer state
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerImages, setViewerImages] = useState<string[]>([]);
   const [viewerIndex, setViewerIndex] = useState(0);
-
 
   // Create normalized lookup sets for O(1) performance
   const likeTagsSet = useMemo(() => {
     return new Set(LIKE_SERVICE_TAGS.map(tag => tag.toLowerCase().trim()));
   }, []);
 
-
   const dislikeTagsSet = useMemo(() => {
     return new Set(DISLIKE_SERVICE_TAGS.map(tag => tag.toLowerCase().trim()));
   }, []);
-
 
   useEffect(() => {
     (async () => {
@@ -250,16 +232,13 @@ export default function ShopRatings() {
       const me = auth?.user?.id;
       if (!me) { setLoading(false); return; }
 
-
       const { data: shop } = await supabase
         .from('shop_details')
         .select('shop_id')
         .eq('user_id', me)
         .maybeSingle();
 
-
       if (!shop?.shop_id) { setLoading(false); return; }
-
 
       const { data } = await supabase
         .from('ratings')
@@ -267,7 +246,7 @@ export default function ShopRatings() {
           id, 
           stars, 
           comment, 
-          photo_url, 
+          photo_urls, 
           created_at, 
           driver_user_id,
           tags,
@@ -285,13 +264,12 @@ export default function ShopRatings() {
         .order('created_at', { ascending: false })
         .limit(100);
 
-
       // Transform the data to match our RatingRow type
       const transformedData = (data ?? []).map((item: any) => ({
         id: item.id,
         stars: item.stars,
         comment: item.comment,
-        photo_url: item.photo_url,
+        photo_urls: item.photo_urls || [], // Handle as array
         created_at: item.created_at,
         driver_user_id: item.driver_user_id,
         driver_photo_url: item.driver?.photo_url || null,
@@ -302,12 +280,10 @@ export default function ShopRatings() {
         tags: item.tags || null,
       }));
 
-
       setRows(transformedData as RatingRow[]);
       setLoading(false);
     })();
   }, []);
-
 
   // Function to hash email (e.g., avi********@gmail.com)
   const hashEmail = (email: string) => {
@@ -318,7 +294,6 @@ export default function ShopRatings() {
     }
     return `${localPart.substring(0, 3)}***@${domain}`;
   };
-
 
   // Determine tag sentiment using exact matching against predefined lists
   const getTagSentiment = useCallback((tag: string): 'positive' | 'negative' => {
@@ -341,14 +316,12 @@ export default function ShopRatings() {
     return 'positive';
   }, [likeTagsSet, dislikeTagsSet]);
 
-
-  // Open image viewer
-  const openImageViewer = useCallback((imageUrl: string) => {
-    setViewerImages([imageUrl]);
-    setViewerIndex(0);
+  // Open image viewer with all images and starting index
+  const openImageViewer = useCallback((images: string[], startIndex: number) => {
+    setViewerImages(images);
+    setViewerIndex(startIndex);
     setViewerOpen(true);
   }, []);
-
 
   // Calculate average rating
   const avg = useMemo(() => {
@@ -357,14 +330,12 @@ export default function ShopRatings() {
     return Math.round((sum / rows.length) * 10) / 10;
   }, [rows]);
 
-
   // Get background color for circular badge based on average
   const getBadgeColor = (rating: number) => {
     if (rating > 4.0) return '#10B981'; // Green
     if (rating >= 3.0) return '#F59E0B'; // Orange
     return '#EF4444'; // Red
   };
-
 
   // Render filled stars based on average (rounded)
   const renderAverageStars = () => {
@@ -375,7 +346,6 @@ export default function ShopRatings() {
       </Text>
     );
   };
-
 
   const Header = () => (
     <SafeAreaView edges={["top"]} className="bg-white border-b border-slate-200">
@@ -394,7 +364,6 @@ export default function ShopRatings() {
       </View>
     </SafeAreaView>
   );
-
 
   const renderItem = ({ item }: { item: RatingRow }) => (
     <View className="mt-3 bg-white rounded-2xl p-5 border border-gray-100 mx-4 shadow-sm">
@@ -425,7 +394,6 @@ export default function ShopRatings() {
           </View>
         </View>
 
-
         {item.emergency_status === 'completed' && (
           <View className="bg-green-100 px-3 py-1.5 rounded-full">
             <Text className="text-green-800 text-xs font-semibold">Completed</Text>
@@ -438,13 +406,11 @@ export default function ShopRatings() {
         )}
       </View>
 
-
       <View className="mb-3">
         <Text className="text-xl font-medium text-amber-500">
           {'★'.repeat(item.stars)}{'☆'.repeat(5 - item.stars)}
         </Text>
       </View>
-
 
       {item.tags && item.tags.length > 0 && (
         <View className="flex-row flex-wrap mb-4">
@@ -481,11 +447,11 @@ export default function ShopRatings() {
         </Text>
       ) : null}
       
-      {item.photo_url ? (
+      {item.photo_urls && item.photo_urls.length > 0 && (
         <View style={{ position: 'relative' }}>
-          <Pressable onPress={() => openImageViewer(item.photo_url!)}>
+          <Pressable onPress={() => openImageViewer(item.photo_urls, 0)}>
             <Image 
-              source={{ uri: item.photo_url }} 
+              source={{ uri: item.photo_urls[0] }} 
               style={{ 
                 width: '100%', 
                 height: 180, 
@@ -517,11 +483,11 @@ export default function ShopRatings() {
                 letterSpacing: 0.3,
               }}
             >
-              1/1
+              1/{item.photo_urls.length}
             </Text>
           </View>
         </View>
-      ) : null}
+      )}
       
       <Text className="text-xs text-gray-500 mt-2">
         {new Date(item.created_at).toLocaleDateString('en-US', {
@@ -534,7 +500,6 @@ export default function ShopRatings() {
       </Text>
     </View>
   );
-
 
   return (
     <View className="flex-1 bg-[#F4F6F8]">
@@ -559,7 +524,6 @@ export default function ShopRatings() {
               </Text>
             </View>
 
-
             <View className="flex-1">
               {renderAverageStars()}
               <View className="flex-row items-center mt-2">
@@ -576,7 +540,6 @@ export default function ShopRatings() {
             </View>
           </View>
         </View>
-
 
         {loading ? (
           <View className="flex-1 items-center justify-center">
@@ -600,7 +563,6 @@ export default function ShopRatings() {
           />
         )}
       </View>
-
 
       <ImageViewerModal
         visible={viewerOpen}

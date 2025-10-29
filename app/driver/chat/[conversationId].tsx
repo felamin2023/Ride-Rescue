@@ -1,4 +1,3 @@
-
 // app/(driver)/chat/[conversationId].tsx
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
@@ -63,6 +62,10 @@ const CARD_SHADOW = Platform.select({
   },
   android: { elevation: 1 },
 });
+
+// Avatar configuration
+const AVATAR_SIZE = 32;
+const AVATAR_SPACING = 8;
 
 // ============================================================================
 // SUB-COMPONENTS
@@ -204,6 +207,8 @@ interface MessageBubbleProps {
   onLocationPress: (msg: Message) => void;
   onImagePress: (imageUrl: string) => void;
   onImageLoad?: () => void;
+  showAvatar: boolean;
+  avatarUrl?: string | null;
 }
 
 const MessageBubble = React.memo(function MessageBubble({
@@ -214,6 +219,8 @@ const MessageBubble = React.memo(function MessageBubble({
   onLocationPress,
   onImagePress,
   onImageLoad,
+  showAvatar,
+  avatarUrl,
 }: MessageBubbleProps) {
   return (
     <View
@@ -222,9 +229,53 @@ const MessageBubble = React.memo(function MessageBubble({
         justifyContent: isOwn ? "flex-end" : "flex-start",
         marginVertical: 4,
         paddingHorizontal: 16,
+        alignItems: "flex-end",
       }}
     >
-      <View style={{ maxWidth: "75%", alignItems: isOwn ? "flex-end" : "flex-start" }}>
+      {/* Avatar for other user's messages */}
+      {!isOwn && (
+        <View
+          style={{
+            width: AVATAR_SIZE,
+            height: AVATAR_SIZE,
+            marginRight: AVATAR_SPACING,
+            justifyContent: "flex-end",
+          }}
+        >
+          {showAvatar ? (
+            avatarUrl ? (
+              <Image
+                source={{ uri: avatarUrl }}
+                style={{
+                  width: AVATAR_SIZE,
+                  height: AVATAR_SIZE,
+                  borderRadius: AVATAR_SIZE / 2,
+                }}
+              />
+            ) : (
+              <View
+                style={{
+                  width: AVATAR_SIZE,
+                  height: AVATAR_SIZE,
+                  borderRadius: AVATAR_SIZE / 2,
+                  backgroundColor: COLORS.border,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name="person" size={18} color={COLORS.muted} />
+              </View>
+            )
+          ) : null}
+        </View>
+      )}
+
+      <View
+        style={{
+          maxWidth: "75%",
+          alignItems: isOwn ? "flex-end" : "flex-start",
+        }}
+      >
         {message.type === "image" && message.metadata.image_url ? (
           <Pressable onPress={() => onImagePress(message.metadata.image_url!)}>
             <Image
@@ -729,10 +780,38 @@ export default function ChatScreen() {
     }
   }, [scrollToBottom]);
 
+  // Determine which messages should show avatars
+  const shouldShowAvatar = useCallback(
+    (currentMessage: Message, nextMessage: Message | undefined): boolean => {
+      // Always show avatar if it's the other user's message and:
+      // 1. It's the last message in the list, OR
+      // 2. The next message is from a different sender (end of group)
+      
+      if (currentMessage.sender_id === userId) {
+        return false; // Never show avatar for own messages
+      }
+
+      if (!nextMessage) {
+        return true; // Last message in list
+      }
+
+      if (nextMessage.sender_id !== currentMessage.sender_id) {
+        return true; // Next message is from different sender
+      }
+
+      return false; // Middle of a group
+    },
+    [userId]
+  );
+
   const renderMessage = useCallback(
-    ({ item }: { item: Message }) => {
+    ({ item, index }: { item: Message; index: number }) => {
       const isOwn = item.sender_id === userId;
       const showTimestamp = expandedMessageId === item.id;
+      
+      // Since list is inverted, "next" message is at index - 1
+      const nextMessage = reversedMessages[index - 1];
+      const showAvatar = shouldShowAvatar(item, nextMessage);
 
       return (
         <MessageBubble
@@ -745,10 +824,21 @@ export default function ChatScreen() {
           onLocationPress={handleLocationPress}
           onImagePress={handleImagePress}
           onImageLoad={handleImageLoad}
+          showAvatar={showAvatar}
+          avatarUrl={otherUser?.photo_url}
         />
       );
     },
-    [userId, expandedMessageId, handleLocationPress, handleImagePress, handleImageLoad]
+    [
+      userId,
+      expandedMessageId,
+      reversedMessages,
+      shouldShowAvatar,
+      handleLocationPress,
+      handleImagePress,
+      handleImageLoad,
+      conversation,
+    ]
   );
 
   if (loading) return <LoadingScreen visible />;

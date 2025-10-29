@@ -1,334 +1,403 @@
-// components/RateServiceModal.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from "react";
 import {
-  Modal, View, Text, TouchableOpacity, TextInput, Image,
-  ActivityIndicator, Alert,
-} from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import { Ionicons } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system';
-import { supabase } from '../utils/supabase';
+  View,
+  Text,
+  Pressable,
+  Modal,
+  TextInput,
+  Image,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
+  useWindowDimensions,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 
-export type RatePayload = {
-  transaction_id: string;
-  emergency_id: string;
-  shop_id: string;
+/* --------------------------------- Types ---------------------------------- */
+type CompletedJob = {
+  id: string;
+  type: "mechanic" | "shop";
+  name: string;
+  location: string;
+  service: string;
+  amountPaid?: number;
+  paymentMethod?: "Cash" | "GCash" | "Card";
+  requestedAt: string;
+  completedAt: string;
+  canRate?: boolean;
+  avatarUrl?: string;
 };
 
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-  let bufferLength = base64.length * 0.75;
-  const len = base64.length;
-  if (base64[len - 1] === '=') bufferLength--;
-  if (base64[len - 2] === '=') bufferLength--;
-  const arraybuffer = new ArrayBuffer(bufferLength);
-  const bytes = new Uint8Array(arraybuffer);
-  let p = 0;
-  for (let i = 0; i < len; i += 4) {
-    const enc1 = chars.indexOf(base64[i]);
-    const enc2 = chars.indexOf(base64[i + 1]);
-    const enc3 = chars.indexOf(base64[i + 2]);
-    const enc4 = chars.indexOf(base64[i + 3]);
-    const chr1 = (enc1 << 2) | (enc2 >> 4);
-    const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
-    const chr3 = ((enc3 & 3) << 6) | enc4;
-    bytes[p++] = chr1;
-    if (enc3 !== 64) bytes[p++] = chr2;
-    if (enc4 !== 64) bytes[p++] = chr3;
-  }
-  return arraybuffer;
-}
-
-function guessExtAndMime(uri: string, fallbackType = 'image/jpeg') {
-  const ext = uri.split('?')[0].split('.').pop()?.toLowerCase();
-  const type =
-    ext === 'png' ? 'image/png' :
-    ext === 'webp' ? 'image/webp' :
-    ext === 'heic' || ext === 'heif' ? 'image/heic' :
-    fallbackType;
-  return { ext: ext || 'jpg', type };
-}
-
-export default function RateServiceModal({
-  visible,
-  onClose,
-  payload,
-  onSaved,
-}: {
+interface RatingBottomSheetProps {
   visible: boolean;
   onClose: () => void;
-  payload: RatePayload | null;
-  onSaved?: (transaction_id: string) => void;
-}) {
-  const [stars, setStars] = useState<number>(0);
-  const [comment, setComment] = useState('');
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [loadingExisting, setLoadingExisting] = useState(false);
+  onSubmit: (data: {
+    rating: number;
+    message: string;
+    selectedTags: string[];
+    photos: string[];
+  }) => void;
+  item: CompletedJob | null;
+}
 
-  const canSubmit = useMemo(() => !!payload && stars >= 1 && stars <= 5, [payload, stars]);
+/* ------------------------------ Constants --------------------------------- */
+const MAX_PHOTOS = 6;
 
+const LIKE_SERVICE_TAGS = [
+  "Fast response",
+  "Professional mechanic",
+  "Accurate diagnosis",
+  "Quality repair",
+  "Fair pricing",
+  "Transparent quote",
+  "Good communication",
+  "Friendly service",
+  "Clean workmanship",
+  "Had parts available",
+  "Towing handled well",
+  "Clear post-repair tips",
+];
+
+const DISLIKE_SERVICE_TAGS = [
+  "Slow response",
+  "Rude staff",
+  "Misdiagnosis",
+  "Issue came back",
+  "Overpriced",
+  "Hidden charges",
+  "Poor communication",
+  "Messy work",
+  "No parts available",
+  "Late arrival",
+  "Long waiting time",
+  "Unclear explanation",
+];
+
+/* ============================== Component ================================= */
+export default function RatingBottomSheet({
+  visible,
+  onClose,
+  onSubmit,
+  item,
+}: RatingBottomSheetProps) {
+  const insets = useSafeAreaInsets();
+  const { height: winH } = useWindowDimensions();
+  const SHEET_MAX_HEIGHT = Math.floor(winH * 0.9);
+
+  const [rating, setRating] = useState<number>(0);
+  const [message, setMessage] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<string[]>([]);
+
+  const isPositive = rating >= 4;
+  const prevIsPositiveRef = useRef<boolean | null>(null);
+
+  // Reset tags when switching between positive/negative
   useEffect(() => {
-    const loadExisting = async () => {
-      if (!payload) return;
-      setLoadingExisting(true);
-      const { data: auth } = await supabase.auth.getUser();
-      const me = auth?.user?.id;
-      const { data } = await supabase
-        .from('ratings')
-        .select('id, stars, comment, photo_url')
-        .eq('driver_user_id', me)
-        .eq('transaction_id', payload.transaction_id)
-        .maybeSingle();
+    if (prevIsPositiveRef.current === null) {
+      prevIsPositiveRef.current = isPositive;
+      return;
+    }
+    if (prevIsPositiveRef.current !== isPositive) {
+      setSelectedTags([]);
+      prevIsPositiveRef.current = isPositive;
+    }
+  }, [isPositive]);
 
-      if (data) {
-        setStars(data.stars ?? 0);
-        setComment(data.comment ?? '');
-        setImageUri(data.photo_url ?? null);
-      } else {
-        setStars(0);
-        setComment('');
-        setImageUri(null);
-      }
-      setLoadingExisting(false);
-    };
-    if (visible) loadExisting();
-  }, [visible, payload?.transaction_id]);
+  // Reset form when modal closes
+  useEffect(() => {
+    if (!visible) {
+      setRating(0);
+      setMessage("");
+      setSelectedTags([]);
+      setPhotos([]);
+      prevIsPositiveRef.current = null;
+    }
+  }, [visible]);
 
-  async function requestMedia() {
+  /* ------------------------- Image permissions -------------------------- */
+  const requestMediaLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    return status === 'granted';
-  }
-  async function requestCamera() {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    return status === 'granted';
-  }
+    return status === "granted";
+  };
 
-  const pickImage = async () => {
-    const ok = await requestMedia();
-    if (!ok) return Alert.alert('Permission needed', 'Please allow gallery access.');
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.85,
+  const requestCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    return status === "granted";
+  };
+
+  const appendUris = (uris: string[]) => {
+    if (!uris.length) return;
+    setPhotos((prev) => {
+      const next = [...prev, ...uris];
+      return next.slice(0, MAX_PHOTOS);
     });
-    if (!res.canceled && res.assets?.length) setImageUri(res.assets[0].uri);
+  };
+
+  const pickFromGallery = async () => {
+    const ok = await requestMediaLibrary();
+    if (!ok) return;
+
+    const res = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.8,
+      allowsEditing: true,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      exif: false,
+      // @ts-ignore iOS multi-select hint
+      allowsMultipleSelection: true,
+      // @ts-ignore iOS selection hint
+      selectionLimit: MAX_PHOTOS,
+    });
+
+    if (!res.canceled) {
+      // @ts-ignore
+      const uris = (res.assets || []).map((a: any) => a?.uri).filter(Boolean);
+      appendUris(uris as string[]);
+    }
   };
 
   const takePhoto = async () => {
     const ok = await requestCamera();
-    if (!ok) return Alert.alert('Permission needed', 'Please allow camera access.');
-    const res = await ImagePicker.launchCameraAsync({ quality: 0.85 });
-    if (!res.canceled && res.assets?.length) setImageUri(res.assets[0].uri);
+    if (!ok) return;
+
+    const res = await ImagePicker.launchCameraAsync({
+      quality: 0.8,
+      allowsEditing: true,
+    });
+
+    if (!res.canceled) {
+      const uri = res.assets?.[0]?.uri;
+      if (uri) appendUris([uri]);
+    }
   };
 
-  // Upload to public bucket 'ratings_photos'
-  const uploadPhoto = async (localUri: string, userId: string, txId: string) => {
-    const bucket = supabase.storage.from('ratings_photos');
-
-    // 🔒 make sure the request carries a valid JWT; refresh if needed
-    const { data: sess } = await supabase.auth.getSession();
-    console.log('session?', !!sess?.session, sess?.session?.user?.id?.slice(0, 8));
-    if (!sess?.session) {
-      const { data: refreshed, error: refErr } = await supabase.auth.refreshSession();
-      if (refErr || !refreshed?.session) throw new Error('Not authenticated. Please sign in again.');
-    }
-
-    // 🩺 quick ping to confirm Storage sees us as authenticated
-    const ping = await supabase.storage.from('ratings_photos').list(userId, { limit: 1 });
-    if (ping.error) console.warn('ratings_photos list error →', ping.error.message);
-
-    const { ext, type: contentType } = guessExtAndMime(localUri);
-    const path = `${userId}/${txId}/rating-${Date.now()}.${ext}`;
-
-    // debug + guard (must match Storage RLS)
-    console.log('[ratings upload]', { userId, txId, path, bucket: 'ratings_photos' });
-    if (!path.startsWith(`${userId}/`)) {
-      throw new Error('Upload path must start with your auth uid');
-    }
-
-    // Read file → base64 → ArrayBuffer
-    const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
-    const arrayBuffer = base64ToArrayBuffer(base64.replace(/\r?\n/g, ''));
-
-    // 1) Direct upload (overwrite OK)
-    try {
-      const { error } = await bucket.upload(path, arrayBuffer, { contentType, upsert: true });
-      if (error) throw error;
-    } catch (_err) {
-      // 2) Fallback: signed upload (also upsert)
-      const { data: sign, error: signErr } = await bucket.createSignedUploadUrl(path, { upsert: true });
-      if (signErr) throw signErr;
-      const { error: up2Err } = await bucket.uploadToSignedUrl(path, sign.token, arrayBuffer, { contentType });
-      if (up2Err) throw up2Err;
-    }
-
-    // 3) Public URL
-    const { data } = bucket.getPublicUrl(path);
-    return data.publicUrl;
+  const removePhoto = (uri: string) => {
+    setPhotos((prev) => prev.filter((p) => p !== uri));
   };
 
-  const submit = async () => {
-    if (!payload) return;
-    if (!stars) {
-      Alert.alert('Pick a rating', 'Please select 1 to 5 stars.');
+  const handleSubmit = () => {
+    if (rating === 0) {
+      // You could show an error here or pass it to parent
       return;
     }
-
-    setSubmitting(true);
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-      const me = auth?.user?.id;
-      if (!me) throw new Error('You need to sign in again to rate.');
-
-      // must be PAID to satisfy your ratings insert policy
-      const { data: paymentRow, error: paymentErr } = await supabase
-        .from('payment_transaction')
-        .select('transaction_id, emergency_id, shop_id, status, driver_user_id')
-        .eq('transaction_id', payload.transaction_id)
-        .eq('driver_user_id', me)
-        .maybeSingle();
-      if (paymentErr) throw paymentErr;
-      if (!paymentRow) throw new Error('We could not find that transaction anymore.');
-      const isPaid = (paymentRow.status || '').toLowerCase() === 'paid';
-      if (!isPaid) throw new Error('Only completed (paid) services can be rated.');
-
-      // Upload if a new local image exists; keep existing https:// as-is
-      let photoUrl: string | null = imageUri;
-      if (imageUri && imageUri.startsWith('file:')) {
-        photoUrl = await uploadPhoto(imageUri, me, paymentRow.transaction_id);
-      }
-
-      // Insert or update per (driver_user_id, transaction_id)
-      const { data: existing } = await supabase
-        .from('ratings')
-        .select('id')
-        .eq('driver_user_id', me)
-        .eq('transaction_id', paymentRow.transaction_id)
-        .maybeSingle();
-
-      if (!existing) {
-        const { error } = await supabase.from('ratings').insert({
-          transaction_id: paymentRow.transaction_id,
-          emergency_id: paymentRow.emergency_id,
-          shop_id: paymentRow.shop_id,
-          driver_user_id: me,
-          stars,
-          comment: comment?.trim() || null,
-          photo_url: photoUrl,
-        });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from('ratings')
-          .update({
-            stars,
-            comment: comment?.trim() || null,
-            photo_url: photoUrl,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existing.id);
-        if (error) throw error;
-      }
-
-      // Optional: notify shop owner
-      const { data: shopRow } = await supabase
-        .from('shop_details')
-        .select('user_id')
-        .eq('shop_id', paymentRow.shop_id)
-        .maybeSingle();
-      if (shopRow?.user_id) {
-        await supabase.from('notifications').insert({
-          from_user_id: me,
-          to_user_id: shopRow.user_id,
-          type: 'rating_posted',
-          title: 'New rating received',
-          body: `A driver left a ${stars}-star rating`,
-          data: {
-            transaction_id: paymentRow.transaction_id,
-            emergency_id: paymentRow.emergency_id,
-            shop_id: paymentRow.shop_id,
-          },
-        });
-      }
-
-      onSaved?.(paymentRow.transaction_id);
-      onClose();
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert('Error', e?.message || 'Could not save rating.');
-    } finally {
-      setSubmitting(false);
-    }
+    onSubmit({ rating, message, selectedTags, photos });
   };
 
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end', alignItems: 'center' }}>
-        <View style={{ width: '100%', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16 }}>
-          <View style={{ height: 6, width: 48, backgroundColor: '#E5E7EB', alignSelf: 'center', borderRadius: 999 }} />
-          <Text style={{ fontSize: 18, fontWeight: '600', marginTop: 12 }}>Rate this service</Text>
+  /* ------------------------------ Sub-components --------------------------- */
+  const StarRow = () => (
+    <View className="mt-2 flex-row">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Pressable key={i} onPress={() => setRating(i)} className="mr-1.5">
+          <Ionicons
+            name={i <= rating ? "star" : "star-outline"}
+            size={28}
+            color="#2563EB"
+          />
+        </Pressable>
+      ))}
+    </View>
+  );
 
-          {loadingExisting ? (
-            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
-              <ActivityIndicator />
+  const TagChips = () => {
+    const tags = isPositive ? LIKE_SERVICE_TAGS : DISLIKE_SERVICE_TAGS;
+    return (
+      <View className="mt-2 flex-row flex-wrap gap-2">
+        {tags.map((t) => {
+          const active = selectedTags.includes(t);
+          const activeBg = isPositive ? "bg-green-50" : "bg-red-50";
+          const activeBorder = isPositive ? "border-green-300" : "border-red-300";
+          const activeText = isPositive ? "text-green-700" : "text-red-700";
+          return (
+            <Pressable
+              key={t}
+              onPress={() =>
+                setSelectedTags((prev) =>
+                  prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+                )
+              }
+              className={`rounded-xl border px-3 py-1 ${
+                active ? `${activeBg} ${activeBorder}` : "bg-white border-slate-300"
+              }`}
+            >
+              <Text className={`text-[12px] ${active ? activeText : "text-slate-600"}`}>
+                {t}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const PhotosGrid = () => {
+    if (!photos.length) return null;
+    return (
+      <View className="mt-3">
+        <View className="flex-row flex-wrap">
+          {photos.map((uri) => (
+            <View key={uri} className="mr-2 mb-2">
+              <View className="relative">
+                <Image source={{ uri }} className="h-16 w-16 rounded-lg" />
+                <Pressable
+                  onPress={() => removePhoto(uri)}
+                  className="absolute -right-2 -top-2 h-6 w-6 items-center justify-center rounded-full bg-black/70"
+                  hitSlop={6}
+                >
+                  <Ionicons name="close" size={14} color="#fff" />
+                </Pressable>
+              </View>
             </View>
-          ) : (
-            <>
-              {/* Stars */}
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <TouchableOpacity key={n} onPress={() => setStars(n)}>
-                    <Ionicons
-                      name={n <= stars ? 'star' : 'star-outline'}
-                      size={28}
-                      color={n <= stars ? '#f59e0b' : '#94A3B8'}
-                    />
-                  </TouchableOpacity>
-                ))}
-                <Text style={{ marginLeft: 8, fontSize: 12, color: '#64748B' }}>{stars || 0}/5</Text>
-              </View>
-
-              {/* Comment */}
-              <TextInput
-                placeholder="Share your experience (optional)"
-                multiline
-                value={comment}
-                onChangeText={setComment}
-                style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 12, minHeight: 96, marginTop: 8 }}
-              />
-
-              {/* Photo */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TouchableOpacity onPress={pickImage} style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 }}>
-                    <Text>Upload</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={takePhoto} style={{ borderWidth: 1, borderColor: '#D1D5DB', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 }}>
-                    <Text>Take Photo</Text>
-                  </TouchableOpacity>
-                </View>
-                {imageUri ? <Image source={{ uri: imageUri }} style={{ width: 56, height: 56, borderRadius: 8 }} /> : null}
-              </View>
-
-              {/* Submit */}
-              <TouchableOpacity
-                disabled={!canSubmit || submitting}
-                onPress={submit}
-                style={{
-                  marginTop: 16,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  paddingVertical: 12,
-                  borderRadius: 12,
-                  backgroundColor: !canSubmit || submitting ? '#9CA3AF' : '#2563EB',
-                  opacity: !canSubmit || submitting ? 0.7 : 1,
-                }}
-              >
-                <Text style={{ color: '#fff', fontWeight: '600' }}>{submitting ? 'Saving…' : 'Submit rating'}</Text>
-              </TouchableOpacity>
-            </>
-          )}
+          ))}
         </View>
+        <Text className="mt-1 text-[11px] text-slate-500">
+          {photos.length}/{MAX_PHOTOS} photos
+        </Text>
+      </View>
+    );
+  };
+
+  if (!item) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      onRequestClose={onClose}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+    >
+      <View className="flex-1 items-center justify-end bg-black/40">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={{ width: "100%" }}
+        >
+          <View
+            style={{
+              maxHeight: SHEET_MAX_HEIGHT,
+              backgroundColor: "white",
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              paddingBottom: Math.max(insets.bottom, 12),
+            }}
+          >
+            {/* Sticky header */}
+            <View className="px-5 pt-4">
+              <View className="flex-row items-center justify-between">
+                <Pressable
+                  onPress={onClose}
+                  className="h-8 w-8 items-center justify-center rounded-full"
+                  hitSlop={10}
+                >
+                  <Ionicons name="close" size={20} color="#111827" />
+                </Pressable>
+                <Pressable
+                  className="h-8 w-8 items-center justify-center rounded-full"
+                  hitSlop={10}
+                >
+                  <Ionicons name="help-circle-outline" size={20} color="#64748B" />
+                </Pressable>
+              </View>
+
+              <Text className="mt-1 text-[17px] font-semibold text-slate-900">
+                How was the service
+              </Text>
+              <Text className="mt-1 text-[12px] text-slate-500">
+                {rating >= 4
+                  ? "Lovely! What went well?"
+                  : rating >= 1
+                  ? "Sorry to hear that. What didn't go well?"
+                  : "Select a star rating to continue."}
+              </Text>
+            </View>
+
+            {/* Scrollable body */}
+            <ScrollView
+              style={{ paddingHorizontal: 20, marginTop: 8 }}
+              contentContainerStyle={{ paddingBottom: 20 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              <StarRow />
+
+              <Text className="mt-2 text-[12px] text-slate-600">
+                {rating >= 4
+                  ? "Will 100% try again!"
+                  : rating >= 1
+                  ? "We'll use this to improve the service."
+                  : " "}
+              </Text>
+
+              <Text className="mt-5 text-[13px] font-semibold text-slate-900">
+                {isPositive ? "What did you like about the service?" : "What didn't you like?"}
+              </Text>
+              <TagChips />
+
+              {/* Text review */}
+              <View className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <TextInput
+                  placeholder={isPositive ? "Share more details…" : "Tell us what went wrong…"}
+                  placeholderTextColor="#94A3B8"
+                  value={message}
+                  onChangeText={setMessage}
+                  multiline
+                  className="min-h-[80px] text-[13px] text-slate-800"
+                />
+              </View>
+
+              {/* Photos */}
+              <View className="mt-4 rounded-2xl border border-slate-200 p-3">
+                <Text className="mb-2 text-[13px] font-medium text-slate-900">
+                  Add photos (optional)
+                </Text>
+
+                <PhotosGrid />
+
+                <View className="mt-2 flex-row gap-2">
+                  <Pressable
+                    onPress={photos.length >= MAX_PHOTOS ? undefined : pickFromGallery}
+                    className={`flex-1 items-center justify-center rounded-xl border border-slate-300 py-2 ${
+                      photos.length >= MAX_PHOTOS ? "opacity-50" : "active:opacity-90"
+                    }`}
+                  >
+                    <Ionicons name="image-outline" size={18} color="#111827" />
+                    <Text className="mt-1 text-[12px] text-slate-700">
+                      {photos.length >= MAX_PHOTOS ? "Max reached" : "Choose photos"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={photos.length >= MAX_PHOTOS ? undefined : takePhoto}
+                    className={`flex-1 items-center justify-center rounded-xl border border-slate-300 py-2 ${
+                      photos.length >= MAX_PHOTOS ? "opacity-50" : "active:opacity-90"
+                    }`}
+                  >
+                    <Ionicons name="camera-outline" size={18} color="#111827" />
+                    <Text className="mt-1 text-[12px] text-slate-700">
+                      {photos.length >= MAX_PHOTOS ? "Max reached" : "Take picture"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Thank you & submit */}
+              <View className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <Text className="text-[15px] font-semibold text-slate-900">Thank you!</Text>
+                <Text className="mt-1 text-[12px] text-slate-600">
+                  {isPositive
+                    ? "Your praise helps others choose great providers."
+                    : "Your feedback helps us fix issues quickly."}
+                </Text>
+
+                <Pressable
+                  onPress={handleSubmit}
+                  className="mt-3 items-center justify-center rounded-xl bg-blue-700 py-3 active:opacity-90"
+                >
+                  <Text className="text-[14px] font-semibold text-white">Submit review</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </View>
     </Modal>
   );

@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as Location from "expo-location";
 import { supabase } from "../utils/supabase";
+import { buildMapboxBrowserUrl } from "../utils/mapbox";
 
 /** Combined shape for shop_details + places */
 export type ShopInitial = {
@@ -224,7 +225,9 @@ const useCurrentLocation = async () => {
     const lon = loc.coords.longitude;
     setLatitude(lat);
     setLongitude(lon);
-    const link = `https://www.google.com/maps?q=${lat},${lon}`;
+    const link = buildMapboxBrowserUrl(lat, lon, {
+      title: `${shopName || "Shop"} Location`,
+    });
     setMapsLink(link);
 
     const rev = await Location.reverseGeocodeAsync(loc.coords);

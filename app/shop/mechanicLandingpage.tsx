@@ -34,7 +34,11 @@ import { useUnreadNotificationCount } from "../../hooks/useUnreadNotificationCou
 import { supabase } from "../../utils/supabase";
 
 // ✅ use the cross-platform wrapper instead of react-native-maps
-import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
+import MapView, {
+  Marker,
+  Polyline,
+  type MapViewHandle,
+} from "../../components/CrossPlatformMap";
 
 // Import the OfferModal
 import OfferModal, { EmergencyDetails, OfferData } from "../../components/OfferModal";
@@ -551,7 +555,7 @@ function DetailSheet({
   const [imgW, setImgW] = useState(0);
   const [imgIndex, setImgIndex] = useState(0);
   const [showLocation, setShowLocation] = useState(false);
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<MapViewHandle | null>(null);
 
   useEffect(() => {
     if (!visible) setShowLocation(false);

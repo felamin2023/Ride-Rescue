@@ -17,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as Location from "expo-location";
+import { buildMapboxBrowserUrl } from "../../utils/mapbox";
 
 /* ------------------------------ Types ------------------------------ */
 type MsgKind = "text" | "image" | "file" | "location";
@@ -201,10 +202,12 @@ export function ChatThread({
   );
 
   const LocationBubble = ({ m }: { m: Msg }) => {
-    const url =
-      typeof m.lat === "number" && typeof m.lng === "number"
-        ? `https://www.google.com/maps/search/?api=1&query=${m.lat},${m.lng}`
-        : undefined;
+      const url =
+        typeof m.lat === "number" && typeof m.lng === "number"
+          ? buildMapboxBrowserUrl(m.lat, m.lng, {
+              title: m.text ?? "Location",
+            }) ?? undefined
+          : undefined;
     return (
       <Pressable
         onPress={() => openUrl(url)}

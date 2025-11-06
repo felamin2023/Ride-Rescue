@@ -26,6 +26,7 @@ import DayCheck from "../../components/DayCheck";
 import Section from "../../components/Section";
 import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
+import { buildMapboxBrowserUrl } from "../../utils/mapbox";
 import NetInfo from "@react-native-community/netinfo";
 
 /* ----------------------------- Data sources ----------------------------- */
@@ -1235,10 +1236,12 @@ if (openTime24 && closeTime24) {
           plus_code: plusCode || null, // NEW (optional if null)
           latitude: lat,
           longitude: lng,
-          maps_link:
-            lat && lng
-              ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
-              : null,
+            maps_link:
+              lat && lng
+                ? buildMapboxBrowserUrl(Number(lat), Number(lng), {
+                    title: shopName || "Mechanic Shop",
+                  })
+                : null,
           owner: null, // set after we know the shop_id
         };
 

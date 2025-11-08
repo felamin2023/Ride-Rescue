@@ -1,5 +1,5 @@
 // app/shop/mechanicAcceptedrequests.tsx
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,7 +11,6 @@ import {
   Animated,
   Easing,
   Modal,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -19,10 +18,10 @@ import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
+import { upsertMyLocation } from "../../lib/realtimeLocation";
+import { metersBetween } from "../../utils/haversine";
 import PaymentModal from "../../components/PaymentModal";
 import CancelRepairModal from "../../components/CancelRepairModal";
-import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
-
 /* ----------------------------- Helpers ----------------------------- */
 const DEBUG_PRINTS = false;
 const dbg = (...args: any[]) => DEBUG_PRINTS && console.log("[SHOP-ACCEPTED]", ...args);
@@ -36,6 +35,10 @@ const cardShadow = Platform.select({
 });
 
 const peso = (n: number | null | undefined) => `₱${(Number(n) || 0).toFixed(2)}`;
+
+const MIN_DISPLACEMENT_METERS = 12;
+const SLOW_SPEED_THRESHOLD = 1;
+const SLOW_UPDATE_COOLDOWN_MS = 15_000;
 
 /* ----------------------------- Types ----------------------------- */
 type SRStatus = "pending" | "accepted" | "rejected" | "canceled";
@@ -233,14 +236,14 @@ export default function ShopAcceptedRequests() {
   // amounts snapshot for PaymentModal
   const [originalTx, setOriginalTx] = useState<{ distance_fee: number; labor_cost: number; total_amount: number } | null>(null);
 
-  const toggleCard = (emId: string) => setOpenCards((m) => ({ ...m, [emId]: !m[emId] }));
+  const lastBroadcastRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastSlowUpdateRef = useRef(0);
+  const hasActiveJob = useMemo(
+    () => items.some((card) => card.emStatus === "in_process"),
+    [items],
+  );
 
-  // 🔵 In-app Locate modal state (shop ↔ driver)
-  const [showLocateMap, setShowLocateMap] = useState(false);
-  const [mapLoading, setMapLoading] = useState(false);
-  const [mechanicCoords, setMechanicCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const mapRef = React.useRef<any>(null);
+  const toggleCard = (emId: string) => setOpenCards((m) => ({ ...m, [emId]: !m[emId] }));
 
   /* ----------------------------- Data fetchers ----------------------------- */
   const fetchAll = useCallback(async (withSpinner: boolean) => {
@@ -443,52 +446,22 @@ export default function ShopAcceptedRequests() {
     }
   };
 
-  // In-app satellite map that focuses both: Shop (mechanic) & Driver
-  const openLocateMap = async (serviceId: string, driverLat: number, driverLon: number) => {
-    try {
-      setMapLoading(true);
-      setLoading({ visible: true, message: "Loading map…" });
-
-      // A) Driver coords come from card (emergency row)
-      setDriverCoords({ lat: driverLat, lon: driverLon });
-
-      // B) Mechanic (shop) coords: prefer stored SR coords; fallback to current device GPS
-      let mechLat: number | null = null;
-      let mechLon: number | null = null;
-
-      const { data: sr } = await supabase
-        .from("service_requests")
-        .select("latitude, longitude")
-        .eq("service_id", serviceId)
-        .maybeSingle();
-
-      if (sr?.latitude && sr?.longitude) {
-        mechLat = sr.latitude;
-        mechLon = sr.longitude;
-      } else {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          const pos = await Location.getCurrentPositionAsync({});
-          mechLat = pos.coords.latitude;
-          mechLon = pos.coords.longitude;
-        }
-      }
-
-      if (mechLat == null || mechLon == null) {
-        Alert.alert("Error", "Mechanic location unavailable.");
-        setMapLoading(false);
+  const openTracking = useCallback(
+    (driverUserId: string | null) => {
+      if (!driverUserId) {
+        Alert.alert(
+          "Locate unavailable",
+          "Driver information is missing. Please refresh and try again.",
+        );
         return;
       }
-
-      setMechanicCoords({ lat: mechLat, lon: mechLon });
-      setShowLocateMap(true);
-    } catch (err) {
-      Alert.alert("Error", "Could not open map view.");
-      setMapLoading(false);
-    } finally {
-      setLoading({ visible: false });
-    }
-  };
+      router.push({
+        pathname: "/(tracking)/track/[targetId]",
+        params: { targetId: driverUserId, viewer: "mechanic" },
+      });
+    },
+    [router],
+  );
 
   /* ----------------------------- Actions ----------------------------- */
   const handleMarkComplete = async (emergencyId: string, distanceKm?: number) => {
@@ -733,8 +706,98 @@ export default function ShopAcceptedRequests() {
   }, [shopId]);
 
   /* ----------------------------- Lifecycle ----------------------------- */
-  useEffect(() => { fetchAll(true); }, [fetchAll]);
-  useEffect(() => { const id = setInterval(() => fetchAll(false), 15000); return () => clearInterval(id); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll(true);
+  }, [fetchAll]);
+
+  useEffect(() => {
+    const id = setInterval(() => fetchAll(false), 15000);
+    return () => clearInterval(id);
+  }, [fetchAll]);
+
+  useEffect(() => {
+    if (!userId || !hasActiveJob) return;
+    let watcher: Location.LocationSubscription | null = null;
+    let cancelled = false;
+
+    const startTracking = async () => {
+      try {
+        const current = await Location.getForegroundPermissionsAsync();
+        let status = current.status;
+        if (status !== "granted") {
+          const req = await Location.requestForegroundPermissionsAsync();
+          status = req.status;
+        }
+
+        if (status !== "granted") {
+          console.warn("[SHOP-ACCEPTED] Location permission denied for tracking");
+          return;
+        }
+
+        watcher = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: MIN_DISPLACEMENT_METERS,
+            timeInterval: 2000,
+          },
+          (position) => {
+            if (cancelled) return;
+            const { latitude, longitude, heading, speed } = position.coords;
+            const currentPoint = { lat: latitude, lng: longitude };
+            const displacement = metersBetween(
+              lastBroadcastRef.current,
+              currentPoint,
+            );
+            const numericSpeed =
+              typeof speed === "number" && Number.isFinite(speed)
+                ? Math.max(0, speed)
+                : null;
+
+            if (
+              Number.isFinite(displacement) &&
+              displacement < MIN_DISPLACEMENT_METERS
+            ) {
+              return;
+            }
+
+            const now = Date.now();
+            if (
+              numericSpeed !== null &&
+              numericSpeed < SLOW_SPEED_THRESHOLD &&
+              now - lastSlowUpdateRef.current < SLOW_UPDATE_COOLDOWN_MS
+            ) {
+              return;
+            }
+
+            lastSlowUpdateRef.current = now;
+            lastBroadcastRef.current = currentPoint;
+
+            upsertMyLocation({
+              user_id: userId,
+              lat: currentPoint.lat,
+              lng: currentPoint.lng,
+              heading:
+                typeof heading === "number" && Number.isFinite(heading)
+                  ? heading
+                  : undefined,
+              speed: numericSpeed ?? undefined,
+            }).catch((err) =>
+              console.warn("[SHOP-ACCEPTED] upsertMyLocation failed", err),
+            );
+          },
+        );
+      } catch (err) {
+        console.warn("[SHOP-ACCEPTED] watchPositionAsync failed", err);
+      }
+    };
+
+    startTracking();
+
+    return () => {
+      cancelled = true;
+      watcher?.remove();
+    };
+  }, [userId, hasActiveJob]);
 
   /* ----------------------------- Render ----------------------------- */
   const renderItem = ({ item }: { item: CardItem }) => {
@@ -873,7 +936,7 @@ export default function ShopAcceptedRequests() {
 
               {/* Location Button → in-app map */}
               <Pressable
-                onPress={() => openLocateMap(item.serviceId, item.lat, item.lon)}
+                onPress={() => openTracking(item.driverUserId)}
                 className="flex-1 rounded-xl py-2.5 items-center border border-slate-300"
               >
                 <View className="flex-row items-center gap-1.5">
@@ -927,79 +990,6 @@ export default function ShopAcceptedRequests() {
           </View>
         }
       />
-
-      {/* 🔵 In-App Locate Map Modal (satellite, fits both users, with loader) */}
-      <Modal visible={showLocateMap} animationType="slide">
-        <SafeAreaView className="flex-1 bg-black">
-          <View className="flex-1">
-            {mechanicCoords && driverCoords ? (
-              <>
-                <MapView
-                  ref={mapRef}
-                  style={{ flex: 1 }}
-                  mapType="satellite"
-                  initialRegion={{
-                    latitude: driverCoords.lat,
-                    longitude: driverCoords.lon,
-                    latitudeDelta: 0.05,
-                    longitudeDelta: 0.05,
-                  }}
-                  onMapReady={() => {
-                    if (mapRef.current && mechanicCoords && driverCoords) {
-                      mapRef.current.fitToCoordinates(
-                        [
-                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
-                          { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
-                        ],
-                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
-                      );
-                    }
-                    setMapLoading(false);
-                  }}
-                >
-                  <Marker
-                    coordinate={{ latitude: mechanicCoords.lat, longitude: mechanicCoords.lon }}
-                    title="You (Shop)"
-                    pinColor="#2563EB"
-                  />
-                  <Marker
-                    coordinate={{ latitude: driverCoords.lat, longitude: driverCoords.lon }}
-                    title="Driver"
-                    pinColor="red"
-                  />
-                  <Polyline
-                    coordinates={[
-                      { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
-                      { latitude: driverCoords.lat, longitude: driverCoords.lon },
-                    ]}
-                    strokeWidth={4}
-                    strokeColor="#2563EB"
-                  />
-                </MapView>
-
-                {mapLoading && (
-                  <View className="absolute inset-0 items-center justify-center bg-black/30">
-                    <ActivityIndicator size="large" color="#FFF" />
-                    <Text className="text-white mt-3">Preparing map…</Text>
-                  </View>
-                )}
-
-                <Pressable
-                  onPress={() => setShowLocateMap(false)}
-                  className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2"
-                >
-                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
-                </Pressable>
-              </>
-            ) : (
-              <View className="flex-1 items-center justify-center bg-black">
-                <ActivityIndicator size="large" color="#FFF" />
-                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
-              </View>
-            )}
-          </View>
-        </SafeAreaView>
-      </Modal>
 
       {/* Payment Modal */}
       <PaymentModal

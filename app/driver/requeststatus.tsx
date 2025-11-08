@@ -12,7 +12,6 @@ import {
   Modal,
   Animated,
   Easing,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -20,7 +19,6 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
 import LoadingScreen from "../../components/LoadingScreen";
 import { supabase } from "../../utils/supabase";
-import MapView, { Marker, Polyline } from "../../components/CrossPlatformMap";
 
 /* ----------------------------- Debug helper ----------------------------- */
 const DEBUG_PRINTS = true;
@@ -54,6 +52,7 @@ type RequestItem = {
   sentWhen: string;
   lat: number;
   lon: number;
+  acceptedBy?: string | null;
 };
 
 type EmergencyRow = {
@@ -214,6 +213,7 @@ function mapEmergencyToItem(
     sentWhen: timeAgo(r.created_at),
     lat,
     lon,
+    acceptedBy: r.accepted_by ?? null,
   };
 }
 
@@ -460,13 +460,6 @@ export default function RequestStatus() {
   const [confirmAccept, setConfirmAccept] = useState<{ serviceId: string; emergencyId: string; userId?: string } | null>(null);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null);
-
-  // Locate map
-  const [showLocateMap, setShowLocateMap] = useState(false);
-  const [mechanicCoords, setMechanicCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const [driverCoords, setDriverCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const [mapLoading, setMapLoading] = useState(false);
-  const mapRef = React.useRef<any>(null);
 
   const toggleCard = async (emId: string, emLat: number, emLon: number) => {
     const isOpening = !openCards[emId];
@@ -1118,7 +1111,13 @@ const acceptService = useCallback(
       // ════════════════════════════════════════════════════════════════
       setItems((prev) =>
         prev.map((it) =>
-          it.id === emergencyId ? { ...it, status: "IN_PROCESS" } : it
+          it.id === emergencyId
+            ? {
+                ...it,
+                status: "IN_PROCESS",
+                acceptedBy: acceptedByUser ?? it.acceptedBy ?? null,
+              }
+            : it
         )
       );
 
@@ -1240,95 +1239,50 @@ const acceptService = useCallback(
   }, [fetchItems]);
 
   /* ----------------------------- Locate helpers ----------------------------- */
-  const openLocateMapForService = async (serviceId: string) => {
-    setShowLocateMap(true);
-    setMapLoading(true);
-    setMechanicCoords(null);
-    setDriverCoords(null);
+  const openLiveTracking = useCallback(
+    async ({
+      emergencyId,
+      targetUserId,
+      viewer = "driver",
+    }: {
+      emergencyId: string;
+      targetUserId?: string | null;
+      viewer?: "driver" | "mechanic";
+    }) => {
+      try {
+        let resolvedTarget = targetUserId ?? null;
+        if (!resolvedTarget) {
+          const { data, error } = await supabase
+            .from("emergency")
+            .select("accepted_by")
+            .eq("emergency_id", emergencyId)
+            .maybeSingle();
+          if (error) throw error;
+          resolvedTarget = (data as { accepted_by: string | null } | null)?.accepted_by ?? null;
+        }
 
-    try {
-      const { data: sr, error } = await supabase
-        .from("service_requests")
-        .select("latitude, longitude")
-        .eq("service_id", serviceId)
-        .maybeSingle();
+        if (!resolvedTarget) {
+          Alert.alert(
+            "Locate unavailable",
+            "No mechanic is linked to this request yet. Accept an offer first.",
+          );
+          return;
+        }
 
-      if (error || !sr?.latitude || !sr?.longitude) {
-        Alert.alert("Error", "Mechanic location unavailable.");
-        setShowLocateMap(false);
-        setMapLoading(false);
-        return;
+        router.push({
+          pathname: "/(tracking)/track/[targetId]",
+          params: { targetId: resolvedTarget, viewer },
+        });
+      } catch (err) {
+        console.error("[RequestStatus] openLiveTracking", err);
+        Alert.alert(
+          "Unable to open tracking",
+          "Please try again with a stable connection.",
+        );
       }
-      setMechanicCoords({ lat: sr.latitude, lon: sr.longitude });
-
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission Denied", "Please enable location access.");
-        setShowLocateMap(false);
-        setMapLoading(false);
-        return;
-      }
-      const pos = await Location.getCurrentPositionAsync({});
-      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-    } catch (err) {
-      console.error("openLocateMapForService error:", err);
-      Alert.alert("Error", "Could not open map view.");
-      setShowLocateMap(false);
-      setMapLoading(false);
-    }
-  };
-
-  const openLocateMapForAccepted = async (emergencyId: string) => {
-    setShowLocateMap(true);
-    setMapLoading(true);
-    setMechanicCoords(null);
-    setDriverCoords(null);
-
-    try {
-      const { data: sr, error } = await supabase
-        .from("service_requests")
-        .select("latitude, longitude")
-        .eq("emergency_id", emergencyId)
-        .eq("status", "accepted")
-        .maybeSingle();
-
-      if (error || !sr?.latitude || !sr?.longitude) {
-        Alert.alert("Error", "Mechanic location unavailable.");
-        setShowLocateMap(false);
-        setMapLoading(false);
-        return;
-      }
-      setMechanicCoords({ lat: sr.latitude, lon: sr.longitude });
-
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission Denied", "Please enable location access.");
-        setShowLocateMap(false);
-        setMapLoading(false);
-        return;
-      }
-      const pos = await Location.getCurrentPositionAsync({});
-      setDriverCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-    } catch (err) {
-      console.error("openLocateMapForAccepted error:", err);
-      Alert.alert("Error", "Could not open map view.");
-      setShowLocateMap(false);
-      setMapLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (showLocateMap && mechanicCoords && driverCoords && mapRef.current) {
-      mapRef.current.fitToCoordinates(
-        [
-          { latitude: driverCoords.lat, longitude: driverCoords.lon },
-          { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
-        ],
-        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
-      );
-      setMapLoading(false);
-    }
-  }, [showLocateMap, mechanicCoords, driverCoords]);
+    },
+    [router],
+  );
 
   /* -------------------------- Render helpers -------------------------- */
   const renderSRItem = (emId: string, it: SRUI, emLat: number, emLon: number) => {
@@ -1380,10 +1334,6 @@ const acceptService = useCallback(
                       className="rounded-xl py-2 px-5 bg-blue-600"
                     >
                       <Text className="text-white text-[13px] font-semibold text-center">Accept</Text>
-                    </Pressable>
-
-                    <Pressable onPress={() => openLocateMapForService(it.service_id)} className="rounded-xl py-2 px-5 bg-emerald-600">
-                      <Text className="text-white text-[13px] font-semibold text-center">Locate</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -1595,7 +1545,16 @@ const acceptService = useCallback(
                 <Text className="text-white text-[13px] font-semibold ml-1.5">Message</Text>
               </Pressable>
 
-              <Pressable onPress={() => openLocateMapForAccepted(item.id)} className="flex-row items-center bg-emerald-600 rounded-xl px-4 py-2">
+              <Pressable
+                onPress={() =>
+                  openLiveTracking({
+                    emergencyId: item.id,
+                    targetUserId: item.acceptedBy,
+                    viewer: "driver",
+                  })
+                }
+                className="flex-row items-center bg-emerald-600 rounded-xl px-4 py-2"
+              >
                 <Ionicons name="navigate" size={14} color="#FFF" />
                 <Text className="text-white text-[13px] font-semibold ml-1.5">Locate</Text>
               </Pressable>
@@ -1714,76 +1673,6 @@ const acceptService = useCallback(
         cancelLabel="Back"
         confirmColor="#475569"
       />
-
-      {/* Locate Map Modal */}
-      <Modal visible={showLocateMap} animationType="slide">
-        <SafeAreaView className="flex-1 bg-black">
-          <View className="flex-1">
-            {mechanicCoords && driverCoords ? (
-              <>
-                <MapView
-                  ref={mapRef}
-                  style={{ flex: 1 }}
-                  mapType="satellite"
-                  initialRegion={{
-                    latitude: driverCoords.lat ?? 0,
-                    longitude: driverCoords.lon ?? 0,
-                    latitudeDelta: 0.05,
-                    longitudeDelta: 0.05,
-                  }}
-                  onMapReady={() => {
-                    if (mapRef.current && mechanicCoords && driverCoords) {
-                      mapRef.current.fitToCoordinates(
-                        [
-                          { latitude: driverCoords.lat, longitude: driverCoords.lon },
-                          { latitude: mechanicCoords.lat, longitude: mechanicCoords.lon },
-                        ],
-                        { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
-                      );
-                    }
-                    setMapLoading(false);
-                  }}
-                >
-                  <Marker
-                    coordinate={{ latitude: mechanicCoords.lat ?? 0, longitude: mechanicCoords.lon ?? 0 }}
-                    title="Mechanic"
-                    pinColor="#2563EB"
-                  />
-                  <Marker
-                    coordinate={{ latitude: driverCoords.lat ?? 0, longitude: driverCoords.lon ?? 0 }}
-                    title="You (Driver)"
-                    pinColor="red"
-                  />
-                  <Polyline
-                    coordinates={[
-                      { latitude: driverCoords.lat ?? 0, longitude: driverCoords.lon ?? 0 },
-                      { latitude: mechanicCoords.lat ?? 0, longitude: mechanicCoords.lon ?? 0 },
-                    ]}
-                    strokeWidth={4}
-                    strokeColor="#2563EB"
-                  />
-                </MapView>
-
-                {mapLoading && (
-                  <View className="absolute inset-0 items-center justify-center bg-black/30">
-                    <ActivityIndicator size="large" color="#FFF" />
-                    <Text className="text-white mt-3">Preparing map…</Text>
-                  </View>
-                )}
-
-                <Pressable onPress={() => setShowLocateMap(false)} className="absolute top-5 right-5 bg-white/90 rounded-full px-4 py-2">
-                  <Text className="text-[14px] font-semibold text-slate-900">Close</Text>
-                </Pressable>
-              </>
-            ) : (
-              <View className="flex-1 items-center justify-center bg-black">
-                <ActivityIndicator size="large" color="#FFF" />
-                <Text className="text-white text-[14px] mt-3">Loading map…</Text>
-              </View>
-            )}
-          </View>
-        </SafeAreaView>
-      </Modal>
 
       <LoadingScreen visible={loading.visible} message={loading.message} variant="spinner" />
     </SafeAreaView>

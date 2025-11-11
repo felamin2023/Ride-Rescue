@@ -183,15 +183,6 @@ function mapEmergencyToItem(
   };
 }
 
-
-
-
-
-
-
-
-
-
 // distance helper (km)
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   const toRad = (x: number) => (x * Math.PI) / 180;
@@ -218,6 +209,45 @@ function isVisibleByGate(
   if (!my) return false;
   const dist = haversineKm(my.lat, my.lng, row.latitude, row.longitude);
   return dist <= KM_GATE;
+}
+
+// Enhanced gas service detection with more keywords and patterns
+function isGasService(service: string | null): boolean {
+  if (!service) return false;
+  
+  const lowerService = service.toLowerCase().trim();
+  
+  const gasKeywords = [
+    // Basic fuel terms
+    'gas', 'fuel', 'petrol', 'diesel', 'gasoline',
+    // Empty/fuel level terms
+    'empty tank', 'out of gas', 'out of fuel', 'no gas', 'no fuel',
+    'low gas', 'low fuel', 'fuel low', 'gas low',
+    // Refueling terms
+    'refuel', 'refill', 'fill up', 'fill tank', 'get gas', 'get fuel',
+    // Station terms
+    'gas station', 'fuel station', 'petrol station', 'gasoline station',
+    // Vehicle fuel issues
+    'ran out of', 'run out of', 'need gas', 'need fuel', 'need petrol',
+    // Leak issues
+    'gas leak', 'fuel leak', 'petrol leak', 'leaking gas', 'leaking fuel',
+    // Pump issues
+    'fuel pump', 'gas pump',
+    // Tank issues
+    'tank empty', 'fuel tank', 'gas tank',
+    // Specific phrases
+    'out of petrol', 'no petrol', 'low petrol', 'petrol low'
+  ];
+
+  // Check for exact matches or contained matches
+  const isGas = gasKeywords.some(keyword => {
+    // Exact word match for better accuracy
+    const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+    return regex.test(lowerService);
+  });
+
+  console.log(`🔍 [GAS CHECK] "${service}" -> ${isGas ? 'GAS' : 'NOT GAS'}`);
+  return isGas;
 }
 
 /* ----------------------------- DEBUG PRINTER ----------------------------- */
@@ -799,7 +829,6 @@ function DetailSheet({
                                 longitude: item.lng ?? 0,
                               },
                             ]}
-
                             strokeWidth={4}
                             strokeColor="#2563EB"
                           />
@@ -819,6 +848,7 @@ function DetailSheet({
                 </SafeAreaView>
               </Modal>
             ) : null}
+          
 
 
             <Pressable
@@ -1003,6 +1033,7 @@ export default function RequestScreen() {
 
   // ---- shop identity & my requests on visible emergencies ----
   const [shopId, setShopId] = useState<string | null>(null);
+  const [shopCategory, setShopCategory] = useState<string | null>(null); // NEW: shop category state
   /** Map: emergency_id -> { service_id, status } for THIS shop */
   const [myReq, setMyReq] = useState<
     Record<string, { service_id: string; status: MyReqStatus }>
@@ -1168,13 +1199,62 @@ export default function RequestScreen() {
     checkAndGetLocation();
   }, [checkAndGetLocation]);
 
+  /* ---------------- get current user's shop_id and category ---------------- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: auth } = await supabase.auth.getUser();
+        const uid = auth?.user?.id;
+        if (!uid) {
+          console.log("❌ [SHOP CATEGORY] No user ID found");
+          return;
+        }
+        
+        console.log("🟡 [SHOP CATEGORY] Fetching shop details for user:", uid);
+        
+        const { data, error } = await supabase
+          .from("shop_details")
+          .select("shop_id, category")
+          .eq("user_id", uid)
+          .single();
+          
+        if (error) {
+          console.error("🔴 [SHOP CATEGORY ERROR]:", error);
+          setShopCategory(null);
+          return;
+        }
+        
+        if (data?.shop_id) {
+          console.log("🟢 [SHOP CATEGORY] Shop found:", {
+            shopId: data.shop_id,
+            category: data.category
+          });
+          setShopId(data.shop_id);
+          setShopCategory(data.category);
+        } else {
+          console.log("❌ [SHOP CATEGORY] No shop found for user");
+          setShopCategory(null);
+        }
+      } catch (error) {
+        console.error("🔴 [SHOP CATEGORY EXCEPTION]:", error);
+        setShopCategory(null);
+      }
+    })();
+  }, []);
+
   /* ------------------------ MAIN FETCH (PENDING ONLY) ------------------------ */
   const fetchPending = useCallback(
     async (withSpinner: boolean) => {
-      if (!myCoords) return;
+      if (!myCoords) {
+        console.log("❌ [FETCH] No coordinates available");
+        return;
+      }
+      
       try {
         if (withSpinner)
           setLoading({ visible: true, message: "Loading requests…" });
+
+        console.log("🟡 [FETCH] Starting fetch with shop category:", shopCategory);
 
         // Prefer RPC if you created one; otherwise query table
         let ems: EmergencyRow[] | null = null;
@@ -1197,6 +1277,35 @@ export default function RequestScreen() {
           ems = (data as EmergencyRow[]).filter((r) =>
             isVisibleByGate(r, myCoords)
           );
+        }
+
+        console.log("🟡 [FETCH] Raw emergencies found:", ems?.length);
+
+        // NEW: STRICT FILTERING - Only gas_station shops can see gas services
+        if (ems) {
+          const beforeFilter = ems.length;
+          ems = ems.filter((r) => {
+            const isGasRequest = isGasService(r.breakdown_cause);
+            
+            console.log(`🔍 [FILTER] Emergency ${r.emergency_id}:`, {
+              service: r.breakdown_cause,
+              isGasRequest,
+              shopCategory
+            });
+            
+            if (shopCategory === 'gas_station') {
+              // Gas stations ONLY see gas services
+              const show = isGasRequest;
+              if (!show) console.log(`🚫 [GAS STATION HIDING] Non-gas service: ${r.breakdown_cause}`);
+              return show;
+            } else {
+              // All other shop types (vulcanizing, repair, etc.) ONLY see non-gas services
+              const show = !isGasRequest;
+              if (!show) console.log(`🚫 [MECHANIC HIDING] Gas service: ${r.breakdown_cause}`);
+              return show;
+            }
+          });
+          console.log(`🟢 [FILTER] Filtered ${beforeFilter} -> ${ems.length} emergencies`);
         }
 
         const mapped = await Promise.all(
@@ -1223,32 +1332,20 @@ export default function RequestScreen() {
               r.longitude
             );
 
-            // 🔎 debug
-            const distM =
-              typeof item.distanceKm === "number"
-                ? item.distanceKm * 1000
-                : undefined;
-            printDebug(
-              `[fetch] ${r.emergency_id}`,
-              r.latitude,
-              r.longitude,
-              myCoords,
-              distM,
-              r.created_at
-            );
-
             return item;
           })
         );
 
         setRows(mapped);
+        console.log("🟢 [FETCH] Final rows set:", mapped.length);
       } catch (e: any) {
+        console.error("🔴 [FETCH ERROR]:", e);
         Alert.alert("Unable to load", e?.message ?? "Please try again.");
       } finally {
         if (withSpinner) setLoading({ visible: false });
       }
     },
-    [myCoords]
+    [myCoords, shopCategory]
   );
 
   // Initial load (also rerun when myCoords becomes available)
@@ -1266,23 +1363,6 @@ export default function RequestScreen() {
       rows.length === 0 || rows.every((r) => typeof r.distanceKm === "number");
     setDistanceReady(ready);
   }, [rows, myCoords]);
-
-  /* ---------------- get current user's shop_id ---------------- */
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data: auth } = await supabase.auth.getUser();
-        const uid = auth?.user?.id;
-        if (!uid) return;
-        const { data, error } = await supabase
-          .from("shop_details")
-          .select("shop_id")
-          .eq("user_id", uid)
-          .single();
-        if (!error && data?.shop_id) setShopId(data.shop_id);
-      } catch {}
-    })();
-  }, []);
 
   /* ---- fetch THIS shop's requests for visible emergencies ---- */
   useEffect(() => {
@@ -1323,6 +1403,25 @@ export default function RequestScreen() {
         type === "DELETE" ? payload?.old : payload?.new
       ) as EmergencyRow | undefined;
       if (!type || !row) return;
+
+      // NEW: STRICT FILTERING - Only gas_station shops can see gas services
+      if (shopCategory) {
+        const isGasRequest = isGasService(row.breakdown_cause);
+        
+        console.log(`🔍 [REALTIME FILTER] Emergency ${row.emergency_id}:`, {
+          service: row.breakdown_cause,
+          isGasRequest,
+          shopCategory
+        });
+        
+        if (shopCategory === 'gas_station' && !isGasRequest) {
+          console.log(`🚫 [REALTIME GAS STATION HIDING] Non-gas service: ${row.breakdown_cause}`);
+          return; // Gas stations don't see non-gas services
+        } else if (shopCategory !== 'gas_station' && isGasRequest) {
+          console.log(`🚫 [REALTIME MECHANIC HIDING] Gas service: ${row.breakdown_cause}`);
+          return; // All other shops don't see gas services
+        }
+      }
 
       setRows((prev) => {
         const next = [...prev];
@@ -1449,7 +1548,7 @@ export default function RequestScreen() {
         return next;
       });
     },
-    [myCoords]
+    [myCoords, shopCategory]
   );
 
   useEffect(() => {
@@ -1493,9 +1592,6 @@ export default function RequestScreen() {
   // constants for fee rule
 const RATE_PER_KM = 15;          // PHP per km
 const MINIMUM_DISTANCE_KM = 1.0; // bill minimum 1km
-
-// FILE: app/shop/mechanicLandingpage.tsx
-// REPLACE your entire handleOfferSubmit function with this
 
 const handleOfferSubmit = async (offerData: OfferData) => {
   if (!selectedEmergencyForOffer || !shopId) return;
@@ -1571,7 +1667,7 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         .eq("user_id", shopData.user_id)
         .single();
 
-      if (userError) {
+    if (userError) {
         console.error("🔴 [USER ERROR] Failed to fetch mechanic name:", userError);
       } else if (userProfile?.full_name) {
         shopName = userProfile.full_name;
@@ -1908,6 +2004,22 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         </View>
       </SafeAreaView>
 
+      {/* Debug Button - Remove this after testing */}
+      <Pressable 
+        onPress={() => {
+          console.log("🔍 [DEBUG] Current state:", {
+            shopCategory,
+            shopId,
+            rowsCount: rows.length,
+            myCoords: myCoords ? 'Available' : 'None',
+            rows: rows.map(r => ({ id: r.id, service: r.service, isGas: isGasService(r.service) }))
+          });
+        }}
+        className="bg-gray-200 p-2 mx-4 mt-2 rounded"
+      >
+        <Text className="text-center text-xs">Debug Info</Text>
+      </Pressable>
+
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
@@ -1925,8 +2037,15 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         )}
         ListEmptyComponent={
           <View className="px-6 pt-10">
-            <Text className="text-center text-slate-500">
-              No pending requests.
+            <Text className="text-center text-slate-500 mb-2">
+              {shopCategory === 'gas_station' 
+                ? "No gas-related service requests available." 
+                : "No mechanic service requests available."}
+            </Text>
+            <Text className="text-center text-xs text-slate-400">
+              Shop Category: {shopCategory || 'Unknown'} | 
+              Location: {myCoords ? 'Ready' : 'Waiting'} | 
+              Distance: {distanceReady ? 'Ready' : 'Calculating'}
             </Text>
           </View>
         }

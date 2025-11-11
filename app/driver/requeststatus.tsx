@@ -54,6 +54,9 @@ type RequestItem = {
   sentWhen: string;
   lat: number;
   lon: number;
+  serviceType: "vulcanize" | "repair" | "gas" | null;
+  fuelType: string | null;
+  customFuelType: string | null;
 };
 
 type EmergencyRow = {
@@ -76,6 +79,9 @@ type EmergencyRow = {
   canceled_at: string | null;
   accepted_by: string | null;
   driver_hidden: boolean;
+  service_type: "vulcanize" | "repair" | "gas" | null;
+  fuel_type: string | null;
+  custom_fuel_type: string | null;
 };
 
 type AppUserRow = { full_name: string | null; photo_url: string | null };
@@ -191,6 +197,7 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
   } catch {}
   return "Unknown location";
 }
+
 function mapEmergencyToItem(
   r: EmergencyRow,
   profile?: AppUserRow | null
@@ -214,6 +221,9 @@ function mapEmergencyToItem(
     sentWhen: timeAgo(r.created_at),
     lat,
     lon,
+    serviceType: r.service_type,
+    fuelType: r.fuel_type,
+    customFuelType: r.custom_fuel_type,
   };
 }
 
@@ -243,6 +253,25 @@ function prettyStatus(s: RequestStatus): string {
     .toLowerCase()
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Service type display
+function getServiceTypeLabel(serviceType: "vulcanize" | "repair" | "gas" | null): string {
+  switch (serviceType) {
+    case "vulcanize": return "Vulcanize";
+    case "repair": return "Repair";
+    case "gas": return "Gas";
+    default: return "—";
+  }
+}
+
+// Fuel type display
+function getFuelTypeDisplay(fuelType: string | null, customFuelType: string | null): string {
+  if (!fuelType) return "—";
+  if (fuelType === "Others" && customFuelType) {
+    return `Others: ${customFuelType}`;
+  }
+  return fuelType;
 }
 
 // Chat opener (unchanged)
@@ -1541,6 +1570,30 @@ const acceptService = useCallback(
               <View className="ml-3 flex-1">
                 <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
                 <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.info}</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Service Type */}
+          <View className="flex-row items-start">
+            <Ionicons name="build-outline" size={16} color="#64748B" className="mt-0.5" />
+            <View className="ml-3 flex-1">
+              <Text className="text-slate-600 text-sm font-medium">Service Type</Text>
+              <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                {getServiceTypeLabel(item.serviceType)}
+              </Text>
+            </View>
+          </View>
+
+          {/* Fuel Type - only for gas service */}
+          {item.serviceType === "gas" && (
+            <View className="flex-row items-start">
+              <Ionicons name="water-outline" size={16} color="#64748B" className="mt-0.5" />
+              <View className="ml-3 flex-1">
+                <Text className="text-slate-600 text-sm font-medium">Fuel Type</Text>
+                <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                  {getFuelTypeDisplay(item.fuelType, item.customFuelType)}
+                </Text>
               </View>
             </View>
           )}

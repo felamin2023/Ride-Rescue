@@ -53,9 +53,36 @@ const cardShadow = Platform.select({
 });
 
 type VehicleType = "car" | "motorcycle" | "van" | "truck";
+type ServiceType = "vulcanize" | "repair" | "gas" | null;
+type FuelType = 
+  | "Unleaded (91)"
+  | "Premium Unleaded (95)"
+  | "Super Premium (97)"
+  | "Diesel"
+  | "Premium Diesel"
+  | "E10 (Unleaded with 10% ethanol)"
+  | "E85 (Ethanol 85%)"
+  | "LPG (Liquefied Petroleum Gas)"
+  | "CNG (Compressed Natural Gas)"
+  | "Others"
+  | null;
 type IconLib = "ion" | "mci";
 const MAX_PHOTOS = 4;
 const MIN_DESC = 12; // require at least 12 meaningful characters
+
+// Fuel types array with icons
+const FUEL_TYPES = [
+  { label: "Unleaded (91)", icon: "gas-station" as const, lib: "mci" as const },
+  { label: "Premium Unleaded (95)", icon: "gas-station-outline" as const, lib: "mci" as const },
+  { label: "Super Premium (97)", icon: "rocket-outline" as const, lib: "ion" as const },
+  { label: "Diesel", icon: "engine" as const, lib: "mci" as const },
+  { label: "Premium Diesel", icon: "engine-outline" as const, lib: "mci" as const },
+  { label: "E10 (Unleaded with 10% ethanol)", icon: "leaf-outline" as const, lib: "ion" as const },
+  { label: "E85 (Ethanol 85%)", icon: "sprout-outline" as const, lib: "mci" as const },
+  { label: "LPG (Liquefied Petroleum Gas)", icon: "propane-tank" as const, lib: "mci" as const },
+  { label: "CNG (Compressed Natural Gas)", icon: "gas-cylinder" as const, lib: "mci" as const },
+  { label: "Others", icon: "help-circle-outline" as const, lib: "ion" as const }
+] as const;
 
 /* ------------------------------ Small helpers ------------------------------ */
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
@@ -150,12 +177,94 @@ function VehicleChip({
   );
 }
 
+function ServiceChip({
+  label,
+  iconName,
+  lib = "ion",
+  selected,
+  onPress,
+}: {
+  label: string;
+  iconName: string;
+  lib?: IconLib;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const Icon = lib === "mci" ? MaterialCommunityIcons : (Ionicons as any);
+  return (
+    <Pressable
+      onPress={onPress}
+      className={`flex-row items-center justify-center gap-2 rounded-xl border px-3 py-3 mx-1 ${
+        selected ? "bg-[#EEF2FF] border-[#C7D2FE]" : "bg-white border-slate-300"
+      }`}
+      style={[cardShadow as any, { flex: 1, minWidth: 0 }]}
+      android_ripple={{ color: "rgba(0,0,0,0.05)" }}
+    >
+      <Icon
+        name={iconName as any}
+        size={16}
+        color={selected ? COLORS.primary : COLORS.text}
+      />
+      <Text
+        className={`text-[12px] ${
+          selected ? "text-[#1E3A8A]" : "text-slate-800"
+        } font-medium text-center`}
+        numberOfLines={1}
+        ellipsizeMode="tail"
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function FuelChip({
+  label,
+  iconName,
+  lib = "mci",
+  selected,
+  onPress,
+}: {
+  label: string;
+  iconName: string;
+  lib?: IconLib;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const Icon = lib === "mci" ? MaterialCommunityIcons : (Ionicons as any);
+  return (
+    <Pressable
+      onPress={onPress}
+      className={`flex-row items-center justify-center gap-2 rounded-xl border px-3 py-3 mx-1 ${
+        selected ? "bg-[#EEF2FF] border-[#C7D2FE]" : "bg-white border-slate-300"
+      }`}
+      style={cardShadow as any}
+      android_ripple={{ color: "rgba(0,0,0,0.05)" }}
+    >
+      <Icon
+        name={iconName as any}
+        size={16}
+        color={selected ? COLORS.primary : COLORS.text}
+      />
+      <Text
+        className={`text-[11px] ${
+          selected ? "text-[#1E3A8A]" : "text-slate-800"
+        } font-medium text-center flex-1`}
+        numberOfLines={2}
+        ellipsizeMode="tail"
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 /* -------------------------------- Modals ---------------------------------- */
 function SuccessModal({
   visible,
   onClose,
   title = "Emergency posted",
-  subtitle = "We’ve alerted nearby responders.",
+  subtitle = "We've alerted nearby responders.",
 }: {
   visible: boolean;
   onClose: () => void;
@@ -207,7 +316,7 @@ function ErrorModal({
   visible,
   onRetry,
   onDismiss,
-  title = "Can’t pinpoint your location",
+  title = "Can't pinpoint your location",
   message = "Please enable GPS/Location and try again.",
 }: {
   visible: boolean;
@@ -270,6 +379,9 @@ function ErrorModal({
 function ConfirmModal({
   visible,
   vehicle,
+  serviceType,
+  fuelType,
+  customFuelType,
   desc,
   address,
   coords,
@@ -279,6 +391,9 @@ function ConfirmModal({
 }: {
   visible: boolean;
   vehicle: string | null;
+  serviceType: ServiceType;
+  fuelType: FuelType;
+  customFuelType?: string;
   desc: string;
   address?: string | null;
   coords?: { lat: number; lon: number } | null;
@@ -286,6 +401,22 @@ function ConfirmModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const getServiceTypeLabel = (type: ServiceType) => {
+    switch (type) {
+      case "vulcanize": return "Vulcanize";
+      case "repair": return "Repair";
+      case "gas": return "Gas";
+      default: return "—";
+    }
+  };
+
+  const getFuelTypeLabel = (type: FuelType, custom?: string) => {
+    if (type === "Others" && custom) {
+      return `Others: ${custom}`;
+    }
+    return type || "—";
+  };
+
   return (
     <Modal
       visible={visible}
@@ -318,13 +449,21 @@ function ConfirmModal({
             Post this emergency?
           </Text>
           <Text className="mt-1 text-center text-[12px] text-slate-600">
-            We’ll notify responders within range.
+            We'll notify responders within range.
           </Text>
 
           <View className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
             <Text className="text-[12px] text-slate-700">
               <Text className="font-semibold">Vehicle:</Text> {vehicle || "—"}
             </Text>
+            <Text className="mt-1 text-[12px] text-slate-700">
+              <Text className="font-semibold">Service Type:</Text> {getServiceTypeLabel(serviceType)}
+            </Text>
+            {serviceType === "gas" && (
+              <Text className="mt-1 text-[12px] text-slate-700">
+                <Text className="font-semibold">Fuel Type:</Text> {getFuelTypeLabel(fuelType, customFuelType)}
+              </Text>
+            )}
             <Text className="mt-1 text-[12px] text-slate-700">
               <Text className="font-semibold">Issue:</Text> {desc || "—"}
             </Text>
@@ -370,6 +509,9 @@ export default function EmergencyRequest() {
   const insets = useSafeAreaInsets();
 
   const [vehicle, setVehicle] = useState<VehicleType | null>(null);
+  const [serviceType, setServiceType] = useState<ServiceType>(null);
+  const [fuelType, setFuelType] = useState<FuelType>(null);
+  const [customFuelType, setCustomFuelType] = useState("");
   const [desc, setDesc] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -392,8 +534,30 @@ export default function EmergencyRequest() {
   const trimmed = desc.trim();
   const isDescTooShort = trimmed.length > 0 && trimmed.length < MIN_DESC;
 
-  // Require coords for submit
-  const canSubmit = !!vehicle && trimmed.length >= MIN_DESC && !!coords;
+  // Require coords for submit, and fuelType if serviceType is gas
+  const canSubmit = !!vehicle && 
+                   !!serviceType && 
+                   trimmed.length >= MIN_DESC && 
+                   !!coords &&
+                   (serviceType !== "gas" || (
+                     !!fuelType && 
+                     (fuelType !== "Others" || customFuelType.trim().length > 0)
+                   ));
+
+  // Reset fuel type when service type changes
+  useEffect(() => {
+    if (serviceType !== "gas") {
+      setFuelType(null);
+      setCustomFuelType("");
+    }
+  }, [serviceType]);
+
+  // Reset custom fuel when fuel type changes from "Others"
+  useEffect(() => {
+    if (fuelType !== "Others") {
+      setCustomFuelType("");
+    }
+  }, [fuelType]);
 
   /* ------------------------------ Image pickers ----------------------------- */
   const requestMedia = async () => {
@@ -639,12 +803,17 @@ export default function EmergencyRequest() {
         attachmentUrls = await uploadPhotosToBucket(userId, groupId, photos);
       }
 
-      // 3) Insert emergency row and retrieve the generated emergency_id
+      // 3) Determine the final fuel type value
+      const finalFuelType = fuelType === "Others" ? customFuelType.trim() : fuelType;
+
+      // 4) Insert emergency row and retrieve the generated emergency_id
       const { data: inserted, error: insErr } = await supabase
         .from("emergency")
         .insert({
           user_id: userId,
           vehicle_type: vehicle!, // required
+          service_type: serviceType!, // required
+          fuel_type: finalFuelType, // can be specific type or custom string
           breakdown_cause: trimmed,
           attachments: attachmentUrls, // JSONB array of URLs
           latitude: coords.lat,
@@ -740,10 +909,10 @@ export default function EmergencyRequest() {
             {/* Header text */}
             <View className="px-5 pt-4">
               <Text className="text-[16px] font-medium text-slate-900">
-                What’s the situation?
+                What's the situation?
               </Text>
               <Text className="mt-1 text-[12px] text-slate-600">
-                We’ll notify nearby responders once you submit.
+                We'll notify nearby responders once you submit.
               </Text>
             </View>
 
@@ -789,6 +958,93 @@ export default function EmergencyRequest() {
                   />
                 </View>
               </View>
+
+              {/* Service Type */}
+              <View
+                className="mt-3 rounded-2xl border border-slate-200 bg-white p-4"
+                style={cardShadow as any}
+              >
+                <FieldLabel>Service needed</FieldLabel>
+                <View className="mt-1" />
+                <View className="flex-row gap-2">
+                  <ServiceChip
+                    label="Vulcanize"
+                    iconName="build-outline"
+                    lib="ion"
+                    selected={serviceType === "vulcanize"}
+                    onPress={() => setServiceType("vulcanize")}
+                  />
+                  <ServiceChip
+                    label="Repair"
+                    iconName="construct-outline"
+                    lib="ion"
+                    selected={serviceType === "repair"}
+                    onPress={() => setServiceType("repair")}
+                  />
+                  <ServiceChip
+                    label="Gas"
+                    iconName="water-outline"
+                    lib="ion"
+                    selected={serviceType === "gas"}
+                    onPress={() => setServiceType("gas")}
+                  />
+                </View>
+              </View>
+
+              {/* Fuel Type (only shown when serviceType is gas) */}
+              {serviceType === "gas" && (
+                <View
+                  className="mt-3 rounded-2xl border border-slate-200 bg-white p-4"
+                  style={cardShadow as any}
+                >
+                  <FieldLabel>Fuel type needed</FieldLabel>
+                  <View className="mt-1" />
+                  
+                  {/* Fuel type grid - 2 columns with icons */}
+                  <View className="flex-row flex-wrap -mx-1">
+                    {FUEL_TYPES.map((fuel, index) => (
+                      <View key={fuel.label} className="w-1/2 p-1">
+                        <FuelChip
+                          label={fuel.label}
+                          iconName={fuel.icon}
+                          lib={fuel.lib}
+                          selected={fuelType === fuel.label}
+                          onPress={() => setFuelType(fuel.label)}
+                        />
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* Custom fuel type input */}
+                  {fuelType === "Others" && (
+                    <View className="mt-3">
+                      <FieldLabel>Specify fuel type</FieldLabel>
+                      <TextInput
+                        value={customFuelType}
+                        onChangeText={setCustomFuelType}
+                        placeholder="e.g., Bio-diesel, Aviation fuel, etc."
+                        placeholderTextColor="#6B7280"
+                        className="mt-1 rounded-xl border border-slate-300 bg-white p-3 text-[14px] text-slate-900"
+                      />
+                      <Text className="mt-1 text-[11px] text-slate-600">
+                        Please specify the exact fuel type you need.
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Validation message */}
+                  {serviceType === "gas" && !fuelType && (
+                    <Text className="mt-2 text-[11px] text-red-600">
+                      Please select a fuel type.
+                    </Text>
+                  )}
+                  {serviceType === "gas" && fuelType === "Others" && !customFuelType.trim() && (
+                    <Text className="mt-2 text-[11px] text-red-600">
+                      Please specify your fuel type.
+                    </Text>
+                  )}
+                </View>
+              )}
 
               {/* Description */}
               <View className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -857,7 +1113,7 @@ export default function EmergencyRequest() {
                 {!locLoading && !coords ? (
                   <View className="mt-1 rounded-2xl border border-amber-300 bg-amber-50 p-3">
                     <Text className="text-[12px] text-amber-800">
-                      We couldn’t get your location. Tap “Try again”.
+                      We couldn't get your location. Tap "Try again".
                     </Text>
                     <Pressable
                       onPress={() => setLocErrorVisible(true)}
@@ -926,12 +1182,26 @@ export default function EmergencyRequest() {
                   Ready to post?
                 </Text>
                 <Text className="mt-1 text-[12px] text-slate-600">
-                  We’ll ping responders near your location.
+                  {serviceType === "gas" 
+                    ? "We'll ping gas stations near your location."
+                    : "We'll ping responders near your location."}
                 </Text>
 
                 {!coords && (
                   <Text className="mt-2 text-[11px] text-red-600">
                     Location required. Please enable GPS and try again.
+                  </Text>
+                )}
+
+                {serviceType === "gas" && !fuelType && (
+                  <Text className="mt-2 text-[11px] text-red-600">
+                    Please select a fuel type.
+                  </Text>
+                )}
+
+                {serviceType === "gas" && fuelType === "Others" && !customFuelType.trim() && (
+                  <Text className="mt-2 text-[11px] text-red-600">
+                    Please specify your fuel type.
                   </Text>
                 )}
 
@@ -986,6 +1256,9 @@ export default function EmergencyRequest() {
       <ConfirmModal
         visible={confirmVisible}
         vehicle={vehicle}
+        serviceType={serviceType}
+        fuelType={fuelType}
+        customFuelType={customFuelType}
         desc={trimmed}
         address={address}
         coords={coords}
@@ -1001,7 +1274,7 @@ export default function EmergencyRequest() {
           detectLocation();
         }}
         onDismiss={() => setLocErrorVisible(false)}
-        title="Can’t pinpoint your location"
+        title="Can't pinpoint your location"
         message="Please enable GPS/Location and try again."
       />
 
@@ -1009,10 +1282,10 @@ export default function EmergencyRequest() {
         visible={successVisible}
         onClose={() => {
           setSuccessVisible(false);
-          router.replace("/driver/requeststatus"); // ⬅️ no emergency_id param
+          router.replace("/driver/requeststatus");
         }}
         title="Emergency posted"
-        subtitle="We’ve alerted nearby responders."
+        subtitle="We've alerted nearby responders."
       />
     </SafeAreaView>
   );

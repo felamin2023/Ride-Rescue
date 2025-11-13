@@ -40,6 +40,7 @@ const peso = (n: number | null | undefined) => `₱${(Number(n) || 0).toFixed(2)
 /* ----------------------------- Types ----------------------------- */
 type SRStatus = "pending" | "accepted" | "rejected" | "canceled";
 type EmergencyStatus = "waiting" | "in_process" | "completed" | "canceled";
+type ServiceType = "vulcanize" | "repair" | "gas" | null;
 
 type ServiceRequestRow = {
   service_id: string;
@@ -68,6 +69,9 @@ type EmergencyRow = {
   completed_at?: string | null;
   canceled_at?: string | null;
   canceled_reason?: string | null;
+  service_type: ServiceType;
+  fuel_type: string | null;
+  custom_fuel_type: string | null;
 };
 
 type AppUserRow = { user_id: string; full_name: string | null; photo_url: string | null };
@@ -81,6 +85,8 @@ type TxRow = {
   distance_km: number;
   distance_fee: number;
   labor_cost: number;
+  fuel_cost: number;
+  parts_cost: number;
   extra_total: number;
   total_amount: number;
   status: "pending" | "to_pay" | "paid" | "canceled";
@@ -91,11 +97,19 @@ type TxRow = {
   proof_image_url: string | null;
 };
 
+type ShopOfferRow = {
+  emergency_id: string;
+  labor_cost: number;
+  fuel_cost: number;
+  created_at: string;
+};
+
 type Charges = {
   ratePerKm: number;
   distanceKm: number;
   distanceFee: number;
   laborCost: number;
+  fuelCost: number;
   extraTotal: number;
   totalAmount: number;
   txStatus: TxRow["status"];
@@ -118,7 +132,12 @@ type CardItem = {
   emStatus: EmergencyStatus;
   distanceKm?: number;
   imageUrls?: string[];
-  charges?: Charges; // 👈 populated from payment_transaction
+  charges?: Charges;
+  serviceType: ServiceType;
+  fuelType: string | null;
+  customFuelType: string | null;
+  initialLaborCost?: number;
+  initialFuelCost?: number;
 };
 
 /* ----------------------------- Small UI helpers ----------------------------- */
@@ -168,6 +187,13 @@ const STATUS_STYLES: Record<EmergencyStatus, { bg?: string; border?: string; tex
 };
 const prettyStatus = (s: EmergencyStatus) =>
   s === "in_process" ? "In Process" : s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+// Helper to get display fuel type
+const getFuelDisplay = (fuelType: string | null, customFuelType: string | null) => {
+  if (customFuelType) return customFuelType;
+  if (fuelType) return fuelType.charAt(0).toUpperCase() + fuelType.slice(1);
+  return "Fuel";
+};
 
 /* ----------------------------- Cute spinner ----------------------------- */
 function SpinningGear({ size = 14, color = "#059669" }) {
@@ -226,12 +252,20 @@ export default function ShopAcceptedRequests() {
   const [actionLocked, setActionLocked] = useState<Record<string, boolean>>({});
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
-  const [selectedEmergency, setSelectedEmergency] = useState<{ emergencyId: string; distanceKm: number } | null>(null);
+  const [selectedEmergency, setSelectedEmergency] = useState<{ 
+    emergencyId: string; 
+    distanceKm: number; 
+    serviceType: ServiceType;
+    fuelType?: string | null;
+    customFuelType?: string | null;
+    initialLaborCost?: number;
+    initialFuelCost?: number;
+  } | null>(null);
 
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null);
 
   // amounts snapshot for PaymentModal
-  const [originalTx, setOriginalTx] = useState<{ distance_fee: number; labor_cost: number; total_amount: number } | null>(null);
+  const [originalTx, setOriginalTx] = useState<{ distance_fee: number; labor_cost: number; fuel_cost: number; total_amount: number } | null>(null);
 
   const toggleCard = (emId: string) => setOpenCards((m) => ({ ...m, [emId]: !m[emId] }));
 
@@ -280,7 +314,7 @@ export default function ShopAcceptedRequests() {
       const emIds = Array.from(new Set(srRows.map((r) => r.emergency_id)));
       const { data: ems, error: emErr } = await supabase
         .from("emergency")
-        .select("emergency_id, user_id, vehicle_type, breakdown_cause, attachments, emergency_status, latitude, longitude, created_at, accepted_at, accepted_by")
+        .select("emergency_id, user_id, vehicle_type, breakdown_cause, attachments, emergency_status, latitude, longitude, created_at, accepted_at, accepted_by, service_type, fuel_type, custom_fuel_type")
         .in("emergency_id", emIds);
       if (emErr) throw emErr;
 
@@ -300,7 +334,7 @@ export default function ShopAcceptedRequests() {
       // 4) payment_transaction for these emergencies (for this shop)
       const { data: txs } = await supabase
         .from("payment_transaction")
-        .select("transaction_id, emergency_id, service_id, shop_id, rate_per_km, distance_km, distance_fee, labor_cost, extra_total, total_amount, status, created_at, updated_at, paid_at, proof_image_url")
+        .select("transaction_id, emergency_id, service_id, shop_id, rate_per_km, distance_km, distance_fee, labor_cost, fuel_cost, parts_cost, extra_total, total_amount, status, created_at, updated_at, paid_at, proof_image_url")
         .eq("shop_id", sid!)
         .in("emergency_id", Array.from(emMap.keys()));
       // choose most recent per service_id
@@ -310,7 +344,23 @@ export default function ShopAcceptedRequests() {
         if (!cur || new Date(t.created_at).getTime() > new Date(cur.created_at).getTime()) txByService.set(t.service_id, t);
       });
 
-      // 5) compose cards
+      // 5) Fetch shop_offers to get initial labor and fuel costs
+      const { data: shopOffers } = await supabase
+        .from("shop_offers")
+        .select("emergency_id, labor_cost, fuel_cost, created_at")
+        .eq("shop_id", sid!)
+        .in("emergency_id", Array.from(emMap.keys()))
+        .order("created_at", { ascending: false });
+
+      // Create a map of the latest shop offer for each emergency
+      const shopOffersMap = new Map<string, ShopOfferRow>();
+      (shopOffers || []).forEach(offer => {
+        if (!shopOffersMap.has(offer.emergency_id)) {
+          shopOffersMap.set(offer.emergency_id, offer);
+        }
+      });
+
+      // 6) compose cards
       const composed: CardItem[] = await Promise.all(
         filteredSRs.map(async (sr) => {
           const em = emMap.get(sr.emergency_id)!;
@@ -321,15 +371,29 @@ export default function ShopAcceptedRequests() {
           const landmark = await reverseGeocode(em.latitude, em.longitude);
 
           const tx = txByService.get(sr.service_id);
+          const shopOffer = shopOffersMap.get(sr.emergency_id);
+
           const charges: Charges | undefined = tx
             ? {
                 ratePerKm: Number(tx.rate_per_km || 0),
                 distanceKm: Number(tx.distance_km || 0),
                 distanceFee: Number(tx.distance_fee || 0),
-                laborCost: Number(tx.labor_cost || 0),
+                laborCost: Number(tx.labor_cost || (shopOffer?.labor_cost ?? 0)),
+                fuelCost: Number(tx.fuel_cost || (shopOffer?.fuel_cost ?? 0)),
                 extraTotal: Number(tx.extra_total || 0),
                 totalAmount: Number(tx.total_amount || 0),
                 txStatus: tx.status,
+              }
+            : shopOffer
+            ? {
+                ratePerKm: 15, // default
+                distanceKm: 0,
+                distanceFee: 0,
+                laborCost: Number(shopOffer.labor_cost || 0),
+                fuelCost: Number(shopOffer.fuel_cost || 0),
+                extraTotal: 0,
+                totalAmount: 0,
+                txStatus: "pending" as const,
               }
             : undefined;
 
@@ -351,6 +415,11 @@ export default function ShopAcceptedRequests() {
             distanceKm,
             imageUrls: (em.attachments || []).filter(Boolean) || undefined,
             charges,
+            serviceType: em.service_type,
+            fuelType: em.fuel_type,
+            customFuelType: em.custom_fuel_type,
+            initialLaborCost: shopOffer?.labor_cost,
+            initialFuelCost: shopOffer?.fuel_cost,
           };
         })
       );
@@ -383,7 +452,7 @@ export default function ShopAcceptedRequests() {
       if (!shopId) return null;
       const { data: tx, error } = await supabase
         .from("payment_transaction")
-        .select("transaction_id, distance_fee, labor_cost, total_amount")
+        .select("transaction_id, distance_fee, labor_cost, fuel_cost, total_amount")
         .eq("emergency_id", emergencyId)
         .eq("shop_id", shopId)
         .order("created_at", { ascending: false })
@@ -491,28 +560,62 @@ export default function ShopAcceptedRequests() {
   };
 
   /* ----------------------------- Actions ----------------------------- */
-  const handleMarkComplete = async (emergencyId: string, distanceKm?: number) => {
+  const handleMarkComplete = async (
+    emergencyId: string, 
+    distanceKm?: number, 
+    serviceType?: ServiceType,
+    fuelType?: string | null,
+    customFuelType?: string | null,
+    initialLaborCost?: number,
+    initialFuelCost?: number
+  ) => {
     if (actionLocked[emergencyId]) return;
     setActionLocked((prev) => ({ ...prev, [emergencyId]: true }));
-    setSelectedEmergency({ emergencyId, distanceKm: distanceKm || 0 });
+    setSelectedEmergency({ 
+      emergencyId, 
+      distanceKm: distanceKm || 0, 
+      serviceType: serviceType ?? null,
+      fuelType,
+      customFuelType,
+      initialLaborCost,
+      initialFuelCost
+    });
 
     const tx = await loadPaymentTx(emergencyId);
     if (tx) {
       setOriginalTx({
         distance_fee: Number(tx.distance_fee) || 0,
         labor_cost: Number(tx.labor_cost) || 0,
+        fuel_cost: Number(tx.fuel_cost) || 0,
         total_amount: Number(tx.total_amount) || 0,
       });
     } else {
-      setOriginalTx({ distance_fee: (distanceKm || 0) * 15, labor_cost: 0, total_amount: (distanceKm || 0) * 15 });
+      setOriginalTx({ 
+        distance_fee: (distanceKm || 0) * 15, 
+        labor_cost: 0, 
+        fuel_cost: 0,
+        total_amount: (distanceKm || 0) * 15 
+      });
     }
     setShowPaymentModal(true);
   };
 
-  const handleCancelRepair = (emergencyId: string, distanceKm?: number) => {
+  const handleCancelRepair = (
+    emergencyId: string, 
+    distanceKm?: number, 
+    serviceType?: ServiceType,
+    fuelType?: string | null,
+    customFuelType?: string | null
+  ) => {
     if (actionLocked[emergencyId]) return;
     setActionLocked((prev) => ({ ...prev, [emergencyId]: true }));
-    setSelectedEmergency({ emergencyId, distanceKm: distanceKm || 0 });
+    setSelectedEmergency({ 
+      emergencyId, 
+      distanceKm: distanceKm || 0, 
+      serviceType: serviceType ?? null,
+      fuelType,
+      customFuelType
+    });
     setShowCancelModal(true);
   };
 
@@ -530,26 +633,40 @@ export default function ShopAcceptedRequests() {
       if (!tx) throw new Error("No payment transaction found for this emergency.");
 
       const now = new Date().toISOString();
+      const isGasService = selectedEmergency?.serviceType === 'gas';
 
       const baseDistance = Number(originalTx?.distance_fee ?? 0);
-      const extraTotal = (invoice.finalServices || []).reduce((sum: number, s: any) => {
+      
+      // For non-gas services, calculate extraTotal from additional services
+      const extraTotal = !isGasService ? (invoice.finalServices || []).reduce((sum: number, s: any) => {
         const qty = Number(s?.qty ?? s?.quantity ?? 1) || 1;
         const unit = Number(s?.fee ?? s?.price ?? s?.amount ?? s?.cost ?? 0) || 0;
         return sum + qty * unit;
-      }, 0);
-      const labor = Number(invoice.finalLaborCost || 0);
-      const computedTotal = baseDistance + labor + extraTotal;
+      }, 0) : 0;
+      
+      const serviceCost = Number(invoice.finalLaborCost || 0);
+      const computedTotal = baseDistance + serviceCost + extraTotal;
+
+      const updateData: any = {
+        extra_items: !isGasService ? (invoice.finalServices ?? []) : [],
+        extra_total: Number(extraTotal.toFixed(2)),
+        total_amount: Number(computedTotal.toFixed(2)),
+        status: "to_pay",
+        updated_at: now,
+      };
+
+      // Set either labor_cost or fuel_cost based on service type
+      if (isGasService) {
+        updateData.fuel_cost = Number(serviceCost.toFixed(2));
+        updateData.labor_cost = 0; // Clear labor cost for gas services
+      } else {
+        updateData.labor_cost = Number(serviceCost.toFixed(2));
+        updateData.fuel_cost = 0; // Clear fuel cost for non-gas services
+      }
 
       const { error: txErr } = await supabase
         .from("payment_transaction")
-        .update({
-          labor_cost: Number(labor.toFixed(2)),
-          extra_items: invoice.finalServices ?? [],
-          extra_total: Number(extraTotal.toFixed(2)),
-          total_amount: Number(computedTotal.toFixed(2)),
-          status: "to_pay",
-          updated_at: now,
-        })
+        .update(updateData)
         .eq("transaction_id", tx.transaction_id);
       if (txErr) throw txErr;
 
@@ -578,6 +695,7 @@ export default function ShopAcceptedRequests() {
 
       const now = new Date().toISOString();
       const isDiagnoseOnly = cancelData.cancelOption === "diagnose_only";
+      const isGasService = selectedEmergency?.serviceType === 'gas';
 
       // 1) emergency status update
       const emergencyUpdate =
@@ -593,7 +711,7 @@ export default function ShopAcceptedRequests() {
       // 2) payment_transaction adjustments
       const { data: tx } = await supabase
         .from("payment_transaction")
-        .select("transaction_id, distance_fee, labor_cost")
+        .select("transaction_id, distance_fee, labor_cost, fuel_cost")
         .eq("emergency_id", cancelData.offerId)
         .eq("shop_id", shopId!)
         .order("created_at", { ascending: false })
@@ -602,7 +720,7 @@ export default function ShopAcceptedRequests() {
 
       if (tx) {
         const baseDistance = Number(tx.distance_fee || 0);
-        const baseLabor = Number(tx.labor_cost || 0);
+        const baseServiceCost = isGasService ? Number(tx.fuel_cost || 0) : Number(tx.labor_cost || 0);
 
         if (isDiagnoseOnly) {
           const { error: txErr } = await supabase
@@ -610,6 +728,7 @@ export default function ShopAcceptedRequests() {
             .update({
               distance_fee: 0,
               labor_cost: 0,
+              fuel_cost: 0,
               extra_total: 0,
               total_amount: 0,
               status: "pending",
@@ -621,21 +740,31 @@ export default function ShopAcceptedRequests() {
             .eq("transaction_id", tx.transaction_id);
           if (txErr) throw txErr;
         } else {
-          const halfLabor = Number((baseLabor * 0.5).toFixed(2));
-          const computed = Number((baseDistance + halfLabor).toFixed(2));
+          const halfServiceCost = Number((baseServiceCost * 0.5).toFixed(2));
+          const computed = Number((baseDistance + halfServiceCost).toFixed(2));
+
+          const updateData: any = {
+            extra_total: 0,
+            total_amount: computed,
+            status: "to_pay",
+            cancel_option: cancelData.cancelOption,
+            cancel_reason: cancelData.reason || null,
+            canceled_at: now,
+            updated_at: now,
+          };
+
+          // Set either labor_cost or fuel_cost based on service type
+          if (isGasService) {
+            updateData.fuel_cost = halfServiceCost;
+            updateData.labor_cost = 0;
+          } else {
+            updateData.labor_cost = halfServiceCost;
+            updateData.fuel_cost = 0;
+          }
 
           const { error: txErr } = await supabase
             .from("payment_transaction")
-            .update({
-              labor_cost: halfLabor,
-              extra_total: 0,
-              total_amount: computed,
-              status: "to_pay",
-              cancel_option: cancelData.cancelOption,
-              cancel_reason: cancelData.reason || null,
-              canceled_at: now,
-              updated_at: now,
-            })
+            .update(updateData)
             .eq("transaction_id", tx.transaction_id);
           if (txErr) throw txErr;
         }
@@ -694,7 +823,13 @@ export default function ShopAcceptedRequests() {
         if (!row) return;
         setItems((prev) => {
           if (row.emergency_status === "completed") return prev.filter((it) => it.emergencyId !== row.emergency_id);
-          return prev.map((it) => (it.emergencyId === row.emergency_id ? { ...it, emStatus: row.emergency_status } : it));
+          return prev.map((it) => (it.emergencyId === row.emergency_id ? { 
+            ...it, 
+            emStatus: row.emergency_status,
+            serviceType: row.service_type,
+            fuelType: row.fuel_type,
+            customFuelType: row.custom_fuel_type
+          } : it));
         });
       })
       .subscribe();
@@ -714,6 +849,7 @@ export default function ShopAcceptedRequests() {
                     distanceKm: Number(row.distance_km || 0),
                     distanceFee: Number(row.distance_fee || 0),
                     laborCost: Number(row.labor_cost || 0),
+                    fuelCost: Number(row.fuel_cost || 0),
                     extraTotal: Number(row.extra_total || 0),
                     totalAmount: Number(row.total_amount || 0),
                     txStatus: row.status,
@@ -742,6 +878,7 @@ export default function ShopAcceptedRequests() {
     const isOpen = !!openCards[item.emergencyId];
     const hasCharges = !!item.charges;
     const buttonsVisible = item.emStatus === "in_process" && !actionLocked[item.emergencyId] && (item.charges?.txStatus === "pending" || !item.charges);
+    const isGasService = item.serviceType === 'gas';
 
     return (
       <Pressable
@@ -763,7 +900,10 @@ export default function ShopAcceptedRequests() {
           <Image source={{ uri: item.driverAvatar }} className="w-12 h-12 rounded-full" />
           <View className="ml-3 flex-1">
             <Text className="text-[17px] font-semibold text-slate-900" numberOfLines={1}>{item.driverName}</Text>
-            <Text className="text-[13px] text-slate-500 mt-0.5">Emergency Request • {item.vehicleType}</Text>
+            <Text className="text-[13px] text-slate-500 mt-0.5">
+              Emergency Request • {item.vehicleType}
+              {item.serviceType && ` • ${item.serviceType.charAt(0).toUpperCase() + item.serviceType.slice(1)}`}
+            </Text>
           </View>
 
         {/* Quick total pill */}
@@ -784,6 +924,19 @@ export default function ShopAcceptedRequests() {
               <View className="ml-3 flex-1">
                 <Text className="text-slate-600 text-sm font-medium">Driver Notes</Text>
                 <Text className="text-slate-800 text-sm mt-0.5 leading-5">{item.info}</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Show fuel type for gas emergencies */}
+          {isGasService && (item.fuelType || item.customFuelType) && (
+            <View className="flex-row items-start">
+              <Ionicons name="water-outline" size={16} color="#64748B" />
+              <View className="ml-3 flex-1">
+                <Text className="text-slate-600 text-sm font-medium">Fuel Type</Text>
+                <Text className="text-slate-800 text-sm mt-0.5 leading-5">
+                  {getFuelDisplay(item.fuelType, item.customFuelType)}
+                </Text>
               </View>
             </View>
           )}
@@ -822,10 +975,22 @@ export default function ShopAcceptedRequests() {
                 <Text className="text-slate-600 text-sm">Distance Fee</Text>
                 <Text className="text-slate-900 text-sm font-medium">{peso(item.charges!.distanceFee)}</Text>
               </View>
-              <View className="flex-row justify-between items-center mt-2">
-                <Text className="text-slate-600 text-sm">Labor</Text>
-                <Text className="text-slate-900 text-sm font-medium">{peso(item.charges!.laborCost)}</Text>
-              </View>
+              
+              {/* Show either Labor or Fuel based on service type */}
+              {isGasService ? (
+                <View className="flex-row justify-between items-center mt-2">
+                  <Text className="text-slate-600 text-sm">
+                    Fuel {item.fuelType || item.customFuelType ? `(${getFuelDisplay(item.fuelType, item.customFuelType)})` : ''}
+                  </Text>
+                  <Text className="text-slate-900 text-sm font-medium">{peso(item.charges!.fuelCost)}</Text>
+                </View>
+              ) : (
+                <View className="flex-row justify-between items-center mt-2">
+                  <Text className="text-slate-600 text-sm">Labor</Text>
+                  <Text className="text-slate-900 text-sm font-medium">{peso(item.charges!.laborCost)}</Text>
+                </View>
+              )}
+              
               {Number(item.charges!.extraTotal) > 0 && (
                 <View className="flex-row justify-between items-center mt-2">
                   <Text className="text-slate-600 text-sm">Extras</Text>
@@ -887,14 +1052,28 @@ export default function ShopAcceptedRequests() {
             {buttonsVisible && (
               <View className="flex-row gap-3 mt-3">
                 <Pressable 
-                  onPress={() => handleMarkComplete(item.emergencyId, item.distanceKm)} 
+                  onPress={() => handleMarkComplete(
+                    item.emergencyId, 
+                    item.distanceKm, 
+                    item.serviceType ?? null, 
+                    item.fuelType, 
+                    item.customFuelType,
+                    item.initialLaborCost,
+                    item.initialFuelCost
+                  )} 
                   className="flex-1 rounded-xl py-2.5 px-4 bg-blue-600 items-center"
                 >
                   <Text className="text-white text-[14px] font-semibold">Complete</Text>
                 </Pressable>
 
                 <Pressable 
-                  onPress={() => handleCancelRepair(item.emergencyId, item.distanceKm)} 
+                  onPress={() => handleCancelRepair(
+                    item.emergencyId, 
+                    item.distanceKm, 
+                    item.serviceType ?? null,
+                    item.fuelType,
+                    item.customFuelType
+                  )} 
                   className="flex-1 rounded-xl py-2.5 px-4 border border-red-600 items-center bg-red-600"
                 >
                   <Text className="text-white text-[14px] font-semibold">Cancel Repair</Text>
@@ -1007,9 +1186,15 @@ export default function ShopAcceptedRequests() {
         offerId={selectedEmergency?.emergencyId || ""} // emergencyId
         originalOffer={{
           labor_cost: originalTx?.labor_cost ?? 0,
+          fuel_cost: originalTx?.fuel_cost ?? 0,
           distance_fee: originalTx?.distance_fee ?? (selectedEmergency?.distanceKm || 0) * 15,
           total_cost: originalTx?.total_amount ?? ((originalTx?.labor_cost ?? 0) + (originalTx?.distance_fee ?? 0)),
         }}
+        serviceType={selectedEmergency?.serviceType || 'repair'}
+        fuelType={selectedEmergency?.fuelType || null}
+        customFuelType={selectedEmergency?.customFuelType || null}
+        initialLaborCost={selectedEmergency?.initialLaborCost}
+        initialFuelCost={selectedEmergency?.initialFuelCost}
         onClose={() => {
           const closingId = selectedEmergency?.emergencyId;
           if (closingId) {
@@ -1032,10 +1217,12 @@ export default function ShopAcceptedRequests() {
         visible={showCancelModal}
         offerId={selectedEmergency?.emergencyId || ""}
         originalOffer={{
-          labor_cost: 50,
-          distance_fee: (selectedEmergency?.distanceKm || 0) * 15,
-          total_cost: 50 + (selectedEmergency?.distanceKm || 0) * 15,
+          labor_cost: originalTx?.labor_cost ?? 50,
+          fuel_cost: originalTx?.fuel_cost ?? 0,
+          distance_fee: originalTx?.distance_fee ?? (selectedEmergency?.distanceKm || 0) * 15,
+          total_cost: (originalTx?.labor_cost ?? 50) + (originalTx?.fuel_cost ?? 0) + (originalTx?.distance_fee ?? (selectedEmergency?.distanceKm || 0) * 15),
         }}
+        serviceType={selectedEmergency?.serviceType || 'repair'}
         onClose={() => {
           const closingId = selectedEmergency?.emergencyId;
           if (closingId) {

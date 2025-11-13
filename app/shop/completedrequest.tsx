@@ -15,6 +15,8 @@ type TxRow = {
   driver_user_id: string | null;
   distance_fee: number;
   labor_cost: number;
+  fuel_cost: number;
+  parts_cost: number;
   extra_total: number;
   extra_items: any[] | null;
   total_amount: number;
@@ -28,12 +30,23 @@ type TxRow = {
 };
 
 type DriverRow = { user_id: string; full_name: string | null; photo_url: string | null };
-type EmergencyRow = { emergency_id: string; latitude: number; longitude: number; created_at: string };
+type EmergencyRow = { 
+  emergency_id: string; 
+  latitude: number; 
+  longitude: number; 
+  created_at: string;
+  service_type: 'vulcanize' | 'repair' | 'gas' | null;
+  fuel_type: string | null;
+  custom_fuel_type: string | null;
+};
 
 type TxRowWithMeta = TxRow & {
   driver_name: string;
   driver_avatar: string;
   created_when: string;
+  service_type: 'vulcanize' | 'repair' | 'gas' | null;
+  fuel_type: string | null;
+  custom_fuel_type: string | null;
 };
 
 const AVATAR_PLACEHOLDER =
@@ -59,6 +72,13 @@ function formatPrettyDateTime(iso: string) {
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${month} ${day}, ${year} | ${hh}:${mm} ${ampm}`;
 }
+
+// Helper to get display fuel type
+const getFuelDisplay = (fuelType: string | null, customFuelType: string | null) => {
+  if (customFuelType) return customFuelType;
+  if (fuelType) return fuelType.charAt(0).toUpperCase() + fuelType.slice(1);
+  return "Fuel";
+};
 
 /* --------------------------------- Screen --------------------------------- */
 export default function CompletedRequest() {
@@ -94,7 +114,7 @@ export default function CompletedRequest() {
       const { data: txs, error: txErr } = await supabase
         .from("payment_transaction")
         .select(
-          "transaction_id, emergency_id, service_id, shop_id, driver_user_id, distance_fee, labor_cost, extra_total, extra_items, total_amount, status, payment_method, cancel_option, created_at, updated_at, paid_at, proof_image_url"
+          "transaction_id, emergency_id, service_id, shop_id, driver_user_id, distance_fee, labor_cost, fuel_cost, parts_cost, extra_total, extra_items, total_amount, status, payment_method, cancel_option, created_at, updated_at, paid_at, proof_image_url"
         )
         .eq("shop_id", srow.shop_id)
         .in("status", ["to_pay", "pending", "paid"])
@@ -120,13 +140,13 @@ export default function CompletedRequest() {
         users?.forEach((u) => driverMap.set(u.user_id, u));
       }
 
-      // emergencies (for timestamp)
+      // emergencies (for timestamp and service type)
       const emIds = Array.from(new Set(list.map((t) => t.emergency_id)));
       const emMap = new Map<string, EmergencyRow>();
       if (emIds.length) {
         const { data: ems } = await supabase
           .from("emergency")
-          .select("emergency_id, latitude, longitude, created_at")
+          .select("emergency_id, latitude, longitude, created_at, service_type, fuel_type, custom_fuel_type")
           .in("emergency_id", emIds)
           .returns<EmergencyRow[]>();
         ems?.forEach((e) => emMap.set(e.emergency_id, e));
@@ -140,6 +160,9 @@ export default function CompletedRequest() {
           driver_name: u?.full_name || "Driver",
           driver_avatar: u?.photo_url || AVATAR_PLACEHOLDER,
           created_when: formatPrettyDateTime(em?.created_at || t.created_at), // fallback
+          service_type: em?.service_type || null,
+          fuel_type: em?.fuel_type || null,
+          custom_fuel_type: em?.custom_fuel_type || null,
         };
       });
 
@@ -214,12 +237,18 @@ export default function CompletedRequest() {
     const inSummary = !isExpanded; 
     const isNoFeeCancel =
       item.cancel_option === "diagnose_only" || Number(item.total_amount) === 0;
+    const isGasService = item.service_type === 'gas';
 
-
-    // Totals breakdown
+    // Totals breakdown - conditionally show Labor or Fuel based on service type
     const rows = [
       ["Distance fee", peso(item.distance_fee)],
-      ["Labor", peso(item.labor_cost)],
+      // Show either Labor or Fuel based on service type
+      ...(isGasService && item.fuel_cost > 0 
+        ? [[`Fuel ${item.fuel_type || item.custom_fuel_type ? `(${getFuelDisplay(item.fuel_type, item.custom_fuel_type)})` : ''}`, peso(item.fuel_cost)]] 
+        : []),
+      ...(!isGasService && item.labor_cost > 0 
+        ? [["Labor", peso(item.labor_cost)]] 
+        : []),
       ["Other services", peso(item.extra_total)],
       ["Total amount", peso(item.total_amount)],
     ] as const;
@@ -247,6 +276,11 @@ export default function CompletedRequest() {
                   <Text className="mt-0.5 text-[12px] text-slate-500" numberOfLines={1}>
                     {dateToShow}
                   </Text>
+                  {isGasService && (item.fuel_type || item.custom_fuel_type) && (
+                    <Text className="mt-0.5 text-[11px] text-slate-500">
+                      {getFuelDisplay(item.fuel_type, item.custom_fuel_type)} Service
+                    </Text>
+                  )}
                 </View>
                 <Text className="ml-3 text-[14px] font-bold text-slate-900">{peso(item.total_amount)}</Text>
               </View>
@@ -268,6 +302,11 @@ export default function CompletedRequest() {
                   <Text className="mt-0.5 text-[12px] text-slate-500" numberOfLines={1}>
                     Emergency {"\u2022"} {item.emergency_id.slice(0, 8)} {"\u2026"} {"\u2022"} {formatPrettyDateTime(item.created_at)}
                   </Text>
+                  {isGasService && (item.fuel_type || item.custom_fuel_type) && (
+                    <Text className="mt-0.5 text-[12px] text-slate-500">
+                      Fuel Type: {getFuelDisplay(item.fuel_type, item.custom_fuel_type)}
+                    </Text>
+                  )}
                 </View>
                 <Text className="ml-3 text-[14px] font-bold text-slate-900">{peso(item.total_amount)}</Text>
               </View>
@@ -316,14 +355,13 @@ export default function CompletedRequest() {
                             <Text className="text-[12px] font-semibold text-slate-800">
                               {peso(line)}    
                             </Text>
-                            <Text className="text-[12px] font-semibold text-slate-800">â‚±{line.toFixed(2)}</Text>
                           </View>
                         );
                       })}
                       <View className="flex-row items-baseline py-1 mt-1 border-t border-slate-200 pt-2">
                         <Text className="flex-1 text-[12px] font-semibold text-slate-700">Other services total</Text>
                         <Text className="text-[12px] font-semibold text-slate-800">
-                          â‚±{Number(item.extra_total || 0).toFixed(2)}
+                          {peso(item.extra_total || 0)}
                         </Text>
                       </View>
                     </View>
@@ -457,5 +495,3 @@ export default function CompletedRequest() {
     </SafeAreaView>
   );
 }
-
-

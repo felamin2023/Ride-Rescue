@@ -119,6 +119,7 @@ type SRUI = {
   offerDetails?: {
     distanceFee: string;
     laborCost: string;
+    fuelCost: string; // Added fuel cost
     totalCost: string;
     notes?: string;
   } | null; // can be null to render the fallback panel
@@ -133,6 +134,7 @@ type ShopOfferRow = {
   rate_per_km: number | string;
   distance_fee: number | string;
   labor_cost: number | string;
+  fuel_cost: number | string; // Added fuel cost
   total_amount: number | string;
   note: string | null;
   created_at: string;
@@ -668,7 +670,7 @@ export default function RequestStatus() {
           const { data: offersByService } = await supabase
             .from("shop_offers")
             .select(
-              "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount, note, created_at"
+              "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, fuel_cost, total_amount, note, created_at"
             )
             .in("service_id", serviceIds)
             .order("created_at", { ascending: false });
@@ -689,7 +691,7 @@ export default function RequestStatus() {
           const { data: offersByShop } = await supabase
             .from("shop_offers")
             .select(
-              "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount, note, created_at"
+              "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, fuel_cost, total_amount, note, created_at"
             )
             .eq("emergency_id", emergencyId)
             .is("service_id", null)
@@ -727,6 +729,7 @@ export default function RequestStatus() {
               ? {
                   distanceFee: `₱${Number(offer.distance_fee).toFixed(2)}`,
                   laborCost: `₱${Number(offer.labor_cost).toFixed(2)}`,
+                  fuelCost: `₱${Number(offer.fuel_cost ?? 0).toFixed(2)}`,
                   totalCost: `₱${Number(offer.total_amount).toFixed(2)}`,
                   notes: offer.note ?? undefined,
                 }
@@ -790,60 +793,68 @@ export default function RequestStatus() {
   );
 
   // Copy latest offer → payment_transaction if not already created
-  async function ensurePaymentTransaction(
-    emergencyId: string,
-    serviceId: string
-  ): Promise<void> {
-    const { data: existing } = await supabase
-      .from("payment_transaction")
-      .select("transaction_id")
-      .eq("emergency_id", emergencyId)
-      .eq("service_id", serviceId)
-      .maybeSingle();
+  // ✅ UPDATED: Now properly includes fuel_cost for gas emergencies
+async function ensurePaymentTransaction(
+  emergencyId: string,
+  serviceId: string
+): Promise<void> {
+  const { data: existing } = await supabase
+    .from("payment_transaction")
+    .select("transaction_id")
+    .eq("emergency_id", emergencyId)
+    .eq("service_id", serviceId)
+    .maybeSingle();
 
-    if (existing) return;
+  if (existing) return;
 
-    const { data: offer, error: offErr } = await supabase
-      .from("shop_offers")
-      .select(
-        "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, total_amount"
-      )
-      .eq("service_id", serviceId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  const { data: offer, error: offErr } = await supabase
+    .from("shop_offers")
+    .select(
+      "offer_id, emergency_id, service_id, shop_id, distance_km, rate_per_km, distance_fee, labor_cost, fuel_cost, total_amount"
+    )
+    .eq("service_id", serviceId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-    if (offErr) throw offErr;
-    if (!offer) throw new Error("No offer found for this request.");
+  if (offErr) throw offErr;
+  if (!offer) throw new Error("No offer found for this request.");
 
-    const { data: em } = await supabase
-      .from("emergency")
-      .select("user_id")
-      .eq("emergency_id", emergencyId)
-      .maybeSingle();
+  // Get emergency details to check service type
+  const { data: em } = await supabase
+    .from("emergency")
+    .select("user_id, service_type")
+    .eq("emergency_id", emergencyId)
+    .maybeSingle();
 
-    const { error: insErr } = await supabase.from("payment_transaction").insert({
-      emergency_id: emergencyId,
-      service_id: serviceId,
-      shop_id: offer.shop_id,
-      driver_user_id: em?.user_id ?? null,
-      offer_id: offer.offer_id,
-      rate_per_km: offer.rate_per_km,
-      distance_km: offer.distance_km,
-      distance_fee: offer.distance_fee,
-      labor_cost: offer.labor_cost,
-      parts_cost: 0,
-      total_amount: offer.total_amount,
-      status: "pending",
-    });
+  // ✅ CRITICAL FIX: For gas emergencies, ensure fuel_cost is properly set
+  // For non-gas emergencies, fuel_cost should be 0
+  const isGasEmergency = em?.service_type === 'gas';
+  const fuelCost = isGasEmergency ? Number(offer.fuel_cost ?? 0) : 0;
+  
+  // For gas emergencies, labor_cost should be 0, and vice versa
+  const laborCost = isGasEmergency ? 0 : Number(offer.labor_cost ?? 0);
 
-    if (insErr) throw insErr;
-  }
+  // 🔥 FIX: Use correct column names that match your schema
+  const { error: insErr } = await supabase.from("payment_transaction").insert({
+    emergency_id: emergencyId,
+    service_id: serviceId,
+    shop_id: offer.shop_id,
+    driver_user_id: em?.user_id ?? null,
+    offer_id: offer.offer_id,
+    rate_per_km: offer.rate_per_km,
+    distance_km: offer.distance_km,
+    distance_fee: offer.distance_fee,
+    labor_cost: laborCost, // 0 for gas emergencies
+    fuel_cost: fuelCost,   // Actual value for gas emergencies, 0 for others
+    parts_cost: 0,
+    total_amount: offer.total_amount,
+    status: "pending",
+  });
 
-  // ✅ Accept a service request (confirm first)
-// ✅ FIXED: Remove automatic conversation creation from acceptService
-// FILE: RequestStatus.tsx (or wherever your acceptService function lives)
-
+  if (insErr) throw insErr;
+}
+  // ✅ FIXED: Remove automatic conversation creation from acceptService
 const acceptService = useCallback(
   async (opts: {
     serviceId: string;
@@ -971,6 +982,13 @@ const acceptService = useCallback(
         throw emErr;
       }
       console.log("✅ [ACCEPT] Emergency marked as in_process");
+
+      // ════════════════════════════════════════════════════════════════
+      // ✅ CRITICAL: Create payment transaction with fuel cost for gas emergencies
+      // ════════════════════════════════════════════════════════════════
+      console.log("🟢 [PAYMENT] Creating payment transaction...");
+      await ensurePaymentTransaction(emergencyId, serviceId);
+      console.log("✅ [PAYMENT] Payment transaction created with fuel cost");
 
       // ════════════════════════════════════════════════════════════════
       // Send notifications to all shops
@@ -1363,6 +1381,10 @@ const acceptService = useCallback(
   const renderSRItem = (emId: string, it: SRUI, emLat: number, emLon: number) => {
     const blurred = !!revealedReject[it.service_id];
     const isExpanded = !!expandedOffers[it.service_id];
+    
+    // Get the emergency item to check service type
+    const emergencyItem = items.find(item => item.id === emId);
+    const isGasEmergency = emergencyItem?.serviceType === 'gas';
 
     return (
       <View key={it.service_id} className="relative py-3 border-b border-slate-200">
@@ -1434,10 +1456,28 @@ const acceptService = useCallback(
                         <Text className="text-slate-600 text-sm">Distance Fee</Text>
                         <Text className="text-slate-900 text-sm font-medium">{it.offerDetails.distanceFee}</Text>
                       </View>
-                      <View className="flex-row justify-between items-center">
-                        <Text className="text-slate-600 text-sm">Labor Cost</Text>
-                        <Text className="text-slate-900 text-sm font-medium">{it.offerDetails.laborCost}</Text>
-                      </View>
+                      
+                      {/* Conditionally render Labor Cost or Fuel Cost based on service type */}
+                      {isGasEmergency ? (
+                        <>
+                          <View className="flex-row justify-between items-center">
+                            <Text className="text-slate-600 text-sm">Fuel Cost</Text>
+                            <Text className="text-slate-900 text-sm font-medium">{it.offerDetails.fuelCost}</Text>
+                          </View>
+                          <View className="flex-row justify-between items-center">
+                            <Text className="text-slate-600 text-sm">Fuel Type</Text>
+                            <Text className="text-slate-900 text-sm font-medium">
+                              {getFuelTypeDisplay(emergencyItem?.fuelType || null, emergencyItem?.customFuelType || null)}
+                            </Text>
+                          </View>
+                        </>
+                      ) : (
+                        <View className="flex-row justify-between items-center">
+                          <Text className="text-slate-600 text-sm">Labor Cost</Text>
+                          <Text className="text-slate-900 text-sm font-medium">{it.offerDetails.laborCost}</Text>
+                        </View>
+                      )}
+                      
                       <View className="flex-row justify-between items-center pt-2 border-t border-slate-300">
                         <Text className="text-slate-800 text-sm font-semibold">Total Cost</Text>
                         <Text className="text-slate-900 text-sm font-bold">{it.offerDetails.totalCost}</Text>

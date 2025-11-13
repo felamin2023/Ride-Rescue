@@ -36,9 +36,11 @@ interface CancelRepairModalProps {
   offerId: string;
   originalOffer: {
     labor_cost: number;
+    fuel_cost: number; // Added fuel_cost
     distance_fee: number;
     total_cost: number;
   };
+  serviceType?: 'vulcanize' | 'repair' | 'gas' | null; // Added serviceType
   onClose: () => void;
   onSubmit: (cancelData: {
     offerId: string;
@@ -52,6 +54,7 @@ export default function CancelRepairModal({
   visible,
   offerId,
   originalOffer,
+  serviceType = 'repair', // Default to repair
   onClose,
   onSubmit,
 }: CancelRepairModalProps) {
@@ -60,6 +63,8 @@ export default function CancelRepairModal({
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null); // inline error, no alerts
+
+  const isGasService = serviceType === 'gas';
 
   useEffect(() => {
     if (visible) {
@@ -74,8 +79,10 @@ export default function CancelRepairModal({
   const calcFeesCents = (option: 'incomplete' | 'diagnose_only') => {
     if (option === 'diagnose_only') return 0;
     const distanceC = Math.round(Number(originalOffer.distance_fee || 0) * 100);
-    const halfLaborC = Math.round(Number(originalOffer.labor_cost || 0) * 100 * 0.5);
-    return distanceC + halfLaborC;
+    // Use fuel_cost for gas services, labor_cost for others
+    const baseServiceCost = isGasService ? originalOffer.fuel_cost : originalOffer.labor_cost;
+    const halfServiceCostC = Math.round(Number(baseServiceCost || 0) * 100 * 0.5);
+    return distanceC + halfServiceCostC;
   };
   const calculateTotalFees = (option: 'incomplete' | 'diagnose_only') =>
     calcFeesCents(option) / 100;
@@ -112,6 +119,20 @@ export default function CancelRepairModal({
     }
   };
 
+  // Get display text based on service type
+  const getServiceTypeDisplay = () => {
+    switch (serviceType) {
+      case 'gas': return 'Gas';
+      case 'vulcanize': return 'Vulcanize';
+      case 'repair': return 'Repair';
+      default: return 'Repair';
+    }
+  };
+
+  const getCostLabel = () => {
+    return isGasService ? 'fuel' : 'labor';
+  };
+
   return (
     <>
       <Modal
@@ -134,7 +155,7 @@ export default function CancelRepairModal({
 
           <View className="flex-row items-center justify-between mb-4">
             <Text className="text-[18px] font-semibold text-slate-900">
-              Cancel Repair Service
+              Cancel {getServiceTypeDisplay()} Service
             </Text>
             <Pressable onPress={onClose} hitSlop={8}>
               <Ionicons name="close" size={22} color="#0F172A" />
@@ -151,10 +172,10 @@ export default function CancelRepairModal({
           <ScrollView showsVerticalScrollIndicator={false}>
             <View className="rounded-2xl border border-slate-200 bg-slate-50 p-4 mb-4">
               <Text className="text-[14px] font-semibold text-slate-900 mb-2">
-                Cancel Repair Service
+                Cancel {getServiceTypeDisplay()} Service
               </Text>
               <Text className="text-[12px] text-slate-600">
-                Select the reason for cancelling this repair service.
+                Select the reason for cancelling this {getServiceTypeDisplay().toLowerCase()} service.
               </Text>
             </View>
 
@@ -164,7 +185,7 @@ export default function CancelRepairModal({
                 Select Cancellation Option:
               </Text>
 
-              {/* Option 1: Incomplete Repair */}
+              {/* Option 1: Incomplete Service */}
               <Pressable
                 onPress={() => setCancelOption('incomplete')}
                 className={`rounded-2xl border p-4 mb-3 ${
@@ -187,10 +208,10 @@ export default function CancelRepairModal({
                   </View>
                   <View className="flex-1">
                     <Text className="text-[14px] font-medium text-slate-900 mb-1">
-                      On the process of repair but can't complete/Finish
+                      On the process of {getServiceTypeDisplay().toLowerCase()} but can't complete/Finish
                     </Text>
                     <Text className="text-[12px] text-slate-600">
-                      Distance fee + 50% of labor fee
+                      Distance fee + 50% of {getCostLabel()} fee
                     </Text>
                   </View>
                 </View>
@@ -246,7 +267,7 @@ export default function CancelRepairModal({
               />
             </View>
 
-            {/* Cancel Repair Button */}
+            {/* Cancel Service Button */}
             <Pressable
               onPress={handleCancelRepair}
               disabled={loading || !cancelOption}
@@ -257,7 +278,7 @@ export default function CancelRepairModal({
               }}
             >
               <Text className="text-[14px] text-white font-semibold">
-                {loading ? 'Processing...' : 'Cancel Repair Service'}
+                {loading ? 'Processing...' : `Cancel ${getServiceTypeDisplay()} Service`}
               </Text>
             </Pressable>
           </ScrollView>
@@ -287,12 +308,12 @@ export default function CancelRepairModal({
               />
             </View>
             <Text className="text-lg font-semibold text-slate-900 text-center">
-              Confirm Cancellation
+              Confirm {getServiceTypeDisplay()} Cancellation
             </Text>
 
             <Text className="mt-2 text-[14px] text-slate-600 text-center">
               {cancelOption === 'incomplete'
-                ? 'A fee will be charged (Distance fee + 50% of labor).'
+                ? `A fee will be charged (Distance fee + 50% of ${getCostLabel()}).`
                 : 'No service fees will be charged.'}
             </Text>
 

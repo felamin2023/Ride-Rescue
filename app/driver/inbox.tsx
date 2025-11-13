@@ -203,16 +203,21 @@ export default function DriverInbox() {
       const shopName = item?.data?.shop_name || "A Mechanic";
       const totalAmount = item?.data?.total_amount;
       const distanceKm = item?.data?.distance_km;
-      const laborCost = item?.data?.labor_cost;
+      const laborCost = item?.data?.labor_cost || 0;
+      const fuelCost = item?.data?.fuel_cost || 0;
       const note = item?.data?.note;
 
       title = `${shopName} has sent you an offer!`;
 
-      if (totalAmount && distanceKm !== undefined && laborCost !== undefined) {
-        const distanceFee = totalAmount - laborCost;
+      if (totalAmount && distanceKm !== undefined) {
+        // Determine if this is a gas emergency based on fuel cost presence
+        const isGasEmergency = fuelCost > 0;
+        const serviceCost = isGasEmergency ? fuelCost : laborCost;
+        const distanceFee = totalAmount - serviceCost;
+        
         body = `Total Amount: ₱${totalAmount.toFixed(2)}\n` +
                `• Distance Fee: ₱${distanceFee.toFixed(2)} (${distanceKm.toFixed(1)} km)\n` +
-               `• Labor Cost: ₱${laborCost.toFixed(2)}`;
+               `• ${isGasEmergency ? 'Fuel Cost' : 'Labor Cost'}: ₱${serviceCost.toFixed(2)}`;
         
         if (note && note.trim()) {
           details = `Note: ${note}`;

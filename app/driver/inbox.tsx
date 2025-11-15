@@ -232,9 +232,25 @@ export default function DriverInbox() {
       }
     }
     else if (item.type === "service_request_rejected") {
-      const shopName = item?.data?.shop_name || "A mechanic";
-      title ||= "Request Update";
-      body ||= `${shopName} is currently unavailable. Other mechanics have been notified of your request.`;
+      const shopName = item?.data?.shop_name || "A shop";
+      const isGasService = item?.data?.is_gas_service;
+      const cancelReason = item?.data?.cancel_reason;
+      const noFeesCharged = item?.data?.no_fees_charged;
+
+      if (isGasService) {
+        // Updated: Shop name in the title for gas delivery cancellations
+        title = `${shopName} cancelled your gas delivery`;
+        body = cancelReason ? `Reason: ${cancelReason}` : "No reason provided";
+        
+        if (noFeesCharged) {
+          details = "No fees were charged for this cancellation.";
+        }
+      } else {
+        const serviceType = item?.data?.service_type || 'repair';
+        const serviceDisplay = serviceType.charAt(0).toUpperCase() + serviceType.slice(1);
+        title = `${shopName} cancelled your ${serviceDisplay} service`;
+        body = cancelReason ? `Reason: ${cancelReason}` : "No reason provided";
+      }
     }
 
     return (

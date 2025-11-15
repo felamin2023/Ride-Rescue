@@ -1,4 +1,4 @@
-// app/shop/mechanicAcceptedrequests.tsx
+// FILE: app/shop/mechanicAcceptedrequests.tsx
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
@@ -194,6 +194,16 @@ const getFuelDisplay = (fuelType: string | null, customFuelType: string | null) 
   if (fuelType) return fuelType.charAt(0).toUpperCase() + fuelType.slice(1);
   return "Fuel";
 };
+
+// Helper to get service type display name
+function getServiceTypeDisplay(serviceType: 'vulcanize' | 'repair' | 'gas' | null) {
+  switch (serviceType) {
+    case 'gas': return 'Gas';
+    case 'vulcanize': return 'Vulcanize';
+    case 'repair': return 'Repair';
+    default: return 'Repair';
+  }
+}
 
 /* ----------------------------- Cute spinner ----------------------------- */
 function SpinningGear({ size = 14, color = "#059669" }) {
@@ -687,31 +697,70 @@ export default function ShopAcceptedRequests() {
     }
   };
 
-  const handleCancelSubmit = async (cancelData: {
-    offerId: string; cancelOption: "incomplete" | "diagnose_only"; reason?: string; totalFees: number;
-  }) => {
-    try {
-      setLoading({ visible: true, message: "Cancelling repair service..." });
+// In the handleCancelSubmit function in mechanicAcceptedrequests.tsx, update the shop name retrieval:
 
-      const now = new Date().toISOString();
-      const isDiagnoseOnly = cancelData.cancelOption === "diagnose_only";
-      const isGasService = selectedEmergency?.serviceType === 'gas';
+const handleCancelSubmit = async (cancelData: {
+  offerId: string; cancelOption: "incomplete" | "diagnose_only"; reason?: string; totalFees: number;
+}) => {
+  try {
+    setLoading({ visible: true, message: "Cancelling service..." });
 
-      // 1) emergency status update
-      const emergencyUpdate =
-        isDiagnoseOnly
-          ? { emergency_status: "completed", completed_at: now }
-          : { emergency_status: "canceled", canceled_at: now, canceled_reason: cancelData.reason || null };
+    const now = new Date().toISOString();
+    const isDiagnoseOnly = cancelData.cancelOption === "diagnose_only";
+    const isGasService = selectedEmergency?.serviceType === 'gas';
+
+    // Get shop details for notification - USING THE SAME APPROACH AS mechanicLandingpage.native.tsx
+    const { data: shopData } = await supabase
+      .from("shop_details")
+      .select(`
+        shop_id,
+        places (
+          name
+        )
+      `)
+      .eq("shop_id", shopId!)
+      .single();
+
+    // Extract shop name using the same logic as mechanicLandingpage.native.tsx
+    let shopName = "A shop";
+    if (shopData?.places) {
+      if (Array.isArray(shopData.places) && shopData.places.length > 0 && shopData.places[0]?.name) {
+        shopName = shopData.places[0].name;
+      } else if (typeof shopData.places === 'object' && !Array.isArray(shopData.places) && 'name' in shopData.places) {
+        shopName = (shopData.places as { name: string }).name;
+      }
+    }
+
+    // If no shop name from places, try to get mechanic's name as fallback
+    if (shopName === "A shop" && userId) {
+      const { data: userProfile } = await supabase
+        .from("app_user")
+        .select("full_name")
+        .eq("user_id", userId)
+        .single();
+      
+      if (userProfile?.full_name) {
+        shopName = userProfile.full_name;
+      }
+    }
+
+    // For gas emergencies, just cancel without any fees and send notification
+    if (isGasService) {
+      // 1) Update emergency status to canceled
       const { error: emergencyError } = await supabase
         .from("emergency")
-        .update(emergencyUpdate)
+        .update({ 
+          emergency_status: "canceled", 
+          canceled_at: now, 
+          canceled_reason: cancelData.reason || null 
+        })
         .eq("emergency_id", cancelData.offerId);
       if (emergencyError) throw emergencyError;
 
-      // 2) payment_transaction adjustments
+      // 2) Update payment_transaction to zero everything
       const { data: tx } = await supabase
         .from("payment_transaction")
-        .select("transaction_id, distance_fee, labor_cost, fuel_cost")
+        .select("transaction_id")
         .eq("emergency_id", cancelData.offerId)
         .eq("shop_id", shopId!)
         .order("created_at", { ascending: false })
@@ -719,55 +768,61 @@ export default function ShopAcceptedRequests() {
         .maybeSingle();
 
       if (tx) {
-        const baseDistance = Number(tx.distance_fee || 0);
-        const baseServiceCost = isGasService ? Number(tx.fuel_cost || 0) : Number(tx.labor_cost || 0);
-
-        if (isDiagnoseOnly) {
-          const { error: txErr } = await supabase
-            .from("payment_transaction")
-            .update({
-              distance_fee: 0,
-              labor_cost: 0,
-              fuel_cost: 0,
-              extra_total: 0,
-              total_amount: 0,
-              status: "pending",
-              cancel_option: cancelData.cancelOption,
-              cancel_reason: cancelData.reason || null,
-              paid_at: null,
-              updated_at: now,
-            })
-            .eq("transaction_id", tx.transaction_id);
-          if (txErr) throw txErr;
-        } else {
-          const halfServiceCost = Number((baseServiceCost * 0.5).toFixed(2));
-          const computed = Number((baseDistance + halfServiceCost).toFixed(2));
-
-          const updateData: any = {
+        const { error: txErr } = await supabase
+          .from("payment_transaction")
+          .update({
+            distance_fee: 0,
+            labor_cost: 0,
+            fuel_cost: 0,
             extra_total: 0,
-            total_amount: computed,
-            status: "to_pay",
+            total_amount: 0,
+            status: "canceled",
             cancel_option: cancelData.cancelOption,
             cancel_reason: cancelData.reason || null,
             canceled_at: now,
             updated_at: now,
-          };
+          })
+          .eq("transaction_id", tx.transaction_id);
+        if (txErr) throw txErr;
+      }
 
-          // Set either labor_cost or fuel_cost based on service type
-          if (isGasService) {
-            updateData.fuel_cost = halfServiceCost;
-            updateData.labor_cost = 0;
-          } else {
-            updateData.labor_cost = halfServiceCost;
-            updateData.fuel_cost = 0;
-          }
+      // 3) Create notification for the driver with the exact title format you want
+      try {
+        // Get driver user_id from emergency
+        const { data: emergencyData } = await supabase
+          .from("emergency")
+          .select("user_id")
+          .eq("emergency_id", cancelData.offerId)
+          .single();
 
-          const { error: txErr } = await supabase
-            .from("payment_transaction")
-            .update(updateData)
-            .eq("transaction_id", tx.transaction_id);
-          if (txErr) throw txErr;
+        if (emergencyData?.user_id) {
+          // EXACT TITLE FORMAT AS REQUESTED
+          const notificationTitle = `${shopName} cancelled your gas delivery`;
+          const notificationBody = cancelData.reason ? `Reason: ${cancelData.reason}` : "No reason provided";
+
+          await supabase
+            .from("notifications")
+            .insert({
+              from_user_id: userId,
+              to_user_id: emergencyData.user_id,
+              type: "service_request_rejected",
+              title: notificationTitle,
+              body: notificationBody,
+              data: {
+                emergency_id: cancelData.offerId,
+                shop_id: shopId,
+                shop_name: shopName,
+                service_type: selectedEmergency?.serviceType,
+                cancel_reason: cancelData.reason,
+                cancel_option: cancelData.cancelOption,
+                is_gas_service: true,
+                no_fees_charged: true
+              }
+            });
         }
+      } catch (notifError) {
+        console.error("Failed to create notification:", notifError);
+        // Don't throw here - the main cancellation should still proceed
       }
 
       setActionLocked((prev) => {
@@ -779,13 +834,123 @@ export default function ShopAcceptedRequests() {
       setItems((prev) => prev.filter((it) => it.emergencyId !== cancelData.offerId));
       setShowCancelModal(false);
       setSelectedEmergency(null);
-    } catch (e: any) {
-      Alert.alert("Cancellation failed", e?.message ?? "Please try again.");
-    } finally {
-      setLoading({ visible: false });
+      return; // Exit early for gas emergencies
     }
-  };
 
+    // For non-gas services, proceed with original logic
+    const emergencyUpdate =
+      isDiagnoseOnly
+        ? { emergency_status: "completed", completed_at: now }
+        : { emergency_status: "canceled", canceled_at: now, canceled_reason: cancelData.reason || null };
+    const { error: emergencyError } = await supabase
+      .from("emergency")
+      .update(emergencyUpdate)
+      .eq("emergency_id", cancelData.offerId);
+    if (emergencyError) throw emergencyError;
+
+    // payment_transaction adjustments for non-gas services
+    const { data: tx } = await supabase
+      .from("payment_transaction")
+      .select("transaction_id, distance_fee, labor_cost, fuel_cost")
+      .eq("emergency_id", cancelData.offerId)
+      .eq("shop_id", shopId!)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (tx) {
+      const baseDistance = Number(tx.distance_fee || 0);
+      const baseServiceCost = Number(tx.labor_cost || 0);
+
+      if (isDiagnoseOnly) {
+        const { error: txErr } = await supabase
+          .from("payment_transaction")
+          .update({
+            distance_fee: 0,
+            labor_cost: 0,
+            fuel_cost: 0,
+            extra_total: 0,
+            total_amount: 0,
+            status: "pending",
+            cancel_option: cancelData.cancelOption,
+            cancel_reason: cancelData.reason || null,
+            paid_at: null,
+            updated_at: now,
+          })
+          .eq("transaction_id", tx.transaction_id);
+        if (txErr) throw txErr;
+      } else {
+        const halfServiceCost = Number((baseServiceCost * 0.5).toFixed(2));
+        const computed = Number((baseDistance + halfServiceCost).toFixed(2));
+
+        const { error: txErr } = await supabase
+          .from("payment_transaction")
+          .update({
+            labor_cost: halfServiceCost,
+            fuel_cost: 0,
+            extra_total: 0,
+            total_amount: computed,
+            status: "to_pay",
+            cancel_option: cancelData.cancelOption,
+            cancel_reason: cancelData.reason || null,
+            canceled_at: now,
+            updated_at: now,
+          })
+          .eq("transaction_id", tx.transaction_id);
+        if (txErr) throw txErr;
+      }
+    }
+
+    // Create notification for non-gas services
+    try {
+      const { data: emergencyData } = await supabase
+        .from("emergency")
+        .select("user_id")
+        .eq("emergency_id", cancelData.offerId)
+        .single();
+
+      if (emergencyData?.user_id) {
+        const notificationTitle = `${shopName} cancelled your ${getServiceTypeDisplay(selectedEmergency?.serviceType || 'repair').toLowerCase()} service`;
+        const notificationBody = cancelData.reason ? `Reason: ${cancelData.reason}` : "No reason provided";
+
+        await supabase
+          .from("notifications")
+          .insert({
+            from_user_id: userId,
+            to_user_id: emergencyData.user_id,
+            type: "service_request_rejected",
+            title: notificationTitle,
+            body: notificationBody,
+            data: {
+              emergency_id: cancelData.offerId,
+              shop_id: shopId,
+              shop_name: shopName,
+              service_type: selectedEmergency?.serviceType,
+              cancel_reason: cancelData.reason,
+              cancel_option: cancelData.cancelOption,
+              is_gas_service: false
+            }
+          });
+      }
+    } catch (notifError) {
+      console.error("Failed to create notification:", notifError);
+    }
+
+    setActionLocked((prev) => {
+      if (!prev[cancelData.offerId]) return prev;
+      const next = { ...prev };
+      delete next[cancelData.offerId];
+      return next;
+    });
+    setItems((prev) => prev.filter((it) => it.emergencyId !== cancelData.offerId));
+    setShowCancelModal(false);
+    setSelectedEmergency(null);
+  } catch (e: any) {
+    Alert.alert("Cancellation failed", e?.message ?? "Please try again.");
+  } finally {
+    setLoading({ visible: false });
+  }
+};
   // soft-hide accepted row for this shop
   const hideAccepted = async (serviceId: string) => {
     try {

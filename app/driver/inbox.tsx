@@ -318,9 +318,6 @@ export default function DriverInbox() {
                 </Text>
                 {isUnread && (
                   <View className="flex-row items-center">
-                    <Text className="text-[10px] text-blue-600 font-medium mr-1.5">
-                      NEW
-                    </Text>
                     <View className="h-2 w-2 rounded-full bg-blue-500" />
                   </View>
                 )}

@@ -1455,7 +1455,7 @@ function PayNowModal({
             disabled={!proofUri || submitting}
             onPress={onSubmit}
             className="mt-4 items-center justify-center rounded-xl py-3"
-            style={{ backgroundColor: !proofUri || submitting ? "#9CA3AF" : COLORS.primary, opacity: !proofUri || submitting ? 0.7 : 1 }}
+            style={{ backgroundColor: !proofUri || submitting ? "#9CA3AF" : "#2563EB", opacity: !proofUri || submitting ? 0.7 : 1 }}
           >
             <Text className="text-[14px] font-semibold text-white">{submitting ? "Submitting…" : "Confirm payment"}</Text>
           </Pressable>

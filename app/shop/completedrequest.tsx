@@ -404,22 +404,21 @@ export default function CompletedRequest() {
                 </View>
               )}
 
+              {/* Payment Received button (ONLY for unpaid and NOT a no-fee cancel) - MOVED INSIDE CARD */}
+              {!paid && !isNoFeeCancel && (
+                <Pressable
+                  disabled={!item.proof_image_url || loading}
+                  onPress={() => markAsPaid(item)}
+                  className="mt-4 w-full items-center justify-center rounded-xl bg-blue-600 py-3 active:opacity-90"
+                  style={{ opacity: !item.proof_image_url || loading ? 0.6 : 1 }}
+                >
+                  <Text className="text-[14px] font-semibold text-white">Payment Received</Text>
+                </Pressable>
+              )}
+
             </View>
           )}
         </Pressable>
-
-        {/* Payment Received button (ONLY for unpaid and NOT a no-fee cancel) */}
-        {!paid && !isNoFeeCancel && isExpanded && (
-          <Pressable
-            disabled={!item.proof_image_url || loading}
-            onPress={() => markAsPaid(item)}
-            className="mb-4 w-full items-center justify-center rounded-xl bg-green-600 py-3 active:opacity-90"
-            style={{ opacity: !item.proof_image_url || loading ? 0.6 : 1 }}
-          >
-            <Text className="text-[14px] font-semibold text-white">Payment Received</Text>
-          </Pressable>
-        )}
-
       </View>
     );
   };
@@ -484,7 +483,7 @@ export default function CompletedRequest() {
               <Pressable
                 disabled={!receiptTx.proof_image_url || loading}
                 onPress={() => markAsPaid(receiptTx)}
-                className="mt-4 rounded-xl bg-emerald-600 px-4 py-3 items-center"
+                className="mt-4 rounded-xl bg-blue-600 px-4 py-3 items-center"
               >
                 <Text className="text-white font-semibold">Payment Received</Text>
               </Pressable>

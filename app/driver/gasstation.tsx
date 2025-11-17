@@ -11,6 +11,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Location from "expo-location";
@@ -54,10 +55,23 @@ type PlaceRow = {
   category: "gas_station" | "vulcanizing" | "repair_shop" | (string & {});
   address: string | null;
   plus_code: string | null;
-  latitude: string | number | null;   // numeric comes as string in JS
+  latitude: string | number | null;
   longitude: string | number | null;
   maps_link: string | null;
-  profile_pic: string | null;         // 👈 image url
+  phones?: string[] | null;
+  service_for: string | null;
+  profile_pic: string | null;
+  owner?: string | null;
+};
+
+type ShopDetailsRow = {
+  shop_id: string;
+  user_id: string;
+};
+
+type UserProfile = {
+  user_id: string;
+  photo_url: string | null;
 };
 
 type Shop = {
@@ -66,12 +80,22 @@ type Shop = {
   category: "gas_station";
   address1: string;
   plusCode?: string;
-  avatar?: string;        // 👈 from profile_pic
+  avatar?: string;
   rating?: number;
   lat?: number;
   lng?: number;
   distanceKm?: number;
   maps_link?: string;
+  phones?: string[];
+  serviceFor?: "motorcycle" | "car" | "all_type" | (string & {});
+  ownerId?: string | null;
+  reviewCount?: number;
+};
+
+const prettyServiceFor = (s: Shop["serviceFor"]) => {
+  if (!s) return "";
+  if (s === "all_type") return "All Vehicles";
+  return s.charAt(0).toUpperCase() + s.slice(1);
 };
 
 /* --------------------------------- Small UI -------------------------------- */
@@ -111,12 +135,34 @@ function PrimaryButton({
   );
 }
 
+/* -------------------------- Phones (call + copy rows) -------------------------- */
+function PhoneRow({ n }: { n: string }) {
+  const dial = () => Linking.openURL(`tel:${n.replace(/\s+/g, "")}`).catch(() => {});
+  const copy = () => Clipboard.setStringAsync(n);
+  return (
+    <View
+      className="flex-row items-center justify-between rounded-xl border px-3 py-2"
+      style={{ borderColor: COLORS.border, marginTop: 6 }}
+    >
+      <Text className="text-[13px] text-slate-800" numberOfLines={1} style={{ flex: 1, marginRight: 8 }}>
+        {n}
+      </Text>
+      <Pressable onPress={copy} hitSlop={8} className="px-2 py-1 rounded-lg" accessibilityLabel="Copy phone">
+        <Ionicons name="copy-outline" size={16} color={COLORS.text} />
+      </Pressable>
+      <View style={{ width: 6 }} />
+      <PrimaryButton label="Call" icon="call-outline" onPress={dial} />
+    </View>
+  );
+}
+
 /* ----------------------- Bottom Sheet ---------------------- */
 function QuickActions({
-  visible, onClose, shop, onOpenMaps,
-}: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; }) {
+  visible, onClose, shop, onOpenMaps, onMessage,
+}: { visible: boolean; onClose: () => void; shop?: Shop | null; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   const insets = useSafeAreaInsets();
   if (!shop) return null;
+  const canMessage = !!shop.ownerId;
 
   return (
     <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={onClose}>
@@ -157,12 +203,34 @@ function QuickActions({
 
           <View className="mt-3 gap-3">
             <PrimaryButton label="Location" icon="navigate-outline" onPress={() => { if (shop) onOpenMaps(shop); onClose(); }} />
+            
+            {canMessage && (
+              <PrimaryButton
+                label="Message Shop"
+                variant="secondary"
+                icon="chatbubble-ellipses-outline"
+                onPress={() => {
+                  if (shop) onMessage(shop);
+                  onClose();
+                }}
+              />
+            )}
+            
             <PrimaryButton
               label={shop?.plusCode ? `Copy Plus Code (${shop.plusCode})` : "Copy Address"}
               variant="secondary"
               icon="copy-outline"
               onPress={() => { Clipboard.setStringAsync(shop?.plusCode || shop?.address1 || shop?.name || ""); onClose(); }}
             />
+
+            {!!shop.phones?.length && (
+              <View style={{ marginTop: 4 }}>
+                <Text className="text-[12px] font-semibold text-slate-700">Phone Numbers</Text>
+                {shop.phones.map((n, i) => (
+                  <PhoneRow key={`${n}-${i}`} n={n} />
+                ))}
+              </View>
+            )}
           </View>
         </View>
 
@@ -174,9 +242,11 @@ function QuickActions({
 
 /* ------------------------------- Details Modal ------------------------------ */
 function DetailsModal({
-  visible, shop, onClose, onOpenMaps,
-}: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; }) {
+  visible, shop, onClose, onOpenMaps, onMessage,
+}: { visible: boolean; shop: Shop | null; onClose: () => void; onOpenMaps: (s: Shop) => void; onMessage: (s: Shop) => void; }) {
   if (!shop) return null;
+  const canMessage = !!shop.ownerId;
+
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <Pressable className="flex-1" style={{ backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 16 }} onPress={onClose}>
@@ -200,6 +270,16 @@ function DetailsModal({
                     <Text className="text-[10px] font-bold text-[#1E3A8A] capitalize">{shop.category}</Text>
                   </View>
                 </View>
+                
+                {shop.serviceFor && (
+                  <View className="mt-2">
+                    <View className="rounded-full bg-emerald-50 px-2 py-[2px] self-start" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
+                      <Text className="text-[10px] font-semibold" style={{ color: "#047857" }}>
+                        {prettyServiceFor(shop.serviceFor)}
+                      </Text>
+                    </View>
+                  </View>
+                )}
               </View>
             </View>
 
@@ -212,12 +292,27 @@ function DetailsModal({
             <View className="mt-2 flex-row items-center gap-2">
               <Stars rating={shop.rating ?? 0} />
               <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
+              {shop.reviewCount && shop.reviewCount > 0 && (
+                <>
+                  <Text className="text-slate-300">•</Text>
+                  <Text className="text-[12px] text-slate-500">({shop.reviewCount} reviews)</Text>
+                </>
+              )}
               {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km away</Text></>)}
             </View>
 
-            {/* Single action: Location */}
-            <View className="mt-4">
-              <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
+            <View className="mt-4 flex-row items-center gap-2">
+              {canMessage && (
+                <>
+                  <View className="flex-1">
+                    <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+                  </View>
+                  <View style={{ width: 10 }} />
+                </>
+              )}
+              <View className="flex-1">
+                <PrimaryButton label="Location" icon="navigate-outline" onPress={() => onOpenMaps(shop)} />
+              </View>
             </View>
           </View>
         </Pressable>
@@ -239,8 +334,10 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
 
 /* --------------------------------- Card ---------------------------------- */
 function ShopCard({
-  shop, onLocation, onPressCard, isNearest = false,
-}: { shop: Shop; onLocation: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
+  shop, onLocation, onMessage, onPressCard, isNearest = false,
+}: { shop: Shop; onLocation: (s: Shop) => void; onMessage: (s: Shop) => void; onPressCard: (s: Shop) => void; isNearest?: boolean; }) {
+  const canMessage = !!shop.ownerId;
+  
   return (
     <Pressable
       onPress={() => onPressCard(shop)}
@@ -274,6 +371,16 @@ function ShopCard({
               </View>
             </View>
           </View>
+          
+          {shop.serviceFor && (
+            <View className="mt-2">
+              <View className="rounded-full bg-emerald-50 px-2 py-[2px] self-start" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
+                <Text className="text-[10px] font-semibold" style={{ color: "#047857" }}>
+                  {prettyServiceFor(shop.serviceFor)}
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </View>
 
@@ -284,11 +391,27 @@ function ShopCard({
         <View className="mt-2 flex-row items-center gap-2">
           <Stars rating={shop.rating ?? 0} />
           <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
+          {shop.reviewCount && shop.reviewCount > 0 && (
+            <>
+              <Text className="text-slate-300">•</Text>
+              <Text className="text-[12px] text-slate-500">({shop.reviewCount})</Text>
+            </>
+          )}
           {typeof shop.distanceKm === "number" && (<><Text className="text-slate-300">•</Text><Text className="text-[12px] text-slate-500">{shop.distanceKm.toFixed(1)} km</Text></>)}
         </View>
 
-        <View className="mt-3">
-          <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
+        <View className="mt-3 flex-row items-center gap-2">
+          {canMessage && (
+            <>
+              <View className="flex-1">
+                <PrimaryButton label="Message" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onMessage(shop)} />
+              </View>
+              <View style={{ width: 12 }} />
+            </>
+          )}
+          <View className="flex-1">
+            <PrimaryButton label="Location" icon="navigate-outline" variant="primary" onPress={() => onLocation(shop)} />
+          </View>
         </View>
       </View>
     </Pressable>
@@ -303,6 +426,7 @@ export default function GasStationScreen() {
   const [shops, setShops] = useState<Shop[]>([]);
   const [nearest, setNearest] = useState<Shop | null>(null);
   const [gotLocation, setGotLocation] = useState<"idle" | "ok" | "denied" | "error">("idle");
+  const [userId, setUserId] = useState<string | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -319,6 +443,15 @@ export default function GasStationScreen() {
 
   // 🔵 Global loading modal
   const [loading, setLoading] = useState<{ visible: boolean; message?: string }>({ visible: false });
+
+  // Get current user
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUserId(user?.id || null);
+    };
+    getUser();
+  }, []);
 
   // open in-app satellite map
   const openMaps = async (s: Shop) => {
@@ -362,45 +495,225 @@ export default function GasStationScreen() {
     }
   };
 
+  // ✅ goChat function for messaging shop owners
+  const goChat = async (shop: Shop) => {
+    if (!userId) {
+      Alert.alert("Not Logged In", "You need to be logged in to message a shop.");
+      return;
+    }
+    if (!shop.ownerId) {
+      Alert.alert("Cannot Message", "This shop doesn't have an owner account and cannot be messaged.");
+      return;
+    }
+    try {
+      const { data: shopOwner, error: ownerError } = await supabase
+        .from("shop_details")
+        .select("user_id")
+        .eq("shop_id", shop.ownerId)
+        .single();
+
+      if (ownerError || !shopOwner) {
+        Alert.alert("Error", "Could not find shop owner details.");
+        return;
+      }
+
+      const shopOwnerUserId = shopOwner.user_id;
+
+      const { data: existingConvs } = await supabase
+        .from("conversations")
+        .select(`id, emergency_id, shop_place_id`)
+        .or(`and(customer_id.eq.${shopOwnerUserId},driver_id.eq.${userId}),and(customer_id.eq.${userId},driver_id.eq.${shopOwnerUserId})`)
+        .order("updated_at", { ascending: false });
+
+      let conversationId: string | undefined;
+      if (existingConvs && existingConvs.length > 0) {
+        conversationId = existingConvs[0].id;
+      } else {
+        const { data: newConv, error } = await supabase
+          .from("conversations")
+          .insert({
+            customer_id: shopOwnerUserId,
+            driver_id: userId,
+            emergency_id: null,
+            shop_place_id: shop.id,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+        conversationId = newConv.id;
+      }
+      router.push(`/driver/chat/${conversationId}`);
+    } catch (error) {
+      console.error("Error creating conversation:", error);
+      Alert.alert("Error", "Could not start conversation. Please try again.");
+    }
+  };
+
   const openActions = useCallback((s: Shop) => { setSelectedShop(s); setSheetOpen(true); }, []);
   const closeActions = () => setSheetOpen(false);
   const openDetails = (s: Shop) => { setSelectedShop(s); setDetailsOpen(true); };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch gas stations (include profile_pic)
+  // fetch gas stations with ratings and avatars
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
-        .from("places")
-        .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, profile_pic")
-        .eq("category", "gas_station")
-        .order("name", { ascending: true });
+      try {
+        setLoading({ visible: true, message: "Loading gas stations..." });
 
-      if (error) {
-        console.warn("places fetch error:", error.message);
+        // First fetch places
+        const { data: placesData, error } = await supabase
+          .from("places")
+          .select("place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, profile_pic, owner")
+          .eq("category", "gas_station")
+          .order("name", { ascending: true });
+
+        if (error) {
+          console.warn("places fetch error:", error.message);
+          if (!cancelled) setShops([]);
+          return;
+        }
+
+        if (!placesData || placesData.length === 0) {
+          if (!cancelled) setShops([]);
+          return;
+        }
+
+        console.log("Fetched gas stations:", placesData.length);
+
+        // Get shop IDs from places that have owners
+        const shopIds = placesData
+          .map(p => p.owner)
+          .filter(Boolean) as string[];
+
+        console.log("Gas Station IDs with owners:", shopIds);
+
+        // Fetch shop_details to get user_ids for these shops
+        let shopDetailsMap: Record<string, string> = {};
+        if (shopIds.length > 0) {
+          const { data: shopDetails, error: shopDetailsError } = await supabase
+            .from("shop_details")
+            .select("shop_id, user_id")
+            .in("shop_id", shopIds);
+
+          if (!shopDetailsError && shopDetails) {
+            shopDetailsMap = shopDetails.reduce((acc, shop) => {
+              acc[shop.shop_id] = shop.user_id;
+              return acc;
+            }, {} as Record<string, string>);
+          }
+          console.log("Gas station details map:", shopDetailsMap);
+        }
+
+        // Get user IDs from shop details
+        const userIds = Object.values(shopDetailsMap);
+        console.log("Gas Station User IDs:", userIds);
+
+        // Fetch user profile pictures for shop owners from app_user table
+        let userProfiles: UserProfile[] = [];
+        if (userIds.length > 0) {
+          const { data: users, error: usersError } = await supabase
+            .from("app_user")
+            .select("user_id, photo_url")
+            .in("user_id", userIds);
+
+          if (!usersError && users) {
+            userProfiles = users;
+          }
+          console.log("Gas Station User profiles:", userProfiles);
+        }
+
+        // Create a map of user_id to photo_url for easy lookup
+        const userProfileMap = userProfiles.reduce((acc, user) => {
+          acc[user.user_id] = user.photo_url;
+          return acc;
+        }, {} as Record<string, string | null>);
+
+        console.log("Gas Station User profile map:", userProfileMap);
+
+        // Fetch ratings for these shops
+        let ratingsData: { shop_id: string; avg_rating: number; review_count: number }[] = [];
+        
+        if (shopIds.length > 0) {
+          const { data: ratings, error: ratingsError } = await supabase
+            .from("ratings")
+            .select("shop_id, stars")
+            .in("shop_id", shopIds);
+
+          if (!ratingsError && ratings) {
+            console.log("Gas Station Ratings data:", ratings);
+            // Calculate average rating and count for each shop
+            const ratingsByShop = ratings.reduce((acc, rating) => {
+              if (!acc[rating.shop_id]) {
+                acc[rating.shop_id] = { total: 0, count: 0 };
+              }
+              acc[rating.shop_id].total += rating.stars;
+              acc[rating.shop_id].count += 1;
+              return acc;
+            }, {} as Record<string, { total: number; count: number }>);
+
+            // Convert to array with average ratings
+            ratingsData = Object.entries(ratingsByShop).map(([shop_id, { total, count }]) => ({
+              shop_id,
+              avg_rating: total / count,
+              review_count: count
+            }));
+          }
+        }
+
+        console.log("Gas Station Ratings summary:", ratingsData);
+
+        // Create a map of shop_id to rating data for easy lookup
+        const ratingsMap = ratingsData.reduce((acc, rating) => {
+          acc[rating.shop_id] = rating;
+          return acc;
+        }, {} as Record<string, { avg_rating: number; review_count: number }>);
+
+        // Map places to shops with ratings and user profile pictures
+        const mapped: Shop[] = placesData.map((p: PlaceRow) => {
+          const lat = p.latitude != null ? Number(p.latitude) : undefined;
+          const lng = p.longitude != null ? Number(p.longitude) : undefined;
+          
+          // Get user_id from shop_details using the owner (shop_id)
+          const userId = p.owner ? shopDetailsMap[p.owner] : null;
+          
+          // Get user profile picture from app_user table if we have a user_id
+          const userPhotoUrl = userId ? userProfileMap[userId] : null;
+          
+          // Get rating data if shop has an owner and has ratings
+          const ratingData = p.owner ? ratingsMap[p.owner] : null;
+          
+          const shopData: Shop = {
+            id: p.place_id,
+            name: p.name ?? "Unnamed Gas Station",
+            category: "gas_station",
+            address1: p.address ?? "",
+            plusCode: p.plus_code ?? undefined,
+            avatar: userPhotoUrl ?? p.profile_pic ?? undefined, // Use profile_pic as fallback
+            rating: ratingData ? ratingData.avg_rating : 0,
+            reviewCount: ratingData ? ratingData.review_count : 0,
+            lat: Number.isFinite(lat) ? (lat as number) : undefined,
+            lng: Number.isFinite(lng) ? (lng as number) : undefined,
+            maps_link: p.maps_link ?? undefined,
+            phones: Array.isArray(p.phones) ? p.phones : [],
+            serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
+            ownerId: p.owner ?? null,
+          };
+
+          console.log(`Gas Station ${shopData.name} avatar:`, shopData.avatar);
+          return shopData;
+        });
+
+        if (!cancelled) {
+          setShops(mapped);
+          console.log("Final gas stations data:", mapped);
+        }
+      } catch (error) {
+        console.error("Error fetching gas stations:", error);
         if (!cancelled) setShops([]);
-        return;
+      } finally {
+        if (!cancelled) setLoading({ visible: false });
       }
-
-      const mapped: Shop[] = (data ?? []).map((p: PlaceRow) => {
-        const lat = p.latitude != null ? Number(p.latitude) : undefined;
-        const lng = p.longitude != null ? Number(p.longitude) : undefined;
-        return {
-          id: p.place_id,
-          name: p.name ?? "Unnamed Gas Station",
-          category: "gas_station",
-          address1: p.address ?? "",
-          plusCode: p.plus_code ?? undefined,
-          rating: 0,
-          lat: Number.isFinite(lat) ? (lat as number) : undefined,
-          lng: Number.isFinite(lng) ? (lng as number) : undefined,
-          maps_link: p.maps_link ?? undefined, // kept for reference (not used to open external app)
-          avatar: p.profile_pic ?? undefined,
-        };
-      });
-
-      if (!cancelled) setShops(mapped);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -528,6 +841,11 @@ export default function GasStationScreen() {
               <Text className="text-[12px] font-semibold" style={{ color: COLORS.success }}>Nearest to you</Text>
               <Text className="text-[15px] font-medium text-slate-900" numberOfLines={1}>{nearest.name}</Text>
               {typeof nearest.distanceKm === "number" && <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>}
+              {nearest.rating && nearest.rating > 0 && (
+                <Text className="text-[12px] text-slate-600">
+                  ⭐ {nearest.rating.toFixed(1)} {nearest.reviewCount ? `(${nearest.reviewCount})` : ''}
+                </Text>
+              )}
             </View>
             <PrimaryButton label="View" variant="primary" icon="navigate-outline" onPress={() => { setSelectedShop(nearest); setSheetOpen(true); }} />
           </View>
@@ -536,7 +854,7 @@ export default function GasStationScreen() {
 
       {(gotLocation === "denied" || gotLocation === "error") && (
         <View className="mx-4 mt-3 rounded-2xl bg-white p-3" style={[{ borderColor: COLORS.border, borderWidth: 1 }, panelShadow]}>
-          <Text className="text-[12px] text-slate-600">We couldn’t access your location. Showing gas stations without distance.</Text>
+          <Text className="text-[12px] text-slate-600">We couldn't access your location. Showing gas stations without distance.</Text>
         </View>
       )}
 
@@ -550,7 +868,8 @@ export default function GasStationScreen() {
           <ShopCard
             shop={item}
             onLocation={openMaps}
-            onPressCard={(s) => { setSelectedShop(s); setSheetOpen(true); }}
+            onMessage={goChat}
+            onPressCard={openActions}
             isNearest={nearest?.id === item.id}
           />
         )}
@@ -564,8 +883,8 @@ export default function GasStationScreen() {
       />
 
       {/* Bottom sheet + Details */}
-      <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} />
-      <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} />
+      <QuickActions visible={sheetOpen} onClose={closeActions} shop={selectedShop} onOpenMaps={openMaps} onMessage={goChat} />
+      <DetailsModal visible={detailsOpen} shop={selectedShop} onClose={closeDetails} onOpenMaps={openMaps} onMessage={goChat} />
 
       {/* 🔵 In-app Map Modal (satellite) */}
       <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>

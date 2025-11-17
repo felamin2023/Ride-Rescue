@@ -55,32 +55,25 @@ const cardShadow = Platform.select({
 type VehicleType = "car" | "motorcycle" | "van" | "truck";
 type ServiceType = "vulcanize" | "repair" | "gas" | null;
 type FuelType = 
-  | "Unleaded (91)"
-  | "Premium Unleaded (95)"
-  | "Super Premium (97)"
+  | "Unleaded"
+  | "Premium Unleaded"
+  | "Super Premium"
   | "Diesel"
   | "Premium Diesel"
-  | "E10 (Unleaded with 10% ethanol)"
-  | "E85 (Ethanol 85%)"
-  | "LPG (Liquefied Petroleum Gas)"
-  | "CNG (Compressed Natural Gas)"
   | "Others"
   | null;
+
 type IconLib = "ion" | "mci";
 const MAX_PHOTOS = 4;
 const MIN_DESC = 12; // require at least 12 meaningful characters
 
 // Fuel types array with icons
 const FUEL_TYPES = [
-  { label: "Unleaded (91)", icon: "gas-station" as const, lib: "mci" as const },
-  { label: "Premium Unleaded (95)", icon: "gas-station-outline" as const, lib: "mci" as const },
-  { label: "Super Premium (97)", icon: "rocket-outline" as const, lib: "ion" as const },
+  { label: "Unleaded", icon: "gas-station" as const, lib: "mci" as const },
+  { label: "Premium Unleaded", icon: "gas-station-outline" as const, lib: "mci" as const },
+  { label: "Super Premium", icon: "rocket-outline" as const, lib: "ion" as const },
   { label: "Diesel", icon: "engine" as const, lib: "mci" as const },
   { label: "Premium Diesel", icon: "engine-outline" as const, lib: "mci" as const },
-  { label: "E10 (Unleaded with 10% ethanol)", icon: "leaf-outline" as const, lib: "ion" as const },
-  { label: "E85 (Ethanol 85%)", icon: "sprout-outline" as const, lib: "mci" as const },
-  { label: "LPG (Liquefied Petroleum Gas)", icon: "propane-tank" as const, lib: "mci" as const },
-  { label: "CNG (Compressed Natural Gas)", icon: "gas-cylinder" as const, lib: "mci" as const },
   { label: "Others", icon: "help-circle-outline" as const, lib: "ion" as const }
 ] as const;
 

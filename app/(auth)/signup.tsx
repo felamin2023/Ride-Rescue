@@ -63,15 +63,15 @@ const SERVICES = [
 
 // Fuel types for gas stations in the Philippines
 const FUEL_TYPES = [
-  "Unleaded (91)",
-  "Premium Unleaded (95)",
-  "Super Premium (97)",
+  "Unleaded",
+  "Premium Unleaded",
+  "Super Premium",
   "Diesel",
   "Premium Diesel",
-  "E10 (Unleaded with 10% ethanol)",
-  "E85 (Ethanol 85%)",
-  "LPG (Liquefied Petroleum Gas)",
-  "CNG (Compressed Natural Gas)",
+  // "E10 (Unleaded with 10% ethanol)",
+  // "E85 (Ethanol 85%)",
+  // "LPG (Liquefied Petroleum Gas)",
+  // "CNG (Compressed Natural Gas)",
 ];
 
 // ── Time format helpers ──────────────────────────────────────────────────

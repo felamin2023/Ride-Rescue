@@ -38,6 +38,11 @@ const COLORS = {
 /* --------------------------------- Types ---------------------------------- */
 type PaymentMethod = "Cash" | "GCash";
 
+type ExtraItem = {
+  name: string;
+  fee: number;
+};
+
 type PaymentTx = {
   transaction_id: string;
   emergency_id: string;
@@ -49,6 +54,7 @@ type PaymentTx = {
   distance_km: number;
   distance_fee: number;
   labor_cost: number;
+  fuel_cost: number;
   parts_cost: number;
   total_amount: number;
   status: "pending" | "to_pay" | "paid" | "canceled";
@@ -57,13 +63,20 @@ type PaymentTx = {
   canceled_at: string | null;
   created_at: string;
   updated_at: string | null;
-  extra_items: any[];
+  extra_items: ExtraItem[];
   extra_total: number;
   payment_method: string | null;
   paid_at: string | null;
   sender_user_id: string | null;
   receiver_shop_id: string | null;
   proof_image_url: string | null;
+};
+
+type EmergencyRow = {
+  emergency_id: string;
+  service_type: 'vulcanize' | 'repair' | 'gas' | null;
+  fuel_type: string | null;
+  custom_fuel_type: string | null;
 };
 
 type PlaceByOwnerRow = { owner: string | null; name: string | null; place_id: string | null };
@@ -81,6 +94,9 @@ type TxItem = {
   dateISO: string;
   raw: PaymentTx;
   canRate?: boolean;
+  serviceType?: 'vulcanize' | 'repair' | 'gas' | null;
+  fuelType?: string | null;
+  customFuelType?: string | null;
 };
 
 /* --------------------------------- Utils ---------------------------------- */
@@ -133,6 +149,23 @@ const statusStyle: Record<
   completed: { text: "Completed", pillBg: "bg-emerald-100", pillText: "text-emerald-900", icon: "checkmark-circle" },
   refunded: { text: "Refunded", pillBg: "bg-slate-200", pillText: "text-slate-900", icon: "refresh" },
   failed: { text: "Failed", pillBg: "bg-rose-100", pillText: "text-rose-900", icon: "close-circle" },
+};
+
+// Helper to get display fuel type
+const getFuelDisplay = (fuelType: string | null, customFuelType: string | null) => {
+  if (customFuelType) return customFuelType;
+  if (fuelType) return fuelType.charAt(0).toUpperCase() + fuelType.slice(1);
+  return "Fuel";
+};
+
+// Helper to format extra items for display
+const formatExtraItems = (extraItems: ExtraItem[]): string => {
+  if (!extraItems || !Array.isArray(extraItems) || extraItems.length === 0) return "";
+  
+  return extraItems.map(item => {
+    const name = item.name || "Additional service";
+    return `${name} ${peso(item.fee || 0)}`;
+  }).join(" • ");
 };
 
 /* ---------------------- RN-safe upload helpers (Expo) ---------------------- */
@@ -248,6 +281,9 @@ type CompletedJob = {
   completedAt: string;
   canRate?: boolean;
   avatarUrl?: string;
+  serviceType?: 'vulcanize' | 'repair' | 'gas' | null;
+  fuelType?: string | null;
+  customFuelType?: string | null;
 };
 
 interface RatingBottomSheetProps {
@@ -636,6 +672,22 @@ export default function TransactionHistory() {
         .range(0, PAGE_SIZE * (reset ? 1 : page) - 1)
         .returns<PaymentTx[]>();
 
+      // Fetch emergency data for service type and fuel type
+      const emergencyIds = Array.from(new Set((list ?? []).map(t => t.emergency_id)));
+      const emergencyMap = new Map<string, EmergencyRow>();
+      
+      if (emergencyIds.length > 0) {
+        const { data: emergencies } = await supabase
+          .from("emergency")
+          .select("emergency_id, service_type, fuel_type, custom_fuel_type")
+          .in("emergency_id", emergencyIds)
+          .returns<EmergencyRow[]>();
+        
+        emergencies?.forEach(em => {
+          emergencyMap.set(em.emergency_id, em);
+        });
+      }
+
       // Which are already rated
       const txIds = (list ?? []).map((t) => t.transaction_id);
       const { data: ratedRows } = await supabase
@@ -717,14 +769,26 @@ export default function TransactionHistory() {
 
         const canRate = status === "completed" && !ratedSet.has(t.transaction_id);
 
+        // Get emergency data for this transaction
+        const emergency = emergencyMap.get(t.emergency_id);
+        const isGasService = emergency?.service_type === 'gas';
+        const serviceType = emergency?.service_type;
+        const fuelType = emergency?.fuel_type;
+        const customFuelType = emergency?.custom_fuel_type;
+
+        // Build description - for gas services, don't include extra items in the card description
         const parts = [
           t.distance_fee > 0 ? `Distance ${peso(t.distance_fee)}` : null,
-          t.labor_cost > 0 ? `Labor ${peso(t.labor_cost)}` : null,
+          // Show either Labor or Fuel based on service type
+          isGasService && t.fuel_cost > 0 ? `Fuel ${peso(t.fuel_cost)}` : null,
+          !isGasService && t.labor_cost > 0 ? `Labor ${peso(t.labor_cost)}` : null,
           t.parts_cost > 0 ? `Parts ${peso(t.parts_cost)}` : null,
-          Array.isArray(t.extra_items) && t.extra_items.length > 0 ? `Other ${peso(t.extra_total)}` : null,
         ].filter(Boolean) as string[];
 
-        const desc = parts.length ? parts.join(" • ") : status === "pending" ? "Awaiting payment" : "—";
+        // Only include extra items in description for non-gas services
+        const extraItemsDesc = !isGasService ? formatExtraItems(t.extra_items) : "";
+        const desc = [...parts, extraItemsDesc].filter(Boolean).join(" • ") || 
+                    (status === "pending" ? "Awaiting payment" : "—");
 
         return {
           id: t.transaction_id,
@@ -736,6 +800,9 @@ export default function TransactionHistory() {
           dateISO: t.created_at,
           raw: t,
           canRate,
+          serviceType,
+          fuelType,
+          customFuelType,
         };
       });
 
@@ -853,12 +920,16 @@ export default function TransactionHistory() {
     requestedAt: tx.dateISO,
     completedAt: tx.raw.paid_at || tx.raw.updated_at || tx.dateISO,
     canRate: tx.canRate,
+    serviceType: tx.serviceType,
+    fuelType: tx.fuelType,
+    customFuelType: tx.customFuelType,
   });
 
   const Item = ({ tx }: { tx: TxItem }) => {
     const s = statusStyle[tx.status];
     const isNoFeeCancel = tx.raw.cancel_option === "diagnose_only" || Number(tx.raw.total_amount) === 0;
     const showPayNow = tx.status === "pending" && !tx.raw.proof_image_url && !isNoFeeCancel;
+    const isGasService = tx.serviceType === 'gas';
 
     return (
       <Pressable
@@ -890,6 +961,11 @@ export default function TransactionHistory() {
               {tx.title}
             </Text>
             <Text className="mt-1 text-[13px] text-slate-600">{tx.desc}</Text>
+            {isGasService && (tx.fuelType || tx.customFuelType) && (
+              <Text className="mt-1 text-[12px] text-slate-500">
+                Fuel: {getFuelDisplay(tx.fuelType ?? null, tx.customFuelType ?? null)}
+              </Text>
+            )}
             <View className="mt-2 flex-row items-center justify-between">
               <Text className="text-[11px] text-slate-500">{timeAgo(tx.dateISO)}</Text>
               <View className={`flex-row items-center rounded-full px-2.5 py-1 ${s.pillBg}`}>
@@ -990,6 +1066,11 @@ export default function TransactionHistory() {
                       <Text className="mt-0.5 text-[12px] text-slate-500" numberOfLines={1}>
                         Emergency • {detailTx.raw.emergency_id.slice(0, 8)}… • {formatPayNowDate(detailTx.raw.created_at)}
                       </Text>
+                      {detailTx.serviceType === 'gas' && (detailTx.fuelType || detailTx.customFuelType) && (
+                        <Text className="mt-0.5 text-[12px] text-slate-500">
+                          Fuel Type: {getFuelDisplay(detailTx.fuelType ?? null, detailTx.customFuelType ?? null)}
+                        </Text>
+                      )}
                     </View>
                     <Text className="ml-3 text-[14px] font-bold text-slate-900">{peso(detailTx.amount)}</Text>
                   </View>
@@ -1000,10 +1081,30 @@ export default function TransactionHistory() {
                   {/* Breakdown */}
                   <View>
                     {detailTx.raw.distance_fee > 0 && <Row label="Distance fee" value={peso(detailTx.raw.distance_fee)} />}
-                    {detailTx.raw.labor_cost > 0 && <Row label="Labor" value={peso(detailTx.raw.labor_cost)} />}
+                    {/* Show either Labor or Fuel based on service type */}
+                    {detailTx.serviceType === 'gas' && detailTx.raw.fuel_cost > 0 && (
+                      <Row 
+                        label={`Fuel ${detailTx.fuelType || detailTx.customFuelType ? `(${getFuelDisplay(detailTx.fuelType ?? null, detailTx.customFuelType ?? null)})` : ''}`} 
+                        value={peso(detailTx.raw.fuel_cost)} 
+                      />
+                    )}
+                    {detailTx.serviceType !== 'gas' && detailTx.raw.labor_cost > 0 && (
+                      <Row label="Labor" value={peso(detailTx.raw.labor_cost)} />
+                    )}
                     {detailTx.raw.parts_cost > 0 && <Row label="Parts" value={peso(detailTx.raw.parts_cost)} />}
+                    
+                    {/* Extra Items Breakdown - Show for all service types in details view */}
                     {Array.isArray(detailTx.raw.extra_items) && detailTx.raw.extra_items.length > 0 && (
-                      <Row label="Other charges" value={peso(detailTx.raw.extra_total)} />
+                      <>
+                        {detailTx.raw.extra_items.map((item, index) => (
+                          <Row 
+                            key={index} 
+                            label={item.name || "Additional service"} 
+                            value={peso(item.fee || 0)} 
+                          />
+                        ))}
+                        <Row label="Additional services total" value={peso(detailTx.raw.extra_total)} bold />
+                      </>
                     )}
                   </View>
 
@@ -1235,6 +1336,8 @@ function PayNowModal({
   const isNoFeeCancel = tx.raw.cancel_option === "diagnose_only" || Number(tx.raw.total_amount) === 0;
   if (isNoFeeCancel) return null as any;
 
+  const isGasService = tx.serviceType === 'gas';
+
   const pickImage = async () => {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -1262,15 +1365,41 @@ function PayNowModal({
           {tx && (
             <View className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <Text className="text-[12px] text-slate-600">{tx.title}</Text>
+              {isGasService && (tx.fuelType || tx.customFuelType) && (
+                <Text className="text-[11px] text-slate-500 mt-0.5">
+                  Fuel Type: {getFuelDisplay(tx.fuelType ?? null, tx.customFuelType ?? null)}
+                </Text>
+              )}
 
               {/* FULL BREAKDOWN */}
               <View className="mt-2 rounded-xl border border-slate-200 bg-white p-3">
                 {tx.raw.distance_fee > 0 && <Row label="Distance fee" value={peso(tx.raw.distance_fee)} />}
-                {tx.raw.labor_cost > 0 && <Row label="Labor" value={peso(tx.raw.labor_cost)} />}
-                {tx.raw.parts_cost > 0 && <Row label="Parts" value={peso(tx.raw.parts_cost)} />}
-                {Array.isArray(tx.raw.extra_items) && tx.raw.extra_items.length > 0 && (
-                  <Row label="Other charges" value={peso(tx.raw.extra_total)} />
+                {/* Show either Labor or Fuel based on service type */}
+                {isGasService && tx.raw.fuel_cost > 0 && (
+                  <Row 
+                    label={`Fuel ${tx.fuelType || tx.customFuelType ? `(${getFuelDisplay(tx.fuelType ?? null, tx.customFuelType ?? null)})` : ''}`} 
+                    value={peso(tx.raw.fuel_cost)} 
+                  />
                 )}
+                {!isGasService && tx.raw.labor_cost > 0 && (
+                  <Row label="Labor" value={peso(tx.raw.labor_cost)} />
+                )}
+                {tx.raw.parts_cost > 0 && <Row label="Parts" value={peso(tx.raw.parts_cost)} />}
+                
+                {/* Extra Items Breakdown - Show for all service types in pay modal */}
+                {Array.isArray(tx.raw.extra_items) && tx.raw.extra_items.length > 0 && (
+                  <>
+                    {tx.raw.extra_items.map((item, index) => (
+                      <Row 
+                        key={index} 
+                        label={item.name || "Additional service"} 
+                        value={peso(item.fee || 0)} 
+                      />
+                    ))}
+                    <Row label="Additional services total" value={peso(tx.raw.extra_total)} bold />
+                  </>
+                )}
+                
                 <View className="mt-2 h-px bg-slate-200" />
                 <Row label="Total" value={peso(tx.raw.total_amount)} bold />
               </View>
@@ -1326,7 +1455,7 @@ function PayNowModal({
             disabled={!proofUri || submitting}
             onPress={onSubmit}
             className="mt-4 items-center justify-center rounded-xl py-3"
-            style={{ backgroundColor: !proofUri || submitting ? "#9CA3AF" : COLORS.primary, opacity: !proofUri || submitting ? 0.7 : 1 }}
+            style={{ backgroundColor: !proofUri || submitting ? "#9CA3AF" : "#2563EB", opacity: !proofUri || submitting ? 0.7 : 1 }}
           >
             <Text className="text-[14px] font-semibold text-white">{submitting ? "Submitting…" : "Confirm payment"}</Text>
           </Pressable>

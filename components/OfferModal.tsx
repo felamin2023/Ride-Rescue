@@ -29,6 +29,9 @@ export interface EmergencyDetails {
   location: string;
   dateTime: string;
   distanceKm?: number;
+  emergencyType?: "breakdown" | "gas";
+  fuelType?: string;
+  customFuelType?: string;
 }
 
 /**
@@ -37,8 +40,10 @@ export interface EmergencyDetails {
 export interface OfferData {
   distanceFee: number;
   laborCost: number;
+  fuelCost?: number;
   note: string;
   totalFees: number;
+  emergencyType?: "breakdown" | "gas";
 }
 
 /**
@@ -97,9 +102,12 @@ const cardShadow = Platform.select({
 const DEFAULT_RATE_PER_KM = 15.0;
 const DEFAULT_MINIMUM_DISTANCE_KM = 1.0;
 const DEFAULT_LABOR_COST = "50.00";
+const DEFAULT_FUEL_COST = "0.00";
 const MAX_NOTE_LENGTH = 500;
 const MIN_LABOR_COST = 0;
 const MAX_LABOR_COST = 999999;
+const MIN_FUEL_COST = 0;
+const MAX_FUEL_COST = 999999;
 const CURRENCY_SYMBOL = "₱";
 
 /* ----------------------------- Helper Functions ----------------------------- */
@@ -146,6 +154,29 @@ function calculateDistanceFee(
 ): number {
   const billableDistance = Math.max(distanceKm, minimumKm);
   return billableDistance * ratePerKm;
+}
+
+/**
+ * Gets display text for fuel type
+ */
+function getFuelTypeDisplay(emergency: EmergencyDetails | null): string {
+  if (!emergency) return "Fuel";
+  
+  if (emergency.fuelType) {
+    const fuelTypes: { [key: string]: string } = {
+      'premium': 'Premium Gasoline',
+      'unleaded': 'Unleaded Gasoline',
+      'diesel': 'Diesel',
+      'ethanol': 'Ethanol Blend',
+      'other': emergency.customFuelType || 'Other Fuel'
+    };
+    
+    const fuelType = emergency.fuelType.toLowerCase();
+    return fuelTypes[fuelType] || 
+           emergency.fuelType.charAt(0).toUpperCase() + emergency.fuelType.slice(1);
+  }
+  
+  return emergency.customFuelType || 'Fuel';
 }
 
 /* ----------------------------- Confirmation Modal Component ----------------------------- */
@@ -287,6 +318,7 @@ function ConfirmationModal({
  * Features:
  * - Auto-calculated distance fee based on location
  * - Manual labor cost input with validation (default: 50.00)
+ * - Manual fuel cost input for gas emergencies (default: 0.00)
  * - Automatic decimal formatting (.00)
  * - Optional notes (max 500 characters)
  * - Real-time total calculation
@@ -296,6 +328,7 @@ function ConfirmationModal({
  * - Compact design with smaller fonts and reduced spacing
  * - Sticky header for better UX
  * - Custom confirmation modal for discard
+ * - Support for gas emergencies with fuel type display
  */
 export default function OfferModal({
   visible,
@@ -312,12 +345,20 @@ export default function OfferModal({
   /* ----------------------------- State ----------------------------- */
 
   const [laborCostInput, setLaborCostInput] = useState<string>(DEFAULT_LABOR_COST);
+  const [fuelCostInput, setFuelCostInput] = useState<string>(DEFAULT_FUEL_COST);
   const [noteInput, setNoteInput] = useState<string>("");
   const [laborCostError, setLaborCostError] = useState<string>("");
+  const [fuelCostError, setFuelCostError] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState<boolean>(false);
 
   /* ----------------------------- Derived State ----------------------------- */
+
+  // Check if this is a gas emergency
+  const isGasEmergency = emergency?.emergencyType === "gas";
+
+  // Get fuel type display text
+  const fuelTypeDisplay = getFuelTypeDisplay(emergency);
 
   // Use provided distance or fallback to emergency distance
   const effectiveDistance = distanceKm ?? emergency?.distanceKm ?? 1.0;
@@ -334,29 +375,53 @@ export default function OfferModal({
     ? parseFloat(laborCostInput)
     : 0;
 
-  // Calculate total
-  const totalFees = distanceFee + laborCost;
+  // Parse fuel cost (default to 0 if invalid)
+  const fuelCost = isValidPositiveNumber(fuelCostInput)
+    ? parseFloat(fuelCostInput)
+    : 0;
+
+  // Calculate total - for gas emergencies, include both distance fee and fuel cost
+  const totalFees = isGasEmergency 
+    ? distanceFee + fuelCost 
+    : distanceFee + laborCost;
 
   // Check if form is valid
-  const isFormValid =
-    isValidPositiveNumber(laborCostInput) &&
-    laborCost >= MIN_LABOR_COST &&
-    laborCost <= MAX_LABOR_COST &&
-    noteInput.length <= MAX_NOTE_LENGTH &&
-    !laborCostError;
+  const isFormValid = isGasEmergency 
+    ? (
+        isValidPositiveNumber(fuelCostInput) &&
+        fuelCost >= MIN_FUEL_COST &&
+        fuelCost <= MAX_FUEL_COST &&
+        noteInput.length <= MAX_NOTE_LENGTH &&
+        !fuelCostError
+      )
+    : (
+        isValidPositiveNumber(laborCostInput) &&
+        laborCost >= MIN_LABOR_COST &&
+        laborCost <= MAX_LABOR_COST &&
+        noteInput.length <= MAX_NOTE_LENGTH &&
+        !laborCostError
+      );
 
   /* ----------------------------- Effects ----------------------------- */
 
   // Reset form when modal opens/closes
   useEffect(() => {
     if (visible) {
-      setLaborCostInput(DEFAULT_LABOR_COST);
+      // Set different defaults based on emergency type
+      if (isGasEmergency) {
+        setFuelCostInput(DEFAULT_FUEL_COST);
+        setLaborCostInput("0.00");
+      } else {
+        setLaborCostInput(DEFAULT_LABOR_COST);
+        setFuelCostInput("0.00");
+      }
       setNoteInput("");
       setLaborCostError("");
+      setFuelCostError("");
       setIsProcessing(false);
       setShowDiscardConfirm(false);
     }
-  }, [visible]);
+  }, [visible, isGasEmergency]);
 
   /* ----------------------------- Handlers ----------------------------- */
 
@@ -364,6 +429,9 @@ export default function OfferModal({
    * Handles labor cost input changes with validation
    */
   const handleLaborCostChange = useCallback((text: string) => {
+    // For gas emergencies, don't allow labor cost input
+    if (isGasEmergency) return;
+
     // Allow empty input
     if (text === "") {
       setLaborCostInput("");
@@ -405,12 +473,64 @@ export default function OfferModal({
     }
 
     setLaborCostError("");
-  }, []);
+  }, [isGasEmergency]);
+
+  /**
+   * Handles fuel cost input changes with validation
+   */
+  const handleFuelCostChange = useCallback((text: string) => {
+    // For non-gas emergencies, don't allow fuel cost input
+    if (!isGasEmergency) return;
+
+    // Allow empty input
+    if (text === "") {
+      setFuelCostInput("");
+      setFuelCostError("Fuel cost is required");
+      return;
+    }
+
+    // Remove non-numeric characters except decimal point
+    const cleaned = text.replace(/[^0-9.]/g, "");
+
+    // Prevent multiple decimal points
+    const parts = cleaned.split(".");
+    if (parts.length > 2) {
+      return;
+    }
+
+    // Limit decimal places to 2
+    if (parts[1] && parts[1].length > 2) {
+      return;
+    }
+
+    setFuelCostInput(cleaned);
+
+    // Validate
+    if (!isValidPositiveNumber(cleaned)) {
+      setFuelCostError("Enter a valid amount");
+      return;
+    }
+
+    const num = parseFloat(cleaned);
+    if (num < MIN_FUEL_COST) {
+      setFuelCostError(`Minimum is ${CURRENCY_SYMBOL}${MIN_FUEL_COST}`);
+      return;
+    }
+
+    if (num > MAX_FUEL_COST) {
+      setFuelCostError(`Maximum is ${CURRENCY_SYMBOL}${MAX_FUEL_COST.toLocaleString()}`);
+      return;
+    }
+
+    setFuelCostError("");
+  }, [isGasEmergency]);
 
   /**
    * Handles labor cost blur event to format with 2 decimal places
    */
   const handleLaborCostBlur = useCallback(() => {
+    if (isGasEmergency) return;
+
     if (laborCostInput && laborCostInput.trim() !== "") {
       const formatted = formatToTwoDecimals(laborCostInput);
       if (formatted) {
@@ -429,7 +549,33 @@ export default function OfferModal({
     } else if (laborCostInput === "") {
       setLaborCostError("Labor cost is required");
     }
-  }, [laborCostInput]);
+  }, [laborCostInput, isGasEmergency]);
+
+  /**
+   * Handles fuel cost blur event to format with 2 decimal places
+   */
+  const handleFuelCostBlur = useCallback(() => {
+    if (!isGasEmergency) return;
+
+    if (fuelCostInput && fuelCostInput.trim() !== "") {
+      const formatted = formatToTwoDecimals(fuelCostInput);
+      if (formatted) {
+        setFuelCostInput(formatted);
+        
+        // Revalidate after formatting
+        const num = parseFloat(formatted);
+        if (num < MIN_FUEL_COST) {
+          setFuelCostError(`Minimum is ${CURRENCY_SYMBOL}${MIN_FUEL_COST}`);
+        } else if (num > MAX_FUEL_COST) {
+          setFuelCostError(`Maximum is ${CURRENCY_SYMBOL}${MAX_FUEL_COST.toLocaleString()}`);
+        } else {
+          setFuelCostError("");
+        }
+      }
+    } else if (fuelCostInput === "") {
+      setFuelCostError("Fuel cost is required");
+    }
+  }, [fuelCostInput, isGasEmergency]);
 
   /**
    * Handles note input changes with character limit
@@ -454,9 +600,11 @@ export default function OfferModal({
     try {
       const offerData: OfferData = {
         distanceFee,
-        laborCost,
+        laborCost: isGasEmergency ? 0 : laborCost,
+        fuelCost: isGasEmergency ? fuelCost : undefined,
         note: noteInput.trim(),
         totalFees,
+        emergencyType: emergency.emergencyType,
       };
 
       await onSubmit(offerData);
@@ -477,22 +625,32 @@ export default function OfferModal({
     emergency,
     distanceFee,
     laborCost,
+    fuelCost,
     noteInput,
     totalFees,
     onSubmit,
     onClose,
+    isGasEmergency,
   ]);
 
   /**
    * Handles modal close with confirmation if data is entered
    */
   const handleClose = useCallback(() => {
-    if (laborCostInput !== DEFAULT_LABOR_COST || noteInput) {
+    const hasLaborChanges = isGasEmergency 
+      ? laborCostInput !== "0.00" 
+      : laborCostInput !== DEFAULT_LABOR_COST;
+    
+    const hasFuelChanges = isGasEmergency 
+      ? fuelCostInput !== DEFAULT_FUEL_COST 
+      : fuelCostInput !== "0.00";
+
+    if (hasLaborChanges || hasFuelChanges || noteInput) {
       setShowDiscardConfirm(true);
     } else {
       onClose();
     }
-  }, [laborCostInput, noteInput, onClose]);
+  }, [laborCostInput, fuelCostInput, noteInput, onClose, isGasEmergency]);
 
   /**
    * Confirms discarding changes
@@ -590,20 +748,43 @@ export default function OfferModal({
                     alignItems: "center", 
                     justifyContent: "space-between" 
                   }}>
-                    <Text style={{ 
-                      fontSize: 16, 
-                      fontWeight: "bold", 
-                      color: "#0F172A" 
-                    }}>
-                      Send Offer
-                    </Text>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <Text style={{ 
+                        fontSize: 16, 
+                        fontWeight: "bold", 
+                        color: "#0F172A" 
+                      }}>
+                        Send {isGasEmergency ? "Gas Delivery" : "Service"} Offer
+                      </Text>
+                      {isGasEmergency && (
+                        <View style={{ 
+                          marginLeft: 8,
+                          backgroundColor: "#DCFCE7",
+                          paddingHorizontal: 6,
+                          paddingVertical: 2,
+                          borderRadius: 4,
+                        }}>
+                          <Text style={{ 
+                            fontSize: 10, 
+                            fontWeight: "bold", 
+                            color: "#065F46" 
+                          }}>
+                            GAS
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                     <Pressable
                       onPress={handleClose}
                       disabled={isLoading}
                       hitSlop={8}
                       style={{ padding: 4 }}
                     >
-                      <Ionicons name="close" size={20} color={COLORS.text} />
+                      <Ionicons 
+                        name="close" 
+                        size={20} 
+                        color={COLORS.text} 
+                      />
                     </Pressable>
                   </View>
                 </View>
@@ -632,7 +813,11 @@ export default function OfferModal({
                     alignItems: "center", 
                     marginBottom: 3 
                   }}>
-                    <Ionicons name="car" size={11} color={COLORS.sub} />
+                    <Ionicons 
+                      name="car" 
+                      size={11} 
+                      color={COLORS.sub} 
+                    />
                     <Text style={{ 
                       marginLeft: 5, 
                       fontSize: 11, 
@@ -641,12 +826,40 @@ export default function OfferModal({
                       {emergency.vehicleType}
                     </Text>
                   </View>
+                  
+                  {/* Fuel Type Display for Gas Emergencies */}
+                  {isGasEmergency && fuelTypeDisplay && (
+                    <View style={{ 
+                      flexDirection: "row", 
+                      alignItems: "center", 
+                      marginBottom: 3 
+                    }}>
+                      <Ionicons 
+                        name="flash" 
+                        size={11} 
+                        color={COLORS.primary} 
+                      />
+                      <Text style={{ 
+                        marginLeft: 5, 
+                        fontSize: 11, 
+                        color: COLORS.primary,
+                        fontWeight: "600",
+                      }}>
+                        {fuelTypeDisplay}
+                      </Text>
+                    </View>
+                  )}
+                  
                   <View style={{ 
                     flexDirection: "row", 
                     alignItems: "center", 
                     marginBottom: 3 
                   }}>
-                    <Ionicons name="location-outline" size={11} color={COLORS.sub} />
+                    <Ionicons 
+                      name="location-outline" 
+                      size={11} 
+                      color={COLORS.sub} 
+                    />
                     <Text style={{ 
                       marginLeft: 5, 
                       fontSize: 11, 
@@ -660,7 +873,11 @@ export default function OfferModal({
                     flexDirection: "row", 
                     alignItems: "center" 
                   }}>
-                    <Ionicons name="time-outline" size={11} color={COLORS.muted} />
+                    <Ionicons 
+                      name="time-outline" 
+                      size={11} 
+                      color={COLORS.muted} 
+                    />
                     <Text style={{ 
                       marginLeft: 5, 
                       fontSize: 10, 
@@ -689,7 +906,7 @@ export default function OfferModal({
                       color: "#92400E", 
                       marginBottom: 3 
                     }}>
-                      Driver note:
+                      {isGasEmergency ? "Gas emergency details:" : "Driver note:"}
                     </Text>
                     <Text style={{ 
                       fontSize: 11, 
@@ -697,6 +914,30 @@ export default function OfferModal({
                     }}>
                       {emergency.breakdownCause}
                     </Text>
+                  </View>
+                )}
+
+                {/* Gas Emergency Info Banner */}
+                {isGasEmergency && (
+                  <View style={{ 
+                    paddingHorizontal: 16, 
+                    paddingVertical: 10, 
+                    backgroundColor: "#EFF6FF", 
+                    borderTopWidth: 1, 
+                    borderTopColor: "#BFDBFE" 
+                  }}>
+                    <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+                      <Ionicons name="information-circle" size={14} color={COLORS.primary} />
+                      <Text style={{ 
+                        marginLeft: 6, 
+                        fontSize: 11, 
+                        color: COLORS.primary,
+                        flex: 1,
+                        lineHeight: 14,
+                      }}>
+                        Gas delivery offer includes delivery fee and fuel cost. The customer will receive {fuelTypeDisplay.toLowerCase()} at the specified cost.
+                      </Text>
+                    </View>
                   </View>
                 )}
 
@@ -708,7 +949,7 @@ export default function OfferModal({
                     color: "#0F172A", 
                     marginBottom: 8 
                   }}>
-                    Distance fee
+                    {isGasEmergency ? "Delivery Fee" : "Distance Fee"}
                   </Text>
                   <View style={{ 
                     backgroundColor: "#F8FAFC", 
@@ -741,70 +982,143 @@ export default function OfferModal({
                       fontSize: 10, 
                       color: "#64748B" 
                     }}>
-                      Minimum {minimumDistanceKm.toFixed(1)} km applies
+                      {isGasEmergency ? "Fuel delivery service fee" : "Minimum distance applies"}
                     </Text>
                   </View>
                 </View>
 
-                {/* Labor Cost Section */}
-                <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-                  <Text style={{ 
-                    fontSize: 12, 
-                    fontWeight: "600", 
-                    color: "#0F172A", 
-                    marginBottom: 8 
-                  }}>
-                    Labor cost
-                  </Text>
-                  <View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        backgroundColor: "white",
-                        borderRadius: 12,
-                        paddingHorizontal: 12,
-                        borderWidth: 1,
-                        borderColor: laborCostError ? COLORS.danger : COLORS.border,
-                      }}
-                    >
-                      <Text style={{ 
-                        fontSize: 16, 
-                        fontWeight: "bold", 
-                        color: "#475569", 
-                        marginRight: 6 
-                      }}>
-                        {CURRENCY_SYMBOL}
-                      </Text>
-                      <TextInput
-                        value={laborCostInput}
-                        onChangeText={handleLaborCostChange}
-                        onBlur={handleLaborCostBlur}
-                        placeholder="0.00"
-                        placeholderTextColor={COLORS.placeholder}
-                        keyboardType="decimal-pad"
-                        editable={!isLoading}
+                {/* Fuel Cost Section - For Gas Emergencies */}
+                {isGasEmergency && (
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+                    <Text style={{ 
+                      fontSize: 12, 
+                      fontWeight: "600", 
+                      color: "#0F172A", 
+                      marginBottom: 8 
+                    }}>
+                      Fuel Cost ({fuelTypeDisplay})
+                    </Text>
+                    <View>
+                      <View
                         style={{
-                          flex: 1,
-                          paddingVertical: 11,
-                          fontSize: 14,
-                          fontWeight: "600",
-                          color: "#0F172A",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: "white",
+                          borderRadius: 12,
+                          paddingHorizontal: 12,
+                          borderWidth: 1,
+                          borderColor: fuelCostError ? COLORS.danger : COLORS.border,
                         }}
-                      />
+                      >
+                        <Text style={{ 
+                          fontSize: 16, 
+                          fontWeight: "bold", 
+                          color: "#475569", 
+                          marginRight: 6 
+                        }}>
+                          {CURRENCY_SYMBOL}
+                        </Text>
+                        <TextInput
+                          value={fuelCostInput}
+                          onChangeText={handleFuelCostChange}
+                          onBlur={handleFuelCostBlur}
+                          placeholder="0.00"
+                          placeholderTextColor={COLORS.placeholder}
+                          keyboardType="decimal-pad"
+                          editable={!isLoading}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 11,
+                            fontSize: 14,
+                            fontWeight: "600",
+                            color: "#0F172A",
+                          }}
+                        />
+                      </View>
+                      {fuelCostError ? (
+                        <Text style={{ 
+                          marginTop: 6, 
+                          fontSize: 10, 
+                          color: "#DC2626", 
+                          marginLeft: 4 
+                        }}>
+                          {fuelCostError}
+                        </Text>
+                      ) : (
+                        <Text style={{ 
+                          marginTop: 6, 
+                          fontSize: 10, 
+                          color: "#64748B", 
+                          marginLeft: 4 
+                        }}>
+                          Cost of {fuelTypeDisplay.toLowerCase()} to be delivered
+                        </Text>
+                      )}
                     </View>
-                    {laborCostError ? (
-                      <Text style={{ 
-                        marginTop: 6, 
-                        fontSize: 10, 
-                        color: "#DC2626", 
-                        marginLeft: 4 
-                      }}>
-                        {laborCostError}
-                      </Text>
-                    ) : null}
                   </View>
-                </View>
+                )}
+
+                {/* Labor Cost Section - For Non-Gas Emergencies */}
+                {!isGasEmergency && (
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+                    <Text style={{ 
+                      fontSize: 12, 
+                      fontWeight: "600", 
+                      color: "#0F172A", 
+                      marginBottom: 8 
+                    }}>
+                      Labor Cost
+                    </Text>
+                    <View>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: "white",
+                          borderRadius: 12,
+                          paddingHorizontal: 12,
+                          borderWidth: 1,
+                          borderColor: laborCostError ? COLORS.danger : COLORS.border,
+                        }}
+                      >
+                        <Text style={{ 
+                          fontSize: 16, 
+                          fontWeight: "bold", 
+                          color: "#475569", 
+                          marginRight: 6 
+                        }}>
+                          {CURRENCY_SYMBOL}
+                        </Text>
+                        <TextInput
+                          value={laborCostInput}
+                          onChangeText={handleLaborCostChange}
+                          onBlur={handleLaborCostBlur}
+                          placeholder="0.00"
+                          placeholderTextColor={COLORS.placeholder}
+                          keyboardType="decimal-pad"
+                          editable={!isLoading}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 11,
+                            fontSize: 14,
+                            fontWeight: "600",
+                            color: "#0F172A",
+                          }}
+                        />
+                      </View>
+                      {laborCostError ? (
+                        <Text style={{ 
+                          marginTop: 6, 
+                          fontSize: 10, 
+                          color: "#DC2626", 
+                          marginLeft: 4 
+                        }}>
+                          {laborCostError}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                )}
 
                 {/* Note Section */}
                 <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
@@ -829,7 +1143,11 @@ export default function OfferModal({
                     <TextInput
                       value={noteInput}
                       onChangeText={handleNoteChange}
-                      placeholder="Add any additional information..."
+                      placeholder={
+                        isGasEmergency 
+                          ? `Add delivery instructions or notes about ${fuelTypeDisplay.toLowerCase()}...` 
+                          : "Add any additional information..."
+                      }
                       placeholderTextColor={COLORS.placeholder}
                       multiline
                       textAlignVertical="top"
@@ -871,7 +1189,7 @@ export default function OfferModal({
                       fontSize: 11, 
                       color: "#475569" 
                     }}>
-                      Distance fee
+                      {isGasEmergency ? "Delivery fee" : "Distance fee"}
                     </Text>
                     <Text style={{ 
                       fontSize: 11, 
@@ -880,25 +1198,53 @@ export default function OfferModal({
                       {CURRENCY_SYMBOL}{formatCurrency(distanceFee)}
                     </Text>
                   </View>
-                  <View style={{ 
-                    flexDirection: "row", 
-                    justifyContent: "space-between", 
-                    alignItems: "center", 
-                    marginBottom: 8 
-                  }}>
-                    <Text style={{ 
-                      fontSize: 11, 
-                      color: "#475569" 
+                  
+                  {/* Fuel cost line - only show for gas emergencies */}
+                  {isGasEmergency && (
+                    <View style={{ 
+                      flexDirection: "row", 
+                      justifyContent: "space-between", 
+                      alignItems: "center", 
+                      marginBottom: 8 
                     }}>
-                      Labor cost
-                    </Text>
-                    <Text style={{ 
-                      fontSize: 11, 
-                      color: "#0F172A" 
+                      <Text style={{ 
+                        fontSize: 11, 
+                        color: "#475569" 
+                      }}>
+                        Fuel cost ({fuelTypeDisplay})
+                      </Text>
+                      <Text style={{ 
+                        fontSize: 11, 
+                        color: "#0F172A" 
+                      }}>
+                        {CURRENCY_SYMBOL}{formatCurrency(fuelCost)}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  {/* Labor cost line - only show for non-gas emergencies */}
+                  {!isGasEmergency && (
+                    <View style={{ 
+                      flexDirection: "row", 
+                      justifyContent: "space-between", 
+                      alignItems: "center", 
+                      marginBottom: 8 
                     }}>
-                      {CURRENCY_SYMBOL}{formatCurrency(laborCost)}
-                    </Text>
-                  </View>
+                      <Text style={{ 
+                        fontSize: 11, 
+                        color: "#475569" 
+                      }}>
+                        Labor cost
+                      </Text>
+                      <Text style={{ 
+                        fontSize: 11, 
+                        color: "#0F172A" 
+                      }}>
+                        {CURRENCY_SYMBOL}{formatCurrency(laborCost)}
+                      </Text>
+                    </View>
+                  )}
+                  
                   <View style={{ 
                     height: 1, 
                     backgroundColor: "#CBD5E1", 
@@ -963,7 +1309,7 @@ export default function OfferModal({
                         fontSize: 13, 
                         fontWeight: "bold" 
                       }}>
-                        Send Offer
+                        {isGasEmergency ? "Send Gas Delivery Offer" : "Send Service Offer"}
                       </Text>
                     )}
                   </Pressable>

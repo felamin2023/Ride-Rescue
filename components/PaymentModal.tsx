@@ -35,7 +35,7 @@ const cardShadow = Platform.select({
   android: { elevation: 2 },
 });
 
-// ✅ Service item interface
+// ✅ Service item interface (from old version)
 interface ServiceItem {
   id: string;
   name: string;
@@ -47,16 +47,21 @@ interface PaymentModalProps {
   offerId: string; // emergencyId
   originalOffer: {
     labor_cost: number;
+    fuel_cost: number;
     distance_fee: number;
     total_cost: number;
   };
+  serviceType?: 'vulcanize' | 'repair' | 'gas' | null;
+  fuelType?: string | null;
+  customFuelType?: string | null;
+  initialLaborCost?: number;
+  initialFuelCost?: number;
   onClose: () => void;
   onSubmit: (invoice: {
     offerId: string;
     finalLaborCost: number;
     finalServices: ServiceItem[];
     finalTotal: number;
-    // Kept optional for backward-compat; we pass 0
     finalPartsCost?: number;
   }) => Promise<void>;
 }
@@ -65,10 +70,19 @@ export default function PaymentModal({
   visible,
   offerId,
   originalOffer,
+  serviceType = 'repair',
+  fuelType = null,
+  customFuelType = null,
+  initialLaborCost = 0,
+  initialFuelCost = 0,
   onClose,
   onSubmit,
 }: PaymentModalProps) {
-  const [laborCost, setLaborCost] = useState(originalOffer.labor_cost.toFixed(2));
+  const isGasService = serviceType === 'gas';
+  
+  // For gas services, use initial fuel cost; for others, use initial labor cost
+  const initialCost = isGasService ? initialFuelCost : initialLaborCost;
+  const [serviceCost, setServiceCost] = useState(initialCost.toFixed(2));
   const [serviceItems, setServiceItems] = useState<ServiceItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -76,28 +90,34 @@ export default function PaymentModal({
 
   useEffect(() => {
     if (visible) {
-      setLaborCost(originalOffer.labor_cost.toFixed(2));
+      const initialCost = isGasService ? initialFuelCost : initialLaborCost;
+      setServiceCost(initialCost.toFixed(2));
       setServiceItems([]);
       setShowConfirm(false);
       setServiceWarning(null);
     }
-  }, [visible, offerId]);
+  }, [visible, offerId, isGasService, initialLaborCost, initialFuelCost]);
 
-  // Validate services in real-time
+  // Validate services in real-time (only for non-gas emergencies)
   useEffect(() => {
-    validateServices();
-  }, [serviceItems]);
+    if (!isGasService) {
+      validateServices();
+    }
+  }, [serviceItems, isGasService]);
 
-  const handleLaborBlur = () => {
-    const parsed = parseFloat(laborCost);
+  const handleServiceCostBlur = () => {
+    const parsed = parseFloat(serviceCost);
     if (!isNaN(parsed) && parsed >= 0) {
-      setLaborCost(parsed.toFixed(2));
+      setServiceCost(parsed.toFixed(2));
     } else {
-      setLaborCost(originalOffer.labor_cost.toFixed(2));
+      const initialCost = isGasService ? initialFuelCost : initialLaborCost;
+      setServiceCost(initialCost.toFixed(2));
     }
   };
 
   const validateServices = () => {
+    if (isGasService) return true; // No validation needed for gas services
+    
     for (const item of serviceItems) {
       if (item.name.trim() === '') {
         setServiceWarning('Please enter a name for all services or remove empty ones.');
@@ -113,8 +133,10 @@ export default function PaymentModal({
     return true;
   };
 
-  // Add a new service item
+  // Add a new service item (only for non-gas emergencies)
   const addService = () => {
+    if (isGasService) return; // No additional services for gas
+    
     if (serviceItems.length >= 10) {
       Alert.alert('Limit Reached', 'You can add up to 10 services.');
       return;
@@ -158,8 +180,10 @@ export default function PaymentModal({
     }
   };
 
-  // Calculate total of extra services
+  // Calculate total of extra services (only for non-gas emergencies)
   const calculateServiceTotal = () => {
+    if (isGasService) return 0;
+    
     return serviceItems.reduce((sum, item) => {
       const fee = parseFloat(item.fee);
       return sum + (isNaN(fee) ? 0 : fee);
@@ -167,24 +191,25 @@ export default function PaymentModal({
   };
 
   const validateAndCalculate = () => {
-    const labor = parseFloat(laborCost);
+    const cost = parseFloat(serviceCost);
 
-    if (isNaN(labor) || labor < 0) {
-      Alert.alert('Invalid Input', 'Please enter a valid labor cost.');
+    if (isNaN(cost) || cost < 0) {
+      Alert.alert('Invalid Input', `Please enter a valid ${isGasService ? 'fuel' : 'labor'} cost.`);
       return null;
     }
 
-    if (serviceWarning) {
-      // Don’t proceed if services are invalid
+    // Validate additional services only for non-gas emergencies
+    if (!isGasService && serviceWarning) {
+      // Don't proceed if services are invalid
       return null;
     }
 
     const serviceFeeTotal = calculateServiceTotal();
-    const finalTotal = originalOffer.distance_fee + labor + serviceFeeTotal;
+    const finalTotal = originalOffer.distance_fee + cost + serviceFeeTotal;
 
     return {
-      finalLaborCost: labor,
-      finalServices: serviceItems,
+      finalLaborCost: cost,
+      finalServices: serviceItems, // Include additional services for non-gas emergencies
       finalTotal,
     };
   };
@@ -206,7 +231,6 @@ export default function PaymentModal({
       await onSubmit({
         offerId,
         ...calculation,
-        // Parts are no longer captured here; send 0 to be explicit
         finalPartsCost: 0,
       });
 
@@ -224,8 +248,31 @@ export default function PaymentModal({
   };
 
   const serviceFeeTotal = calculateServiceTotal();
-  const finalTotal =
-    originalOffer.distance_fee + parseFloat(laborCost || '0') + serviceFeeTotal;
+  const finalTotal = originalOffer.distance_fee + parseFloat(serviceCost || '0') + serviceFeeTotal;
+
+  // Get display text based on service type
+  const getServiceTypeDisplay = () => {
+    switch (serviceType) {
+      case 'gas': return 'Gas';
+      case 'vulcanize': return 'Vulcanize';
+      case 'repair': return 'Repair';
+      default: return 'Repair';
+    }
+  };
+
+  const getCostLabel = () => {
+    return isGasService ? 'Fuel Cost' : 'Labor Cost';
+  };
+
+  const getCostPlaceholder = () => {
+    return isGasService ? 'e.g., 150.00' : 'e.g., 50.00';
+  };
+
+  const getFuelDisplay = () => {
+    if (customFuelType) return customFuelType;
+    if (fuelType) return fuelType.charAt(0).toUpperCase() + fuelType.slice(1);
+    return "Fuel";
+  };
 
   return (
     <>
@@ -246,7 +293,7 @@ export default function PaymentModal({
 
           <View className="flex-row items-center justify-between mb-4">
             <Text className="text-[18px] font-semibold text-slate-900">
-              Submit Invoice
+              Submit Invoice - {getServiceTypeDisplay()}
             </Text>
             <Pressable onPress={onClose} hitSlop={8}>
               <Ionicons name="close" size={22} color="#0F172A" />
@@ -256,114 +303,127 @@ export default function PaymentModal({
           <ScrollView showsVerticalScrollIndicator={false}>
             {/* Original Offer */}
             <View className="rounded-2xl border border-slate-200 bg-slate-50 p-3 mb-4">
-              <Text className="text-[12px] text-slate-600 mb-1">Original Offer</Text>
+              <Text className="text-[12px] text-slate-600 mb-1">Initial Offer</Text>
               <Text className="text-[14px] font-semibold text-slate-900">
                 ₱{originalOffer.total_cost.toFixed(2)}
               </Text>
               <Text className="text-[11px] text-slate-500 mt-0.5">
-                Labor ₱{originalOffer.labor_cost.toFixed(2)} + Distance ₱
+                {isGasService ? 'Fuel' : 'Labor'} ₱{(isGasService ? initialFuelCost : initialLaborCost).toFixed(2)} + Distance ₱
                 {originalOffer.distance_fee.toFixed(2)}
               </Text>
+              {isGasService && fuelType && (
+                <Text className="text-[11px] text-slate-500 mt-0.5">
+                  Fuel Type: {getFuelDisplay()}
+                </Text>
+              )}
             </View>
 
-            {/* Labor */}
+            {/* Service Cost (Labor for repair, Fuel for gas) */}
             <View className="mb-3">
               <Text className="text-[13px] text-slate-700 mb-2">
-                <Text className="font-medium text-slate-900">Labor Cost (Adjusted)</Text>
+                <Text className="font-medium text-slate-900">{getCostLabel()} (Final)</Text>
+                <Text className="text-slate-500"> - Adjust if needed</Text>
               </Text>
               <View className="flex-row items-center rounded-2xl border border-slate-300 bg-white py-3 px-4">
                 <Text className="text-[14px] text-slate-700">₱</Text>
                 <TextInput
-                  value={laborCost}
-                  onChangeText={setLaborCost}
-                  onBlur={handleLaborBlur}
-                  placeholder="50.00"
+                  value={serviceCost}
+                  onChangeText={setServiceCost}
+                  onBlur={handleServiceCostBlur}
+                  placeholder={getCostPlaceholder()}
                   keyboardType="numeric"
                   className="flex-1 ml-2 text-[14px] text-slate-900"
                   placeholderTextColor={COLORS.muted}
                 />
               </View>
-            </View>
-
-            {/* Additional Services */}
-            <View className="mb-3">
-              <View className="flex-row items-center justify-between mb-2">
-                <View className="flex-1">
-                  <Text className="text-[13px] text-slate-700">
-                    <Text className="font-medium text-slate-900">Additional Services</Text>
-                  </Text>
-                  {serviceWarning && (
-                    <Text className="text-[12px] text-red-500 mt-1">
-                      {serviceWarning}
-                    </Text>
-                  )}
-                </View>
-                <Pressable
-                  onPress={addService}
-                  className="flex-row items-center rounded-full bg-blue-50 px-3 py-1.5"
-                  disabled={serviceItems.length >= 10}
-                >
-                  <Ionicons name="add-circle" size={16} color={COLORS.primary} />
-                  <Text className="text-[12px] text-blue-600 font-medium ml-1">
-                    Add Service
-                  </Text>
-                </Pressable>
-              </View>
-
-              {serviceItems.length === 0 ? (
-                <View className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 items-center">
-                  <Ionicons name="construct-outline" size={24} color={COLORS.muted} />
-                  <Text className="text-[12px] text-slate-500 mt-2 text-center">
-                    No additional services added yet
-                  </Text>
-                  <Text className="text-[11px] text-slate-400 mt-1 text-center">
-                    Tap "Add Service" to add items like oil change, brake pads, etc.
-                  </Text>
-                </View>
-              ) : (
-                <View className="gap-3">
-                  {serviceItems.map((item, index) => (
-                    <View
-                      key={item.id}
-                      className="rounded-2xl border border-slate-300 bg-white p-3"
-                    >
-                      <View className="flex-row items-center justify-between mb-2">
-                        <Text className="text-[12px] text-slate-600 font-medium">
-                          Service {index + 1}
-                        </Text>
-                        <Pressable onPress={() => removeService(item.id)} hitSlop={8}>
-                          <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
-                        </Pressable>
-                      </View>
-
-                      {/* Service Name */}
-                      <TextInput
-                        value={item.name}
-                        onChangeText={(text) => updateServiceName(item.id, text)}
-                        placeholder="e.g., Oil change, Brake pads"
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-[13px] text-slate-900 mb-2"
-                        placeholderTextColor={COLORS.muted}
-                        maxLength={100}
-                      />
-
-                      {/* Service Fee */}
-                      <View className="flex-row items-center rounded-xl border border-slate-200 bg-slate-50 py-2 px-3">
-                        <Text className="text-[13px] text-slate-700">₱</Text>
-                        <TextInput
-                          value={item.fee}
-                          onChangeText={(text) => updateServiceFee(item.id, text)}
-                          onBlur={() => handleServiceFeeBlur(item.id)}
-                          placeholder="0.00"
-                          keyboardType="numeric"
-                          className="flex-1 ml-2 text-[13px] text-slate-900"
-                          placeholderTextColor={COLORS.muted}
-                        />
-                      </View>
-                    </View>
-                  ))}
-                </View>
+              {isGasService && (
+                <Text className="text-[11px] text-slate-500 mt-1 ml-1">
+                  Enter the total fuel cost including any delivery charges
+                </Text>
               )}
             </View>
+
+            {/* Additional Services Section (Only for non-gas emergencies) */}
+            {!isGasService && (
+              <View className="mb-3">
+                <View className="flex-row items-center justify-between mb-2">
+                  <View className="flex-1">
+                    <Text className="text-[13px] text-slate-700">
+                      <Text className="font-medium text-slate-900">Additional Services</Text>
+                    </Text>
+                    {serviceWarning && (
+                      <Text className="text-[12px] text-red-500 mt-1">
+                        {serviceWarning}
+                      </Text>
+                    )}
+                  </View>
+                  <Pressable
+                    onPress={addService}
+                    className="flex-row items-center rounded-full bg-blue-50 px-3 py-1.5"
+                    disabled={serviceItems.length >= 10}
+                  >
+                    <Ionicons name="add-circle" size={16} color={COLORS.primary} />
+                    <Text className="text-[12px] text-blue-600 font-medium ml-1">
+                      Add Service
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {serviceItems.length === 0 ? (
+                  <View className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 items-center">
+                    <Ionicons name="construct-outline" size={24} color={COLORS.muted} />
+                    <Text className="text-[12px] text-slate-500 mt-2 text-center">
+                      No additional services added yet
+                    </Text>
+                    <Text className="text-[11px] text-slate-400 mt-1 text-center">
+                      Tap "Add Service" to add items like oil change, brake pads, etc.
+                    </Text>
+                  </View>
+                ) : (
+                  <View className="gap-3">
+                    {serviceItems.map((item, index) => (
+                      <View
+                        key={item.id}
+                        className="rounded-2xl border border-slate-300 bg-white p-3"
+                      >
+                        <View className="flex-row items-center justify-between mb-2">
+                          <Text className="text-[12px] text-slate-600 font-medium">
+                            Service {index + 1}
+                          </Text>
+                          <Pressable onPress={() => removeService(item.id)} hitSlop={8}>
+                            <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
+                          </Pressable>
+                        </View>
+
+                        {/* Service Name */}
+                        <TextInput
+                          value={item.name}
+                          onChangeText={(text) => updateServiceName(item.id, text)}
+                          placeholder="e.g., Oil change, Brake pads"
+                          className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-[13px] text-slate-900 mb-2"
+                          placeholderTextColor={COLORS.muted}
+                          maxLength={100}
+                        />
+
+                        {/* Service Fee */}
+                        <View className="flex-row items-center rounded-xl border border-slate-200 bg-slate-50 py-2 px-3">
+                          <Text className="text-[13px] text-slate-700">₱</Text>
+                          <TextInput
+                            value={item.fee}
+                            onChangeText={(text) => updateServiceFee(item.id, text)}
+                            onBlur={() => handleServiceFeeBlur(item.id)}
+                            placeholder="0.00"
+                            keyboardType="numeric"
+                            className="flex-1 ml-2 text-[13px] text-slate-900"
+                            placeholderTextColor={COLORS.muted}
+                          />
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Summary */}
             <View className="rounded-2xl border border-slate-200 bg-slate-50 p-3 mb-4">
@@ -375,12 +435,12 @@ export default function PaymentModal({
                   </Text>
                 </View>
                 <View className="flex-row justify-between items-center">
-                  <Text className="text-[12px] text-slate-600">Labor cost</Text>
+                  <Text className="text-[12px] text-slate-600">{getCostLabel()}</Text>
                   <Text className="text-[12px] text-slate-700">
-                    ₱{parseFloat(laborCost || '0').toFixed(2)}
+                    ₱{parseFloat(serviceCost || '0').toFixed(2)}
                   </Text>
                 </View>
-                {serviceItems.length > 0 && (
+                {!isGasService && serviceItems.length > 0 && (
                   <View className="flex-row justify-between items-center">
                     <Text className="text-[12px] text-slate-600">
                       Services ({serviceItems.length})
@@ -403,11 +463,11 @@ export default function PaymentModal({
             {/* Submit */}
             <Pressable
               onPress={handleSubmit}
-              disabled={loading || !!serviceWarning}
+              disabled={loading || (!isGasService && !!serviceWarning)}
               className="rounded-2xl py-2.5 items-center"
               style={{
-                backgroundColor: (loading || serviceWarning) ? '#cbd5e1' : COLORS.primary,
-                opacity: (loading || serviceWarning) ? 0.7 : 1,
+                backgroundColor: (loading || (!isGasService && serviceWarning)) ? '#cbd5e1' : COLORS.primary,
+                opacity: (loading || (!isGasService && serviceWarning)) ? 0.7 : 1,
               }}
             >
               <Text className="text-[14px] text-white font-semibold">
@@ -434,11 +494,16 @@ export default function PaymentModal({
               <Ionicons name="document-text-outline" size={28} color={COLORS.primary} />
             </View>
             <Text className="text-lg font-semibold text-slate-900 text-center">
-              Confirm Invoice
+              Confirm {getServiceTypeDisplay()} Invoice
             </Text>
             <Text className="mt-2 text-[14px] text-slate-600 text-center">
               Final total: ₱{finalTotal.toFixed(2)}
             </Text>
+            {isGasService && fuelType && (
+              <Text className="mt-1 text-[12px] text-slate-500 text-center">
+                Fuel Type: {getFuelDisplay()}
+              </Text>
+            )}
             <Text className="mt-1 text-[12px] text-slate-500 text-center">
               This will send the invoice to the driver for payment. The offer will remain pending until payment is confirmed.
             </Text>

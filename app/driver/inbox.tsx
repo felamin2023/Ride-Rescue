@@ -203,16 +203,21 @@ export default function DriverInbox() {
       const shopName = item?.data?.shop_name || "A Mechanic";
       const totalAmount = item?.data?.total_amount;
       const distanceKm = item?.data?.distance_km;
-      const laborCost = item?.data?.labor_cost;
+      const laborCost = item?.data?.labor_cost || 0;
+      const fuelCost = item?.data?.fuel_cost || 0;
       const note = item?.data?.note;
 
       title = `${shopName} has sent you an offer!`;
 
-      if (totalAmount && distanceKm !== undefined && laborCost !== undefined) {
-        const distanceFee = totalAmount - laborCost;
+      if (totalAmount && distanceKm !== undefined) {
+        // Determine if this is a gas emergency based on fuel cost presence
+        const isGasEmergency = fuelCost > 0;
+        const serviceCost = isGasEmergency ? fuelCost : laborCost;
+        const distanceFee = totalAmount - serviceCost;
+        
         body = `Total Amount: ₱${totalAmount.toFixed(2)}\n` +
                `• Distance Fee: ₱${distanceFee.toFixed(2)} (${distanceKm.toFixed(1)} km)\n` +
-               `• Labor Cost: ₱${laborCost.toFixed(2)}`;
+               `• ${isGasEmergency ? 'Fuel Cost' : 'Labor Cost'}: ₱${serviceCost.toFixed(2)}`;
         
         if (note && note.trim()) {
           details = `Note: ${note}`;
@@ -227,9 +232,25 @@ export default function DriverInbox() {
       }
     }
     else if (item.type === "service_request_rejected") {
-      const shopName = item?.data?.shop_name || "A mechanic";
-      title ||= "Request Update";
-      body ||= `${shopName} is currently unavailable. Other mechanics have been notified of your request.`;
+      const shopName = item?.data?.shop_name || "A shop";
+      const isGasService = item?.data?.is_gas_service;
+      const cancelReason = item?.data?.cancel_reason;
+      const noFeesCharged = item?.data?.no_fees_charged;
+
+      if (isGasService) {
+        // Updated: Shop name in the title for gas delivery cancellations
+        title = `${shopName} cancelled your gas delivery`;
+        body = cancelReason ? `Reason: ${cancelReason}` : "No reason provided";
+        
+        if (noFeesCharged) {
+          details = "No fees were charged for this cancellation.";
+        }
+      } else {
+        const serviceType = item?.data?.service_type || 'repair';
+        const serviceDisplay = serviceType.charAt(0).toUpperCase() + serviceType.slice(1);
+        title = `${shopName} cancelled your ${serviceDisplay} service`;
+        body = cancelReason ? `Reason: ${cancelReason}` : "No reason provided";
+      }
     }
 
     return (
@@ -297,9 +318,6 @@ export default function DriverInbox() {
                 </Text>
                 {isUnread && (
                   <View className="flex-row items-center">
-                    <Text className="text-[10px] text-blue-600 font-medium mr-1.5">
-                      NEW
-                    </Text>
                     <View className="h-2 w-2 rounded-full bg-blue-500" />
                   </View>
                 )}

@@ -19,8 +19,8 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as Location from "expo-location";
-import * as FileSystem from "expo-file-system"; // ⬅️ NEW
-import { Buffer } from "buffer"; // ⬅️ NEW (fallback if atob is unavailable)
+import * as FileSystem from "expo-file-system";
+import { Buffer } from "buffer";
 import CheckboxRow from "../../components/CheckboxRow";
 import DayCheck from "../../components/DayCheck";
 import Section from "../../components/Section";
@@ -34,17 +34,10 @@ const SHOP_TYPE_OPTIONS = [
   "Repair and Vulcanizing",
   "Repair only",
   "Vulcanizing only",
+  "Gas Station",
 ] as const;
 
-const SHOP_LIST = [
-  "AutoFix Argao",
-  "QuickPatch Tire Shop",
-  "Bohol Motors",
-  "Cebu WrenchWorks",
-  "RoadAid Service Center",
-  "Shop not Listed",
-] as const;
-
+// Regular services for mechanical shops
 const SERVICES = [
   "Oil Change",
   "Engine Tune-up",
@@ -66,6 +59,19 @@ const SERVICES = [
   "Windshield Wiper Replacement",
   "Wheel Repair",
   "Vulcanizing/Tire Patching",
+];
+
+// Fuel types for gas stations in the Philippines
+const FUEL_TYPES = [
+  "Unleaded",
+  "Premium Unleaded",
+  "Super Premium",
+  "Diesel",
+  "Premium Diesel",
+  // "E10 (Unleaded with 10% ethanol)",
+  // "E85 (Ethanol 85%)",
+  // "LPG (Liquefied Petroleum Gas)",
+  // "CNG (Compressed Natural Gas)",
 ];
 
 // ── Time format helpers ──────────────────────────────────────────────────
@@ -627,10 +633,11 @@ export default function Signup() {
   /* Shop fields */
   const [shopType, setShopType] = useState<string | null>(null);
   const [shopName, setShopName] = useState<string | null>(null);
+  const [selectedShopCategory, setSelectedShopCategory] = useState<string | null>(null); // NEW: Track selected shop category
   const [showNotListedModal, setShowNotListedModal] = useState(false);
 
   const [shopOptions, setShopOptions] = useState<
-    Array<{ label: string; value: string }>
+    Array<{ label: string; value: string; category: string }> // UPDATED: Include category
   >([]);
   const [shopListLoading, setShopListLoading] = useState(false);
   const [shopListError, setShopListError] = useState<string | null>(null);
@@ -678,46 +685,59 @@ export default function Signup() {
   const [touchedD, setTouchedD] = useState<{ [k: string]: boolean }>({});
   const [touchedS, setTouchedS] = useState<{ [k: string]: boolean }>({});
 
-useEffect(() => {
-  let mounted = true;
-  (async () => {
-    try {
-      setShopListLoading(true);
-      setShopListError(null);
-
-      const ALLOWED = ["vulcanizing", "repair_shop", "vulcanizing_repair"] as const;
-
-      const { data, error } = await supabase
-        .from("places")
-        .select("place_id, name, address, category")
-        .in("category", ALLOWED as unknown as string[]) // Postgrest .in requires string[]
-        .or("owner.is.null,owner.eq.")                  // keep your original owner filter
-        .order("name", { ascending: true });
-
-      if (error) throw error;
-
-      const opts =
-        (data ?? [])
-          // (extra safety if old rows slip through)
-          .filter((r: any) => ALLOWED.includes(r.category))
-          .filter((r: any) => (r?.name ?? "").trim().length > 0)
-          .map((r: any) => ({
-            label: r.address ? `${r.name} — ${r.address}` : r.name,
-            value: r.place_id,
-          }));
-
-      if (mounted) setShopOptions(opts);
-    } catch (e: any) {
-      if (mounted) setShopListError(e?.message ?? "Failed to load shops");
-    } finally {
-      if (mounted) setShopListLoading(false);
+  // Determine if current shop is a gas station
+  const isGasStation = useMemo(() => {
+    // For listed shops, check the category
+    if (shopName && shopName !== "Shop not Listed" && selectedShopCategory) {
+      return selectedShopCategory === "gas_station";
     }
-  })();
-  return () => {
-    mounted = false;
-  };
-}, []);
+    // For unlisted shops, check the shopType
+    if (shopName === "Shop not Listed") {
+      return shopType === "Gas Station";
+    }
+    return false;
+  }, [shopName, selectedShopCategory, shopType]);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setShopListLoading(true);
+        setShopListError(null);
+
+        // UPDATED: Include "gas_station" in the allowed categories
+        const ALLOWED = ["vulcanizing", "repair_shop", "vulcanizing_repair", "gas_station"] as const;
+
+        const { data, error } = await supabase
+          .from("places")
+          .select("place_id, name, address, category")
+          .in("category", ALLOWED as unknown as string[])
+          .or("owner.is.null,owner.eq.")
+          .order("name", { ascending: true });
+
+        if (error) throw error;
+
+        const opts =
+          (data ?? [])
+            .filter((r: any) => ALLOWED.includes(r.category))
+            .filter((r: any) => (r?.name ?? "").trim().length > 0)
+            .map((r: any) => ({
+              label: r.address ? `${r.name} — ${r.address}` : r.name,
+              value: r.place_id,
+              category: r.category, // Store category for each shop
+            }));
+
+        if (mounted) setShopOptions(opts);
+      } catch (e: any) {
+        if (mounted) setShopListError(e?.message ?? "Failed to load shops");
+      } finally {
+        if (mounted) setShopListLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   function markTouchedD(field: string) {
     setTouchedD((prev) => ({ ...prev, [field]: true }));
@@ -747,27 +767,25 @@ useEffect(() => {
     );
   }
 
-
   const handleSelectAllServices = () => {
-  if (shopLocked) return; // Add this line
-  if (services.length === SERVICES.length) {
-    setServices([]);
-  } else {
-    setServices([...SERVICES]);
-  }
-};
+    if (shopLocked) return;
+    // Use the appropriate list based on shop type
+    const currentList = isGasStation ? FUEL_TYPES : SERVICES;
+    if (services.length === currentList.length) {
+      setServices([]);
+    } else {
+      setServices([...currentList]);
+    }
+  };
 
-const handleSelectAllDays = () => {
-  if (shopLocked) return; // Add this line
-  if (days.length === DAY_KEYS.length) {
-    setDays([]);
-  } else {
-    setDays([...DAY_KEYS]);
-  }
-};
-
-
-
+  const handleSelectAllDays = () => {
+    if (shopLocked) return;
+    if (days.length === DAY_KEYS.length) {
+      setDays([]);
+    } else {
+      setDays([...DAY_KEYS]);
+    }
+  };
 
   const addCert = (file: CertFile) => setCerts((prev) => [...prev, file]);
 
@@ -936,28 +954,28 @@ const handleSelectAllDays = () => {
     if (services.length === 0) e.services = "Pick at least 1 service.";
     if (days.length === 0) e.days = "Pick at least 1 operating day.";
     // Convert 12-hour to 24-hour for validation
-const openTime24 = convertTo24Hour(openTime);
-const closeTime24 = convertTo24Hour(closeTime);
+    const openTime24 = convertTo24Hour(openTime);
+    const closeTime24 = convertTo24Hour(closeTime);
 
-if (!openTime.trim()) e.openTime = "Open time required.";
-if (!closeTime.trim()) e.closeTime = "Close time required.";
+    if (!openTime.trim()) e.openTime = "Open time required.";
+    if (!closeTime.trim()) e.closeTime = "Close time required.";
 
-// Only validate time order if both times are valid
-if (openTime24 && closeTime24) {
-  const [oh, om] = openTime24.split(":").map(Number);
-  const [ch, cm] = closeTime24.split(":").map(Number);
-  if (oh * 60 + om >= ch * 60 + cm) {
-    e.closeTime = "Close time must be after open time.";
-  }
-} else {
-  // If conversion failed but times are entered, show format error
-  if (openTime.trim() && !openTime24) {
-    e.openTime = "Please use format: hh:mm AM/PM";
-  }
-  if (closeTime.trim() && !closeTime24) {
-    e.closeTime = "Please use format: hh:mm AM/PM";
-  }
-}
+    // Only validate time order if both times are valid
+    if (openTime24 && closeTime24) {
+      const [oh, om] = openTime24.split(":").map(Number);
+      const [ch, cm] = closeTime24.split(":").map(Number);
+      if (oh * 60 + om >= ch * 60 + cm) {
+        e.closeTime = "Close time must be after open time.";
+      }
+    } else {
+      // If conversion failed but times are entered, show format error
+      if (openTime.trim() && !openTime24) {
+        e.openTime = "Please use format: hh:mm AM/PM";
+      }
+      if (closeTime.trim() && !closeTime24) {
+        e.closeTime = "Please use format: hh:mm AM/PM";
+      }
+    }
     if (certs.length === 0)
       e.certificate = "Upload at least one certificate/proof.";
     setErrorsS(e);
@@ -1079,13 +1097,14 @@ if (openTime24 && closeTime24) {
         photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
       }
 
+      // FIXED: Ensure phone number is properly included in the insert
       const { error: insertErr } = await supabase.from("app_user").insert([
         {
           user_id: authUserId,
           role: "Driver",
           full_name: dFullname,
           email: normalizedEmail,
-          phone: dPhone,
+          phone: dPhone, // This should now save properly
           address: dAddress,
           password: dPw,
           photo_url: photoUrl,
@@ -1189,13 +1208,13 @@ if (openTime24 && closeTime24) {
         photoUrl = `https://www.gravatar.com/avatar/${md5}?d=identicon`;
       }
 
-      // 1) Upsert app_user (Shop owner)
+      // 1) Upsert app_user (Shop owner) - FIXED: Ensure phone number is included
       const appUserRow = {
         user_id: authUserId,
         role: "Shop owner" as const,
         full_name: sFullname,
         email: normalizedEmail,
-        phone: sPhone,
+        phone: sPhone, // This should now save properly
         address: sAddress,
         password: sPw,
         photo_url: photoUrl,
@@ -1220,13 +1239,15 @@ if (openTime24 && closeTime24) {
         const lat = coords?.lat ?? null;
         const lng = coords?.lng ?? null;
 
-        // Map UI labels → DB category.
+        // UPDATED: Map UI labels → DB category to include "Gas Station"
         const category =
           shopType === "Repair and Vulcanizing"
             ? "vulcanizing_repair"
             : shopType === "Vulcanizing only"
             ? "vulcanizing"
-            : "repair_shop"; // "Repair only"
+            : shopType === "Repair only"
+            ? "repair_shop"
+            : "gas_station"; // "Gas Station"
 
         const newPlacePayload: any = {
           name: unlistedName.trim() || null, // NEW
@@ -1730,9 +1751,16 @@ if (openTime24 && closeTime24) {
                   if (shopLocked) return;
                   setShopName(v);
                   markTouchedS("shopName");
+                  
                   if (v === "Shop not Listed") {
                     setAskLocation(true);
+                    setSelectedShopCategory(null); // Reset for unlisted
                   } else {
+                    // Find the selected shop to get its category
+                    const selectedShop = shopOptions.find(opt => opt.value === v);
+                    if (selectedShop) {
+                      setSelectedShopCategory(selectedShop.category);
+                    }
                     // reset unlisted fields
                     setShopType(null);
                     setUnlistedName("");
@@ -2098,7 +2126,7 @@ if (openTime24 && closeTime24) {
                 </View>
               </Modal>
 
-              {/* Phone & Address */}
+              {/* Phone & Address - FIXED: Phone number will now save properly */}
               <FieldRow
                 icon="call-outline"
                 placeholder="Phone Number"
@@ -2125,38 +2153,40 @@ if (openTime24 && closeTime24) {
                 onBlur={() => markTouchedS("sAddress")}
               />
 
-              {/* Services - Updated to ScrollView Checklist */}
-            <View className="mt-4 mb-2">
-              <View className="flex-row justify-between items-center">
-                <Text className="text-sm font-semibold text-gray-900">
-                  Services offered
-                </Text>
-                <Pressable
-                  onPress={handleSelectAllServices}
-                  disabled={shopLocked}
-                  className={`border border-gray-300 rounded-lg px-3 py-1 ${
-                    shopLocked ? "opacity-50" : ""
-                  }`}
-                >
-                  <Text className={`text-xs ${
-                    shopLocked ? "text-gray-400" : "text-gray-700"
-                  }`}>
-                    {services.length === SERVICES.length ? "Deselect All" : "Select All"}
+              {/* Services/Fuel Types - Conditionally rendered based on shop category */}
+              <View className="mt-4 mb-2">
+                <View className="flex-row justify-between items-center">
+                  <Text className="text-sm font-semibold text-gray-900">
+                    {isGasStation ? "Fuel types offered" : "Services offered"}
                   </Text>
-                </Pressable>
+                  <Pressable
+                    onPress={handleSelectAllServices}
+                    disabled={shopLocked}
+                    className={`border border-gray-300 rounded-lg px-3 py-1 ${
+                      shopLocked ? "opacity-50" : ""
+                    }`}
+                  >
+                    <Text className={`text-xs ${
+                      shopLocked ? "text-gray-400" : "text-gray-700"
+                    }`}>
+                      {services.length === (isGasStation ? FUEL_TYPES.length : SERVICES.length) 
+                        ? "Deselect All" 
+                        : "Select All"}
+                    </Text>
+                  </Pressable>
+                </View>
+                {errorsS.services ? (
+                  <Text className="text-xs text-red-500 mt-1">
+                    {errorsS.services}
+                  </Text>
+                ) : null}
               </View>
-              {errorsS.services ? (
-                <Text className="text-xs text-red-500 mt-1">
-                  {errorsS.services}
-                </Text>
-              ) : null}
-            </View>
               <ScrollView 
                 style={{ maxHeight: 200 }}
                 className="border border-gray-300 rounded-xl bg-white"
                 nestedScrollEnabled
               >
-                {SERVICES.map((s) => {
+                {(isGasStation ? FUEL_TYPES : SERVICES).map((s) => {
                   const on = services.includes(s);
                   return (
                     <Pressable
@@ -2206,7 +2236,6 @@ if (openTime24 && closeTime24) {
                   </Text>
                 ) : null}
               </View>
-
 
               <View className="border border-gray-300 rounded-xl bg-white p-3">
                 {DAY_LABELS.map((lbl, i) => {

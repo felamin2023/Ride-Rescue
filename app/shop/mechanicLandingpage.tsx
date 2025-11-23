@@ -90,6 +90,9 @@ type RequestItem = {
   images?: string[];
   brief?: string;
   phone?: string;
+  serviceType?: string; // Added service type for filtering
+  fuelType?: string; // Added fuel type for gas emergencies
+  customFuelType?: string; // Added custom fuel type for gas emergencies
 };
 
 type EmergencyRow = {
@@ -105,11 +108,16 @@ type EmergencyRow = {
   accepted_at: string | null;
   completed_at: string | null;
   canceled_at: string | null;
+  service_type?: string; // Added service type
+  fuel_type?: string;
+  custom_fuel_type?: string;
 };
 
 type AppUserRow = { full_name: string | null; photo_url: string | null };
 
 type MyReqStatus = "pending" | "canceled" | "rejected" | "accepted";
+
+type ShopCategory = 'gas_station' | 'repair_shop' | 'vulcanizing' | 'vulcanizing_repair' | null;
 
 /* ----------------------------- Helpers ----------------------------- */
 const AVATAR_PLACEHOLDER =
@@ -180,17 +188,11 @@ function mapEmergencyToItem(
     lng,
     status: statusMapToCard[r.emergency_status],
     images: (r.attachments || []).filter(Boolean),
+    serviceType: r.service_type, // Add service type
+    fuelType: r.fuel_type, // Add fuel type
+    customFuelType: r.custom_fuel_type, // Add custom fuel type
   };
 }
-
-
-
-
-
-
-
-
-
 
 // distance helper (km)
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -220,8 +222,22 @@ function isVisibleByGate(
   return dist <= KM_GATE;
 }
 
+// Service type filtering logic - FIXED VERSION
+function isVisibleByServiceType(emergencyServiceType: string | null | undefined, shopCategory: ShopCategory): boolean {
+  // If no service type specified in emergency, show to all shops
+  if (!emergencyServiceType) return true;
+  
+  // Gas stations can only see gas emergencies
+  if (shopCategory === 'gas_station') {
+    return emergencyServiceType === 'gas';
+  }
+  
+  // All other shops can see everything EXCEPT gas emergencies
+  return emergencyServiceType !== 'gas';
+}
+
 /* ----------------------------- DEBUG PRINTER ----------------------------- */
-const DEBUG_PRINTS = true;
+const DEBUG_PRINTS = false;
 function printDebug(
   tag: string,
   postLat?: number,
@@ -475,6 +491,9 @@ function RequestCard({
   const label = isPendingMine ? "Cancel" : "Accept";
   const bg = isPendingMine ? COLORS.danger : COLORS.primary;
 
+  // Determine if this is a gas emergency
+  const isGasEmergency = item.serviceType === 'gas';
+
   return (
     <Pressable
       onPress={() => onPressCard(item)}
@@ -496,6 +515,16 @@ function RequestCard({
           <View className="mt-1 flex-row items-center gap-2">
             <Meta icon="car-outline">{item.vehicle}</Meta>
             <StatusPill status={item.status} />
+            {isGasEmergency && (
+              <View
+                style={{ backgroundColor: "#DCFCE7" }}
+                className="rounded-full px-2 py-[2px]"
+              >
+                <Text className="text-[11px] font-semibold" style={{ color: "#065F46" }}>
+                  Fuel
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -503,10 +532,23 @@ function RequestCard({
       <View className="h-px bg-slate-200 my-4" />
 
       <View className="gap-1">
-        <Meta icon="construct-outline">{item.service}</Meta>
+        <Meta icon="construct-outline">
+          {isGasEmergency ? 'Fuel Delivery Request' : item.service}
+        </Meta>
+        
+        {/* Show fuel type for gas emergencies */}
+        {isGasEmergency && item.fuelType && (
+          <Meta icon="water-outline">
+            Fuel Type: {item.fuelType === 'other' && item.customFuelType 
+              ? item.customFuelType 
+              : item.fuelType?.charAt(0).toUpperCase() + item.fuelType?.slice(1)}
+          </Meta>
+        )}
+        
         {item.landmark ? (
           <Meta icon="location-outline">{item.landmark}</Meta>
         ) : null}
+        
         <View className="flex-row flex-wrap items-center gap-x-3 gap-y-1">
           <Meta icon="time-outline">{item.time}</Meta>
           {typeof item.distanceKm === "number" && (
@@ -606,6 +648,9 @@ function DetailSheet({
   const label = isPendingMine ? "Cancel" : "Accept";
   const bg = isPendingMine ? COLORS.danger : COLORS.primary;
 
+  // Determine if this is a gas emergency
+  const isGasEmergency = item.serviceType === 'gas';
+
   return (
     <Modal
       visible={visible}
@@ -638,6 +683,16 @@ function DetailSheet({
             <View className="mt-1 flex-row items-center gap-2">
               <Meta icon="car-outline">{item.vehicle}</Meta>
               <StatusPill status={item.status} />
+              {isGasEmergency && (
+                <View
+                  style={{ backgroundColor: "#DCFCE7" }}
+                  className="rounded-full px-2 py-[2px]"
+                >
+                  <Text className="text-[11px] font-semibold" style={{ color: "#065F46" }}>
+                    Fuel Delivery
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
           <Pressable onPress={onClose} hitSlop={8}>
@@ -706,6 +761,20 @@ function DetailSheet({
               </Text>
             </View>
           ) : null}
+
+          {/* Show fuel information for gas emergencies */}
+          {isGasEmergency && item.fuelType && (
+            <View className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 p-3">
+              <Text className="text-[13px] text-blue-700">
+                <Text className="font-medium text-blue-900">
+                  Fuel Information:{" "}
+                </Text>
+                {item.fuelType === 'other' && item.customFuelType 
+                  ? `Other (${item.customFuelType})`
+                  : item.fuelType.charAt(0).toUpperCase() + item.fuelType.slice(1)}
+              </Text>
+            </View>
+          )}
 
           <View className="mt-3 gap-2">
             {item.landmark ? (
@@ -920,16 +989,11 @@ export default function RequestScreen() {
   const unreadMessageCount = useUnreadMessageCount();
   const unreadNotificationCount = useUnreadNotificationCount();
   
-
   // mechanic's current coords (used for distance)
-  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(
-    null
-  );
+  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(null);
 
   // Gating states
-  const [locPerm, setLocPerm] = useState<"unknown" | "granted" | "denied">(
-    "unknown"
-  );
+  const [locPerm, setLocPerm] = useState<"unknown" | "granted" | "denied">("unknown");
   const [requestingLoc, setRequestingLoc] = useState(false);
   const [distanceReady, setDistanceReady] = useState(false);
 
@@ -947,10 +1011,10 @@ export default function RequestScreen() {
         icon: "chatbubbles-outline" as const,
       },
       {
-      label: "Accepted Requests",
-      href: "/shop/mechanicAcceptedrequests", // ← the page we built
-      icon: "document-text-outline" as const, // you can use "time-outline" or "clipboard-outline" if you prefer
-    },
+        label: "Accepted Requests",
+        href: "/shop/mechanicAcceptedrequests",
+        icon: "document-text-outline" as const,
+      },
       {
         label: "Transactions",
         href: "/shop/completedrequest",
@@ -959,7 +1023,7 @@ export default function RequestScreen() {
       {
         label: "Ratings & Reviews",
         href: "/shop/ratings",
-        icon: "star-outline" as const, // Ionicons
+        icon: "star-outline" as const,
       },
     ],
     []
@@ -996,7 +1060,7 @@ export default function RequestScreen() {
     return () => {
       if (toastTimer.current) {
         clearTimeout(toastTimer.current);
-        toastTimer.current = null; // optional: avoid double-clears
+        toastTimer.current = null;
       }
     };
   }, []);
@@ -1008,126 +1072,133 @@ export default function RequestScreen() {
     Record<string, { service_id: string; status: MyReqStatus }>
   >({});
 
+  // Shop category state
+  const [shopCategory, setShopCategory] = useState<ShopCategory>(null);
+
+  // Refs for polling control
+  const isFetchingRef = useRef(false);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const myStatusFor = (emergencyId: string) => myReq[emergencyId]?.status;
   const hasMyPending = (emergencyId: string) =>
     myReq[emergencyId]?.status === "pending";
 
   const messageDriver = async (it: RequestItem) => {
-  try {
-    setLoading({ visible: true, message: "Opening chat..." });
+    try {
+      setLoading({ visible: true, message: "Opening chat..." });
 
-    // Get current user ID (mechanic/shop)
-    const { data: auth } = await supabase.auth.getUser();
-    const currentUserId = auth?.user?.id;
+      // Get current user ID (mechanic/shop)
+      const { data: auth } = await supabase.auth.getUser();
+      const currentUserId = auth?.user?.id;
 
-    if (!currentUserId) {
-      Alert.alert("Error", "Please sign in to start a conversation.");
-      setLoading({ visible: false });
-      return;
-    }
+      if (!currentUserId) {
+        Alert.alert("Error", "Please sign in to start a conversation.");
+        setLoading({ visible: false });
+        return;
+      }
 
-    // We need to get the driver's user_id for this emergency
-    const { data: emergencyData, error: emergencyError } = await supabase
-      .from("emergency")
-      .select("user_id")
-      .eq("emergency_id", it.id)
-      .single();
-
-    if (emergencyError || !emergencyData?.user_id) {
-      Alert.alert("Error", "Driver information is not available.");
-      setLoading({ visible: false });
-      return;
-    }
-
-    const driverUserId = emergencyData.user_id;
-
-    console.log("Looking for ANY conversation between:", {
-      customer_id: driverUserId,
-      driver_id: currentUserId,
-      emergency_id: it.id
-    });
-
-    // Check for ANY existing conversation (emergency OR non-emergency) between these users
-    const { data: existingConvs, error: convError } = await supabase
-      .from("conversations")
-      .select(`
-        id,
-        emergency_id,
-        shop_place_id
-      `)
-      .or(`and(customer_id.eq.${driverUserId},driver_id.eq.${currentUserId}),and(customer_id.eq.${currentUserId},driver_id.eq.${driverUserId})`)
-      .order("updated_at", { ascending: false });
-
-    if (convError) {
-      console.error("Error checking conversations:", convError);
-    }
-
-    let conversationId;
-
-    // Use the most recent existing conversation if found (regardless of emergency status)
-    if (existingConvs && existingConvs.length > 0) {
-      conversationId = existingConvs[0].id;
-      console.log("Found existing conversation:", conversationId, 
-        existingConvs[0].emergency_id ? "(emergency)" : "(non-emergency)");
-      
-      // Update the conversation timestamp to mark it as active
-      await supabase
-        .from("conversations")
-        .update({ updated_at: new Date().toISOString() })
-        .eq("id", conversationId);
-    } else {
-      console.log("No existing conversation found, creating new emergency one");
-      // Create new emergency conversation
-      const { data: newConv, error } = await supabase
-        .from("conversations")
-        .insert({
-          emergency_id: it.id,
-          customer_id: driverUserId, // driver is the customer in emergency context
-          driver_id: currentUserId, // shop is the driver in emergency context
-        })
-        .select()
+      // We need to get the driver's user_id for this emergency
+      const { data: emergencyData, error: emergencyError } = await supabase
+        .from("emergency")
+        .select("user_id")
+        .eq("emergency_id", it.id)
         .single();
 
-      if (error) {
-        console.error("Error creating conversation:", error);
+      if (emergencyError || !emergencyData?.user_id) {
+        Alert.alert("Error", "Driver information is not available.");
+        setLoading({ visible: false });
+        return;
+      }
+
+      const driverUserId = emergencyData.user_id;
+
+      console.log("Looking for ANY conversation between:", {
+        customer_id: driverUserId,
+        driver_id: currentUserId,
+        emergency_id: it.id
+      });
+
+      // Check for ANY existing conversation (emergency OR non-emergency) between these users
+      const { data: existingConvs, error: convError } = await supabase
+        .from("conversations")
+        .select(`
+          id,
+          emergency_id,
+          shop_place_id
+        `)
+        .or(`and(customer_id.eq.${driverUserId},driver_id.eq.${currentUserId}),and(customer_id.eq.${currentUserId},driver_id.eq.${driverUserId})`)
+        .order("updated_at", { ascending: false });
+
+      if (convError) {
+        console.error("Error checking conversations:", convError);
+      }
+
+      let conversationId;
+
+      // Use the most recent existing conversation if found (regardless of emergency status)
+      if (existingConvs && existingConvs.length > 0) {
+        conversationId = existingConvs[0].id;
+        console.log("Found existing conversation:", conversationId, 
+          existingConvs[0].emergency_id ? "(emergency)" : "(non-emergency)");
         
-        // If there's a unique constraint violation, try to find the existing conversation again
-        if (error.code === '23505') { // unique violation
-          const { data: retryConvs } = await supabase
-            .from("conversations")
-            .select("id")
-            .or(`and(customer_id.eq.${driverUserId},driver_id.eq.${currentUserId}),and(customer_id.eq.${currentUserId},driver_id.eq.${driverUserId})`)
-            .order("updated_at", { ascending: false })
-            .limit(1);
-            
-          if (retryConvs && retryConvs.length > 0) {
-            conversationId = retryConvs[0].id;
-            console.log("Found conversation after retry:", conversationId);
+        // Update the conversation timestamp to mark it as active
+        await supabase
+          .from("conversations")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", conversationId);
+      } else {
+        console.log("No existing conversation found, creating new emergency one");
+        // Create new emergency conversation
+        const { data: newConv, error } = await supabase
+          .from("conversations")
+          .insert({
+            emergency_id: it.id,
+            customer_id: driverUserId, // driver is the customer in emergency context
+            driver_id: currentUserId, // shop is the driver in emergency context
+          })
+          .select()
+          .single();
+
+        if (error) {
+          console.error("Error creating conversation:", error);
+          
+          // If there's a unique constraint violation, try to find the existing conversation again
+          if (error.code === '23505') { // unique violation
+            const { data: retryConvs } = await supabase
+              .from("conversations")
+              .select("id")
+              .or(`and(customer_id.eq.${driverUserId},driver_id.eq.${currentUserId}),and(customer_id.eq.${currentUserId},driver_id.eq.${driverUserId})`)
+              .order("updated_at", { ascending: false })
+              .limit(1);
+              
+            if (retryConvs && retryConvs.length > 0) {
+              conversationId = retryConvs[0].id;
+              console.log("Found conversation after retry:", conversationId);
+            } else {
+              throw new Error("Conversation creation failed and no existing conversation found");
+            }
           } else {
-            throw new Error("Conversation creation failed and no existing conversation found");
+            throw error;
           }
         } else {
-          throw error;
+          conversationId = newConv.id;
+          console.log("Created new emergency conversation:", conversationId);
         }
-      } else {
-        conversationId = newConv.id;
-        console.log("Created new emergency conversation:", conversationId);
       }
-    }
 
-    if (!conversationId) {
-      throw new Error("No conversation ID available");
-    }
+      if (!conversationId) {
+        throw new Error("No conversation ID available");
+      }
 
-    // Navigate to the chat screen
-    router.push(`/driver/chat/${conversationId}`);
-  } catch (error) {
-    console.error("Error in messageDriver:", error);
-    Alert.alert("Error", "Could not start conversation. Please try again.");
-  } finally {
-    setLoading({ visible: false });
-  }
-};
+      // Navigate to the chat screen
+      router.push(`/driver/chat/${conversationId}`);
+    } catch (error) {
+      console.error("Error in messageDriver:", error);
+      Alert.alert("Error", "Could not start conversation. Please try again.");
+    } finally {
+      setLoading({ visible: false });
+    }
+  };
 
   const openViewer = (images: string[], startIndex: number) => {
     setViewerImages(images);
@@ -1171,12 +1242,14 @@ export default function RequestScreen() {
   /* ------------------------ MAIN FETCH (PENDING ONLY) ------------------------ */
   const fetchPending = useCallback(
     async (withSpinner: boolean) => {
-      if (!myCoords) return;
+      // Don't fetch until both myCoords and shopCategory are available
+      if (!myCoords || !shopCategory || isFetchingRef.current) return;
+      
       try {
+        isFetchingRef.current = true;
         if (withSpinner)
           setLoading({ visible: true, message: "Loading requests…" });
 
-        // Prefer RPC if you created one; otherwise query table
         let ems: EmergencyRow[] | null = null;
         try {
           const { data, error } = await supabase.rpc("visible_emergencies", {
@@ -1184,6 +1257,7 @@ export default function RequestScreen() {
             lon: myCoords.lng,
           });
           if (error) throw error;
+          // Filter by gate only first
           ems = ((data || []) as EmergencyRow[]).filter((r) =>
             isVisibleByGate(r, myCoords)
           );
@@ -1194,6 +1268,7 @@ export default function RequestScreen() {
             .eq("emergency_status", "waiting")
             .order("created_at", { ascending: false });
           if (error) throw error;
+          // Filter by gate only first
           ems = (data as EmergencyRow[]).filter((r) =>
             isVisibleByGate(r, myCoords)
           );
@@ -1223,38 +1298,48 @@ export default function RequestScreen() {
               r.longitude
             );
 
-            // 🔎 debug
-            const distM =
-              typeof item.distanceKm === "number"
-                ? item.distanceKm * 1000
-                : undefined;
-            printDebug(
-              `[fetch] ${r.emergency_id}`,
-              r.latitude,
-              r.longitude,
-              myCoords,
-              distM,
-              r.created_at
-            );
-
             return item;
           })
         );
 
-        setRows(mapped);
+        // Apply service type filtering - this ensures no wrong requests show up
+        const filtered = mapped.filter(item => 
+          isVisibleByServiceType(item.serviceType, shopCategory)
+        );
+
+        setRows(filtered);
       } catch (e: any) {
-        Alert.alert("Unable to load", e?.message ?? "Please try again.");
+        console.error("Fetch error:", e);
+        // Don't show alert for polling errors to avoid spam
+        if (withSpinner) {
+          Alert.alert("Unable to load", e?.message ?? "Please try again.");
+        }
       } finally {
+        isFetchingRef.current = false;
         if (withSpinner) setLoading({ visible: false });
       }
     },
-    [myCoords]
+    [myCoords, shopCategory]
   );
 
-  // Initial load (also rerun when myCoords becomes available)
+  // Start polling when both location and shop category are available
   useEffect(() => {
-    if (myCoords) fetchPending(true);
-  }, [fetchPending, myCoords]);
+    if (myCoords && shopCategory !== null) {
+      // Initial fetch
+      fetchPending(true);
+      
+      // Start 1-second polling
+      pollingIntervalRef.current = setInterval(() => {
+        fetchPending(false);
+      }, 1000); // 1 second
+
+      return () => {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+        }
+      };
+    }
+  }, [myCoords, shopCategory, fetchPending]);
 
   // Track whether distances are ready for all visible rows
   useEffect(() => {
@@ -1267,20 +1352,49 @@ export default function RequestScreen() {
     setDistanceReady(ready);
   }, [rows, myCoords]);
 
-  /* ---------------- get current user's shop_id ---------------- */
+  /* ---------------- get current user's shop_id and shop category ---------------- */
   useEffect(() => {
     (async () => {
       try {
         const { data: auth } = await supabase.auth.getUser();
         const uid = auth?.user?.id;
         if (!uid) return;
+        
+        // Get shop details including place_id
         const { data, error } = await supabase
           .from("shop_details")
-          .select("shop_id")
+          .select("shop_id, place_id")
           .eq("user_id", uid)
           .single();
-        if (!error && data?.shop_id) setShopId(data.shop_id);
-      } catch {}
+        
+        if (!error && data?.shop_id) {
+          setShopId(data.shop_id);
+          
+          // If we have a place_id, get the category from places table
+          if (data.place_id) {
+            const { data: placeData, error: placeError } = await supabase
+              .from("places")
+              .select("category")
+              .eq("place_id", data.place_id)
+              .single();
+            
+            if (!placeError && placeData?.category) {
+              setShopCategory(placeData.category as ShopCategory);
+            } else {
+              setShopCategory(null);
+            }
+          } else {
+            setShopCategory(null);
+          }
+        } else {
+          // If no shop details found, set category to null (non-gas station)
+          setShopCategory(null);
+        }
+      } catch (error) {
+        console.error("Error fetching shop details:", error);
+        // On error, assume it's a non-gas station so they can see repair/vulcanize requests
+        setShopCategory(null);
+      }
     })();
   }, []);
 
@@ -1340,10 +1454,10 @@ export default function RequestScreen() {
         }
 
         // Gate: only allow items visible by rule to enter/update the list.
-        const visibleNow = isVisibleByGate(row, myCoords);
+        const visibleByGate = isVisibleByGate(row, myCoords);
 
         // If it's not visible *yet*, ensure it's removed from the list (prevents flicker)
-        if (!visibleNow) {
+        if (!visibleByGate) {
           if (idx >= 0) next.splice(idx, 1);
           return next;
         }
@@ -1357,6 +1471,9 @@ export default function RequestScreen() {
           images: (row.attachments || []).filter(Boolean),
           lat: row.latitude,
           lng: row.longitude,
+          serviceType: row.service_type,
+          fuelType: row.fuel_type,
+          customFuelType: row.custom_fuel_type,
         };
 
         if (idx >= 0) {
@@ -1367,19 +1484,6 @@ export default function RequestScreen() {
               myCoords.lng,
               row.latitude,
               row.longitude
-            );
-            // 🔎 debug
-            const distM =
-              typeof next[idx].distanceKm === "number"
-                ? next[idx].distanceKm * 1000
-                : undefined;
-            printDebug(
-              `[realtime:UPDATE] ${row.emergency_id}`,
-              row.latitude,
-              row.longitude,
-              myCoords,
-              distM,
-              row.created_at
             );
           }
         } else {
@@ -1395,6 +1499,9 @@ export default function RequestScreen() {
             lng: row.longitude,
             status: "pending",
             images: (row.attachments || []).filter(Boolean),
+            serviceType: row.service_type,
+            fuelType: row.fuel_type,
+            customFuelType: row.custom_fuel_type,
             distanceKm: myCoords
               ? haversineKm(
                   myCoords.lat,
@@ -1405,20 +1512,6 @@ export default function RequestScreen() {
               : undefined,
           };
           next.unshift(lite);
-
-          // 🔎 debug
-          const distM =
-            typeof lite.distanceKm === "number"
-              ? lite.distanceKm * 1000
-              : undefined;
-          printDebug(
-            `[realtime:INSERT] ${row.emergency_id}`,
-            row.latitude,
-            row.longitude,
-            myCoords,
-            distM,
-            row.created_at
-          );
 
           // Enrich profile + landmark later
           (async () => {
@@ -1446,10 +1539,13 @@ export default function RequestScreen() {
           })();
         }
 
-        return next;
+        // Apply service type filtering to the updated list
+        return next.filter(item => 
+          isVisibleByServiceType(item.serviceType, shopCategory)
+        );
       });
     },
-    [myCoords]
+    [myCoords, shopCategory]
   );
 
   useEffect(() => {
@@ -1460,7 +1556,6 @@ export default function RequestScreen() {
         { event: "*", schema: "public", table: "emergency" },
         (payload) => {
           applyRealtimePatch(payload);
-          fetchPending(false);
         }
       )
       .subscribe();
@@ -1468,15 +1563,7 @@ export default function RequestScreen() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [applyRealtimePatch, fetchPending]);
-
-  // Fallback polling (if realtime drops) and to capture items that aged past RULE_MINUTES
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (myCoords) fetchPending(false);
-    }, 15000);
-    return () => clearInterval(id);
-  }, [fetchPending, myCoords]);
+  }, [applyRealtimePatch]);
 
   /* ----------------------------- OFFER MODAL HANDLERS ----------------------------- */
   const handleAcceptOrCancel = (it: RequestItem) => {
@@ -1491,208 +1578,164 @@ export default function RequestScreen() {
   };
 
   // constants for fee rule
-const RATE_PER_KM = 15;          // PHP per km
-const MINIMUM_DISTANCE_KM = 1.0; // bill minimum 1km
+  const RATE_PER_KM = 15;          // PHP per km
+  const MINIMUM_DISTANCE_KM = 1.0; // bill minimum 1km
 
-// FILE: app/shop/mechanicLandingpage.tsx
-// REPLACE your entire handleOfferSubmit function with this
+  const handleOfferSubmit = async (offerData: OfferData) => {
+    if (!selectedEmergencyForOffer || !shopId) return;
 
-const handleOfferSubmit = async (offerData: OfferData) => {
-  if (!selectedEmergencyForOffer || !shopId) return;
+    try {
+      setLoading({ visible: true, message: "Sending offer…" });
 
-  try {
-    setLoading({ visible: true, message: "Sending offer…" });
+      const emergencyId = selectedEmergencyForOffer.id;
+      const lat = myCoords?.lat ?? 0;
+      const lng = myCoords?.lng ?? 0;
 
-    const emergencyId = selectedEmergencyForOffer.id;
-    const lat = myCoords?.lat ?? 0;
-    const lng = myCoords?.lng ?? 0;
-
-    // ════════════════════════════════════════════════════════════════
-    // STEP 1: Get authenticated user (mechanic/shop owner)
-    // ════════════════════════════════════════════════════════════════
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    
-    if (authError || !user) {
-      throw new Error("You must be logged in to send offers");
-    }
-
-    console.log("🔵 [OFFER] Mechanic user ID:", user.id);
-
-    // ════════════════════════════════════════════════════════════════
-    // STEP 2: Get shop/mechanic name for notification (with fallbacks)
-    // ════════════════════════════════════════════════════════════════
-    let shopName = "A Mechanic";
-
-    const { data: shopData, error: shopError } = await supabase
-      .from("shop_details")
-      .select(`
-        shop_id,
-        place_id,
-        user_id,
-        places (
-          name
-        )
-      `)
-      .eq("shop_id", shopId)
-      .single();
-
-    if (shopError) {
-      console.error("🔴 [SHOP ERROR] Failed to fetch shop details:", shopError);
-    }
-
-    // Debug logging to see what we're getting
-    console.log("🔵 [DEBUG] Shop data response:", {
-      shop_id: shopData?.shop_id,
-      place_id: shopData?.place_id,
-      user_id: shopData?.user_id,
-      places: shopData?.places,
-      places_is_array: Array.isArray(shopData?.places),
-    });
-
-    // Try multiple ways to get the shop name
-    if (shopData?.places) {
-      // Handle both array and object responses from Supabase
-      if (Array.isArray(shopData.places) && shopData.places.length > 0 && shopData.places[0]?.name) {
-        shopName = shopData.places[0].name;
-        console.log("🔵 [OFFER] Using shop name from places (array):", shopName);
-      } else if (typeof shopData.places === 'object' && !Array.isArray(shopData.places) && 'name' in shopData.places) {
-        shopName = (shopData.places as { name: string }).name;
-        console.log("🔵 [OFFER] Using shop name from places (object):", shopName);
-      }
-    }
-
-    // If no shop name from places, fallback to mechanic's name
-    if (shopName === "A Mechanic" && shopData?.user_id) {
-      console.log("🔵 [OFFER] No place name found, fetching mechanic name from app_user");
+      // Get authenticated user (mechanic/shop owner)
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
       
-      const { data: userProfile, error: userError } = await supabase
-        .from("app_user")
-        .select("full_name")
-        .eq("user_id", shopData.user_id)
+      if (authError || !user) {
+        throw new Error("You must be logged in to send offers");
+      }
+
+      let shopName = "A Mechanic";
+
+      const { data: shopData, error: shopError } = await supabase
+        .from("shop_details")
+        .select(`
+          shop_id,
+          place_id,
+          user_id,
+          places (
+            name
+          )
+        `)
+        .eq("shop_id", shopId)
         .single();
 
-      if (userError) {
-        console.error("🔴 [USER ERROR] Failed to fetch mechanic name:", userError);
-      } else if (userProfile?.full_name) {
-        shopName = userProfile.full_name;
-        console.log("🔵 [OFFER] Using mechanic name from app_user:", shopName);
+      if (shopError) {
+        console.error("Failed to fetch shop details:", shopError);
       }
-    }
 
-    console.log("🔵 [OFFER] ✅ Final shop name that will be used:", shopName);
+      // Try multiple ways to get the shop name
+      if (shopData?.places) {
+        if (Array.isArray(shopData.places) && shopData.places.length > 0 && shopData.places[0]?.name) {
+          shopName = shopData.places[0].name;
+        } else if (typeof shopData.places === 'object' && !Array.isArray(shopData.places) && 'name' in shopData.places) {
+          shopName = (shopData.places as { name: string }).name;
+        }
+      }
 
-    // ════════════════════════════════════════════════════════════════
-    // STEP 3: Get driver's user_id from the emergency
-    // ════════════════════════════════════════════════════════════════
-    const { data: emergencyData, error: emergencyError } = await supabase
-      .from("emergency")
-      .select("user_id")
-      .eq("emergency_id", emergencyId)
-      .single();
+      // If no shop name from places, fallback to mechanic's name
+      if (shopName === "A Mechanic" && shopData?.user_id) {
+        const { data: userProfile, error: userError } = await supabase
+          .from("app_user")
+          .select("full_name")
+          .eq("user_id", shopData.user_id)
+          .single();
 
-    if (emergencyError || !emergencyData?.user_id) {
-      throw new Error("Failed to find driver for this emergency");
-    }
+        if (!userError && userProfile?.full_name) {
+          shopName = userProfile.full_name;
+        }
+      }
 
-    const driverUserId = emergencyData.user_id;
-    console.log("🔵 [OFFER] Driver user ID:", driverUserId);
+      // Get driver's user_id from the emergency
+      const { data: emergencyData, error: emergencyError } = await supabase
+        .from("emergency")
+        .select("user_id")
+        .eq("emergency_id", emergencyId)
+        .single();
 
-    // ════════════════════════════════════════════════════════════════
-    // STEP 4: Ensure service_requests row exists (or revive canceled)
-    // ════════════════════════════════════════════════════════════════
-    let serviceId: string | null = null;
-    const { data: existing } = await supabase
-      .from("service_requests")
-      .select("service_id, status")
-      .eq("emergency_id", emergencyId)
-      .eq("shop_id", shopId)
-      .maybeSingle();
+      if (emergencyError || !emergencyData?.user_id) {
+        throw new Error("Failed to find driver for this emergency");
+      }
 
-    if (existing) {
-      serviceId = existing.service_id;
-      if (existing.status === "canceled") {
-        const { error: upErr } = await supabase
+      const driverUserId = emergencyData.user_id;
+
+      // Ensure service_requests row exists (or revive canceled)
+      let serviceId: string | null = null;
+      const { data: existing } = await supabase
+        .from("service_requests")
+        .select("service_id, status")
+        .eq("emergency_id", emergencyId)
+        .eq("shop_id", shopId)
+        .maybeSingle();
+
+      if (existing) {
+        serviceId = existing.service_id;
+        if (existing.status === "canceled") {
+          const { error: upErr } = await supabase
+            .from("service_requests")
+            .update({
+              status: "pending",
+              requested_at: new Date().toISOString(),
+            })
+            .eq("service_id", existing.service_id);
+          if (upErr) throw upErr;
+        }
+      } else {
+        const { data: ins, error: insErr } = await supabase
           .from("service_requests")
-          .update({
+          .insert({
+            emergency_id: emergencyId,
+            shop_id: shopId,
+            latitude: lat,
+            longitude: lng,
             status: "pending",
             requested_at: new Date().toISOString(),
           })
-          .eq("service_id", existing.service_id);
-        if (upErr) throw upErr;
+          .select("service_id")
+          .single();
+        if (insErr) throw insErr;
+        serviceId = ins.service_id;
       }
-    } else {
-      const { data: ins, error: insErr } = await supabase
-        .from("service_requests")
-        .insert({
-          emergency_id: emergencyId,
-          shop_id: shopId,
-          latitude: lat,
-          longitude: lng,
-          status: "pending",
-          requested_at: new Date().toISOString(),
-        })
-        .select("service_id")
-        .single();
-      if (insErr) throw insErr;
-      serviceId = ins.service_id;
-    }
 
-    // ════════════════════════════════════════════════════════════════
-    // STEP 5: Compute distance + price with fallback (min 1.0 km)
-    // ════════════════════════════════════════════════════════════════
-    const dKm =
-      selectedEmergencyForOffer.distanceKm ??
-      (myCoords &&
-      typeof selectedEmergencyForOffer.lat === "number" &&
-      typeof selectedEmergencyForOffer.lng === "number"
-        ? haversineKm(
-            myCoords.lat,
-            myCoords.lng,
-            selectedEmergencyForOffer.lat,
-            selectedEmergencyForOffer.lng
-          )
-        : MINIMUM_DISTANCE_KM);
+      // Compute distance + price with fallback (min 1.0 km)
+      const dKm =
+        selectedEmergencyForOffer.distanceKm ??
+        (myCoords &&
+        typeof selectedEmergencyForOffer.lat === "number" &&
+        typeof selectedEmergencyForOffer.lng === "number"
+          ? haversineKm(
+              myCoords.lat,
+              myCoords.lng,
+              selectedEmergencyForOffer.lat,
+              selectedEmergencyForOffer.lng
+            )
+          : MINIMUM_DISTANCE_KM);
 
-    const billableKm = Math.max(dKm ?? 0, MINIMUM_DISTANCE_KM);
-    const distanceFee = billableKm * RATE_PER_KM;
-    const total = distanceFee + offerData.laborCost;
+      const billableKm = Math.max(dKm ?? 0, MINIMUM_DISTANCE_KM);
+      const distanceFee = billableKm * RATE_PER_KM;
+      
+      // For gas emergencies, use fuelCost; for others, use laborCost
+      const total = selectedEmergencyForOffer.serviceType === 'gas' 
+        ? distanceFee + (offerData.fuelCost || 0)
+        : distanceFee + offerData.laborCost;
 
-    console.log("🔵 [OFFER] Offer details:", {
-      distanceKm: billableKm,
-      distanceFee,
-      laborCost: offerData.laborCost,
-      total,
-    });
+      // Determine if this is a gas emergency
+      const isGasEmergency = selectedEmergencyForOffer.serviceType === 'gas';
 
-    // ════════════════════════════════════════════════════════════════
-    // STEP 6: Insert offer into shop_offers
-    // ════════════════════════════════════════════════════════════════
-    const { error: offerErr } = await supabase.from("shop_offers").insert({
-      emergency_id: emergencyId,
-      service_id: serviceId,
-      shop_id: shopId,
-      distance_km: Number(billableKm.toFixed(2)),
-      rate_per_km: RATE_PER_KM,
-      distance_fee: Number(distanceFee.toFixed(2)),
-      labor_cost: Number(offerData.laborCost.toFixed(2)),
-      total_amount: Number(total.toFixed(2)),
-      note: offerData.note || null,
-    });
+      // Insert offer into shop_offers - UPDATED WITH FUEL_COST COLUMN
+      const { error: offerErr } = await supabase.from("shop_offers").insert({
+        emergency_id: emergencyId,
+        service_id: serviceId,
+        shop_id: shopId,
+        distance_km: Number(billableKm.toFixed(2)),
+        rate_per_km: RATE_PER_KM,
+        distance_fee: Number(distanceFee.toFixed(2)),
+        labor_cost: isGasEmergency ? 0 : Number(offerData.laborCost.toFixed(2)),
+        fuel_cost: isGasEmergency ? Number(offerData.fuelCost?.toFixed(2) || 0) : 0, // NEW COLUMN
+        total_amount: Number(total.toFixed(2)),
+        note: offerData.note || null,
+      });
 
-    if (offerErr) {
-      console.error("🔴 [OFFER ERROR] Failed to insert offer:", offerErr);
-      throw offerErr;
-    }
+      if (offerErr) {
+        console.error("Failed to insert offer:", offerErr);
+        throw offerErr;
+      }
 
-    console.log("✅ [OFFER] Offer inserted successfully");
-
-    // ════════════════════════════════════════════════════════════════
-    // STEP 7: Send notification to driver
-    // ════════════════════════════════════════════════════════════════
-    console.log("🔵 [NOTIFICATION] Sending offer notification to driver:", driverUserId);
-    console.log("🔵 [NOTIFICATION] Using shop name:", shopName);
-
-    const { data: notifData, error: notifError } = await supabase
+      // Send notification to driver
+          const { error: notifError } = await supabase
       .from("notifications")
       .insert({
         from_user_id: user.id,
@@ -1707,64 +1750,38 @@ const handleOfferSubmit = async (offerData: OfferData) => {
           shop_name: shopName,
           total_amount: total,
           distance_km: billableKm,
-          labor_cost: offerData.laborCost,
+          distance_fee: distanceFee, // Add this line - the actual distance fee
+          labor_cost: isGasEmergency ? 0 : offerData.laborCost,
+          fuel_cost: isGasEmergency ? offerData.fuelCost : 0,
+          service_type: selectedEmergencyForOffer.serviceType, // Add service type
+          fuel_type: selectedEmergencyForOffer.fuelType, // Add fuel type
+          custom_fuel_type: selectedEmergencyForOffer.customFuelType, // Add custom fuel type
           note: offerData.note || null,
           event: "mechanic_sent_offer",
         },
-      })
-      .select();
-
-    if (notifError) {
-      console.error("🔴 [NOTIFICATION ERROR] Failed to send notification:", {
-        error: notifError,
-        code: notifError.code,
-        message: notifError.message,
-        details: notifError.details,
-        hint: notifError.hint,
       });
 
-      if (notifError.code === "42501") {
-        console.error("🔴 [RLS ERROR] Notification blocked by RLS policy");
-        console.error("🔴 [RLS ERROR] Check that auth.uid() =", user.id);
-      } else if (notifError.code === "23514") {
-        console.error("🔴 [CHECK CONSTRAINT ERROR] Notification type not allowed");
-        console.error("🔴 [CHECK CONSTRAINT ERROR] Make sure 'new_offer_received' is in the CHECK constraint");
+      if (notifError) {
+        console.warn("Offer sent but driver notification failed");
       }
 
-      console.warn("⚠️ [WARNING] Offer sent but driver notification failed");
-    } else if (!notifData || notifData.length === 0) {
-      console.error("🔴 [NOTIFICATION ERROR] No data returned (possible RLS block)");
-      console.warn("⚠️ [WARNING] Offer sent but driver notification may not have been delivered");
-    } else {
-      console.log("✅ [NOTIFICATION SUCCESS] Driver notified:", notifData[0]);
-      console.log("✅ [NOTIFICATION SUCCESS] Shop name in notification:", notifData[0].data?.shop_name);
+      // Update local state
+      setMyReq((m) => ({
+        ...m,
+        [emergencyId]: { service_id: serviceId!, status: "pending" },
+      }));
+
+      setLoading({ visible: false });
+      showToast("Offer sent successfully!");
+      setOfferModalVisible(false);
+      setSelectedEmergencyForOffer(null);
+
+    } catch (e: any) {
+      console.error("Offer submission failed:", e);
+      setLoading({ visible: false });
+      Alert.alert("Failed to send offer", e?.message ?? "Please try again.");
     }
-
-    // ════════════════════════════════════════════════════════════════
-    // STEP 8: Update local state
-    // ════════════════════════════════════════════════════════════════
-    setMyReq((m) => ({
-      ...m,
-      [emergencyId]: { service_id: serviceId!, status: "pending" },
-    }));
-
-    setLoading({ visible: false });
-    showToast("Offer sent successfully!");
-    setOfferModalVisible(false);
-    setSelectedEmergencyForOffer(null);
-
-    console.log("✅ [OFFER] Complete offer submission process finished");
-  } catch (e: any) {
-    console.error("🔴 [OFFER ERROR] Offer submission failed:", {
-      error: e,
-      message: e?.message,
-      stack: e?.stack,
-    });
-    setLoading({ visible: false });
-    Alert.alert("Failed to send offer", e?.message ?? "Please try again.");
-  }
-};
-
+  };
 
   const doCancelRequest = async () => {
     if (!confirmCancel || !shopId) return;
@@ -1782,7 +1799,7 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         .from("service_requests")
         .update({
           status: "canceled",
-          rejected_at: new Date().toISOString(), // using rejected_at for canceled timestamp
+          rejected_at: new Date().toISOString(),
         })
         .eq("service_id", my.service_id);
       if (error) throw error;
@@ -1809,10 +1826,13 @@ const handleOfferSubmit = async (offerData: OfferData) => {
     location: item.landmark || "Location not specified",
     dateTime: item.time,
     distanceKm: item.distanceKm,
+    emergencyType: item.serviceType === 'gas' ? 'gas' : 'breakdown',
+    fuelType: item.fuelType,
+    customFuelType: item.customFuelType,
   });
 
-  // Gate open until: permission granted + coords acquired + distances computed
-  const gateOpen = locPerm !== "granted" || !myCoords || !distanceReady;
+  // Gate open until: permission granted + coords acquired + distances computed + shop category loaded
+  const gateOpen = locPerm !== "granted" || !myCoords || !distanceReady || shopCategory === null;
 
   return (
     <View className="flex-1" style={{ backgroundColor: COLORS.bg }}>
@@ -1845,66 +1865,64 @@ const handleOfferSubmit = async (offerData: OfferData) => {
           </View>
 
           
-  <View className="flex-row items-center">
-    {/* Notifications with Number Badge */}
-<Pressable
-  onPress={() => router.push("/shop/inbox")}
-  className="p-2 rounded-lg mr-1 active:opacity-80 relative"
-  android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-  hitSlop={10}
->
-  <Ionicons name="notifications-outline" size={26} color="#fff" />
-  {unreadNotificationCount > 0 && (
-    <View
-      className="absolute rounded-full bg-red-500 items-center justify-center"
-      style={{
-        minWidth: 18,
-        height: 18,
-        top: 4,
-        right: 4,
-        borderWidth: 2,
-        borderColor: COLORS.brand,
-        paddingHorizontal: 4,
-      }}
-    >
-      <Text
-        style={{
-          color: '#FFFFFF',
-          fontSize: 10,
-          fontWeight: '700',
-        }}
-      >
-        {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
-      </Text>
-    </View>
-  )}
-</Pressable>
+          <View className="flex-row items-center">
+            {/* Notifications with Number Badge */}
+            <Pressable
+              onPress={() => router.push("/shop/inbox")}
+              className="p-2 rounded-lg mr-1 active:opacity-80 relative"
+              android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+              hitSlop={10}
+            >
+              <Ionicons name="notifications-outline" size={26} color="#fff" />
+              {unreadNotificationCount > 0 && (
+                <View
+                  className="absolute rounded-full bg-red-500 items-center justify-center"
+                  style={{
+                    minWidth: 18,
+                    height: 18,
+                    top: 4,
+                    right: 4,
+                    borderWidth: 2,
+                    borderColor: COLORS.brand,
+                    paddingHorizontal: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: '#FFFFFF',
+                      fontSize: 10,
+                      fontWeight: '700',
+                    }}
+                  >
+                    {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
 
-
-{/* Burger / Drawer with Badge */}
-<Pressable
-  className="p-2 rounded-lg active:opacity-80 relative"
-  android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
-  onPress={() => setDrawerOpen(true)}
-  hitSlop={10}
->
-  <Ionicons name="menu" size={24} color="#fff" />
-  {unreadMessageCount > 0 && (
-    <View
-      className="absolute rounded-full bg-red-500"
-      style={{
-        width: 10,
-        height: 10,
-        top: 2,      // ✅ Changed from 4 to 2
-        right: 2,    // ✅ Changed from 4 to 2
-        borderWidth: 2,
-        borderColor: COLORS.brand,
-      }}
-    />
-  )}
-</Pressable>
-  </View>
-
+            {/* Burger / Drawer with Badge */}
+            <Pressable
+              className="p-2 rounded-lg active:opacity-80 relative"
+              android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true }}
+              onPress={() => setDrawerOpen(true)}
+              hitSlop={10}
+            >
+              <Ionicons name="menu" size={24} color="#fff" />
+              {unreadMessageCount > 0 && (
+                <View
+                  className="absolute rounded-full bg-red-500"
+                  style={{
+                    width: 10,
+                    height: 10,
+                    top: 2,
+                    right: 2,
+                    borderWidth: 2,
+                    borderColor: COLORS.brand,
+                  }}
+                />
+              )}
+            </Pressable>
+          </View>
         </View>
       </SafeAreaView>
 
@@ -1926,7 +1944,11 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         ListEmptyComponent={
           <View className="px-6 pt-10">
             <Text className="text-center text-slate-500">
-              No pending requests.
+              {!myCoords 
+                ? "Getting your location..." 
+                : shopCategory === null
+                ? "Loading shop information..."
+                : "No pending requests matching your shop type."}
             </Text>
           </View>
         }
@@ -1974,7 +1996,7 @@ const handleOfferSubmit = async (offerData: OfferData) => {
         variant="spinner"
       />
 
-      {/* 🚫 Hard gate until distance is ready */}
+      {/* 🚫 Hard gate until distance is ready and shop category is loaded */}
       <LocationGate
         open={gateOpen}
         denied={locPerm === "denied"}

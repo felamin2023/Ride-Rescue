@@ -72,6 +72,16 @@ type PlaceRow = {
   owner?: string | null;
 };
 
+type ShopDetailsRow = {
+  shop_id: string;
+  user_id: string;
+};
+
+type UserProfile = {
+  user_id: string;
+  photo_url: string | null;
+};
+
 type Shop = {
   id: string;
   name: string;
@@ -86,13 +96,17 @@ type Shop = {
   phones?: string[];
   serviceFor?: "motorcycle" | "car" | "all_type" | (string & {});
   ownerId?: string | null;
+  reviewCount?: number;
 };
-
 
 const prettyCategory = (c: Shop["category"]) =>
   c ? c.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" & ") : "";
 
-
+const prettyServiceFor = (s: Shop["serviceFor"]) => {
+  if (!s) return "";
+  if (s === "all_type") return "All Vehicles";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
 
 /* --------------------------------- Small UI -------------------------------- */
 const FILTERS: FilterItem[] = [
@@ -287,15 +301,24 @@ function DetailsModal({
               </View>
               <View className="flex-1">
                 <View className="flex-row items-start justify-between">
-                  <Text className="text-[18px] text-slate-900" numberOfLines={2}>
+                  <Text className="text-[18px] text-slate-900 flex-1" numberOfLines={2}>
                     {shop.name}
                   </Text>
-                 <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start border border-blue-200">
-                  <Text className="text-[10px] font-bold text-[#1E3A8A]">
-                    {prettyCategory(shop.category)}
-                  </Text>
+                  <View className="ml-3 rounded-full bg-[#F1F5FF] px-2 py-[2px] self-start border border-blue-200">
+                    <Text className="text-[10px] font-bold text-[#1E3A8A]">
+                      {prettyCategory(shop.category)}
+                    </Text>
+                  </View>
                 </View>
-                </View>
+                {shop.serviceFor && (
+                  <View className="mt-2">
+                    <View className="rounded-full bg-emerald-50 px-2 py-[2px] self-start" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
+                      <Text className="text-[10px] font-semibold" style={{ color: "#047857" }}>
+                        {prettyServiceFor(shop.serviceFor)}
+                      </Text>
+                    </View>
+                  </View>
+                )}
               </View>
             </View>
             <View className="mt-3 gap-1">
@@ -305,6 +328,12 @@ function DetailsModal({
             <View className="mt-2 flex-row items-center gap-2">
               <Stars rating={shop.rating ?? 0} />
               <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
+              {shop.reviewCount && shop.reviewCount > 0 && (
+                <>
+                  <Text className="text-slate-300">•</Text>
+                  <Text className="text-[12px] text-slate-500">({shop.reviewCount} reviews)</Text>
+                </>
+              )}
               {typeof shop.distanceKm === "number" && (
                 <>
                   <Text className="text-slate-300">•</Text>
@@ -381,24 +410,22 @@ function ShopCard({
               )}
 
               <View className="px-2 py-1 rounded-full bg-blue-50 border border-blue-200">
-              <Text className="text-[10px] font-semibold text-[#1E3A8A]">
-                {prettyCategory(shop.category)}
-              </Text>
-            </View>
-
-
-              {shop.serviceFor ? (
-                <View
-                  className="rounded-full px-2 py-[2px]"
-                  style={{ backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0", marginLeft: 6 }}
-                >
-                  <Text className="text-[10px] font-semibold" style={{ color: "#047857" }}>
-                    {String(shop.serviceFor).replace("_", " ")}
-                  </Text>
-                </View>
-              ) : null}
+                <Text className="text-[10px] font-semibold text-[#1E3A8A]">
+                  {prettyCategory(shop.category)}
+                </Text>
+              </View>
             </View>
           </View>
+          
+          {shop.serviceFor && (
+            <View className="mt-2">
+              <View className="rounded-full bg-emerald-50 px-2 py-[2px] self-start" style={{ borderWidth: 1, borderColor: "#A7F3D0" }}>
+                <Text className="text-[10px] font-semibold" style={{ color: "#047857" }}>
+                  {prettyServiceFor(shop.serviceFor)}
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </View>
       <View style={{ height: 1, backgroundColor: "#E5E7EB", marginTop: 8, marginHorizontal: 8 }} />
@@ -409,6 +436,12 @@ function ShopCard({
         <View className="mt-2 flex-row items-center gap-2">
           <Stars rating={shop.rating ?? 0} />
           <Text className="text-[12px] text-slate-500">{(shop.rating ?? 0).toFixed(1)}</Text>
+          {shop.reviewCount && shop.reviewCount > 0 && (
+            <>
+              <Text className="text-slate-300">•</Text>
+              <Text className="text-[12px] text-slate-500">({shop.reviewCount})</Text>
+            </>
+          )}
           {typeof shop.distanceKm === "number" && (
             <>
               <Text className="text-slate-300">•</Text>
@@ -584,45 +617,172 @@ export default function VulcanizeScreen() {
   };
   const closeDetails = () => setDetailsOpen(false);
 
-  // fetch vulcanizing places
+  // fetch vulcanizing places with ratings and user profile pictures
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
-        .from("places")
-        .select(
-          "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, owner"
-        )
-        .in("category", ["vulcanizing", "vulcanizing_repair"])
-        .order("name", { ascending: true });
+      try {
+        setLoading({ visible: true, message: "Loading shops..." });
 
-      if (error) {
-        console.warn("places fetch error:", error.message);
+        // First fetch places
+        const { data: placesData, error } = await supabase
+          .from("places")
+          .select(
+            "place_id, name, category, address, plus_code, latitude, longitude, maps_link, phones, service_for, owner"
+          )
+          .in("category", ["vulcanizing", "vulcanizing_repair"])
+          .order("name", { ascending: true });
+
+        if (error) {
+          console.warn("places fetch error:", error.message);
+          if (!cancelled) setShops([]);
+          return;
+        }
+
+        if (!placesData || placesData.length === 0) {
+          if (!cancelled) setShops([]);
+          return;
+        }
+
+        console.log("Fetched places:", placesData.length);
+
+        // Get shop IDs from places that have owners
+        const shopIds = placesData
+          .map(p => p.owner)
+          .filter(Boolean) as string[];
+
+        console.log("Shop IDs with owners:", shopIds);
+
+        // Fetch shop_details to get user_ids for these shops
+        let shopDetailsMap: Record<string, string> = {};
+        if (shopIds.length > 0) {
+          const { data: shopDetails, error: shopDetailsError } = await supabase
+            .from("shop_details")
+            .select("shop_id, user_id")
+            .in("shop_id", shopIds);
+
+          if (!shopDetailsError && shopDetails) {
+            shopDetailsMap = shopDetails.reduce((acc, shop) => {
+              acc[shop.shop_id] = shop.user_id;
+              return acc;
+            }, {} as Record<string, string>);
+          }
+          console.log("Shop details map:", shopDetailsMap);
+        }
+
+        // Get user IDs from shop details
+        const userIds = Object.values(shopDetailsMap);
+        console.log("User IDs:", userIds);
+
+        // Fetch user profile pictures for shop owners from app_user table
+        let userProfiles: UserProfile[] = [];
+        if (userIds.length > 0) {
+          const { data: users, error: usersError } = await supabase
+            .from("app_user")
+            .select("user_id, photo_url")
+            .in("user_id", userIds);
+
+          if (!usersError && users) {
+            userProfiles = users;
+          }
+          console.log("User profiles:", userProfiles);
+        }
+
+        // Create a map of user_id to photo_url for easy lookup
+        const userProfileMap = userProfiles.reduce((acc, user) => {
+          acc[user.user_id] = user.photo_url;
+          return acc;
+        }, {} as Record<string, string | null>);
+
+        console.log("User profile map:", userProfileMap);
+
+        // Fetch ratings for these shops
+        let ratingsData: { shop_id: string; avg_rating: number; review_count: number }[] = [];
+        
+        if (shopIds.length > 0) {
+          const { data: ratings, error: ratingsError } = await supabase
+            .from("ratings")
+            .select("shop_id, stars")
+            .in("shop_id", shopIds);
+
+          if (!ratingsError && ratings) {
+            console.log("Ratings data:", ratings);
+            // Calculate average rating and count for each shop
+            const ratingsByShop = ratings.reduce((acc, rating) => {
+              if (!acc[rating.shop_id]) {
+                acc[rating.shop_id] = { total: 0, count: 0 };
+              }
+              acc[rating.shop_id].total += rating.stars;
+              acc[rating.shop_id].count += 1;
+              return acc;
+            }, {} as Record<string, { total: number; count: number }>);
+
+            // Convert to array with average ratings
+            ratingsData = Object.entries(ratingsByShop).map(([shop_id, { total, count }]) => ({
+              shop_id,
+              avg_rating: total / count,
+              review_count: count
+            }));
+          }
+        }
+
+        console.log("Ratings summary:", ratingsData);
+
+        // Create a map of shop_id to rating data for easy lookup
+        const ratingsMap = ratingsData.reduce((acc, rating) => {
+          acc[rating.shop_id] = rating;
+          return acc;
+        }, {} as Record<string, { avg_rating: number; review_count: number }>);
+
+        // Map places to shops with ratings and user profile pictures
+        const mapped: Shop[] = placesData.map((p: PlaceRow) => {
+          const lat = p.latitude != null ? Number(p.latitude) : undefined;
+          const lng = p.longitude != null ? Number(p.longitude) : undefined;
+          
+          // Get user_id from shop_details using the owner (shop_id)
+          const userId = p.owner ? shopDetailsMap[p.owner] : null;
+          
+          // Get user profile picture from app_user table if we have a user_id
+          const userPhotoUrl = userId ? userProfileMap[userId] : null;
+          
+          // Get rating data if shop has an owner and has ratings
+          const ratingData = p.owner ? ratingsMap[p.owner] : null;
+          
+          // Fix: Properly type the category to match Shop type
+          const category = p.category === "vulcanizing_repair" 
+            ? "vulcanizing_repair" 
+            : "vulcanizing";
+          
+          const shopData: Shop = {
+            id: p.place_id,
+            name: p.name ?? "Unnamed Vulcanizing",
+            category: category,
+            address1: p.address ?? "",
+            plusCode: p.plus_code ?? undefined,
+            avatar: userPhotoUrl ?? undefined,
+            rating: ratingData ? ratingData.avg_rating : 0,
+            reviewCount: ratingData ? ratingData.review_count : 0,
+            lat: Number.isFinite(lat) ? (lat as number) : undefined,
+            lng: Number.isFinite(lng) ? (lng as number) : undefined,
+            phones: Array.isArray(p.phones) ? p.phones : [],
+            serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
+            ownerId: p.owner ?? null,
+          };
+
+          console.log(`Shop ${shopData.name} avatar:`, shopData.avatar);
+          return shopData;
+        });
+
+        if (!cancelled) {
+          setShops(mapped);
+          console.log("Final shops data:", mapped);
+        }
+      } catch (error) {
+        console.error("Error fetching shops:", error);
         if (!cancelled) setShops([]);
-        return;
+      } finally {
+        if (!cancelled) setLoading({ visible: false });
       }
-
-      const mapped: Shop[] = (data ?? []).map((p: PlaceRow) => {
-      const lat = p.latitude != null ? Number(p.latitude) : undefined;
-      const lng = p.longitude != null ? Number(p.longitude) : undefined;
-      return {
-        id: p.place_id,
-        name: p.name ?? "Unnamed Vulcanizing",
-        category:
-          p.category === "vulcanizing_repair" ? "vulcanizing_repair" : "vulcanizing",  // ← updated
-        address1: p.address ?? "",
-        plusCode: p.plus_code ?? undefined,
-        rating: 0,
-        lat: Number.isFinite(lat) ? (lat as number) : undefined,
-        lng: Number.isFinite(lng) ? (lng as number) : undefined,
-        phones: Array.isArray(p.phones) ? p.phones : [],
-        serviceFor: (p.service_for ?? "").toLowerCase() as Shop["serviceFor"],
-        ownerId: p.owner ?? null,
-      };
-    });
-
-
-      if (!cancelled) setShops(mapped);
     })();
     return () => {
       cancelled = true;
@@ -769,6 +929,11 @@ export default function VulcanizeScreen() {
               </Text>
               {typeof nearest.distanceKm === "number" && (
                 <Text className="text-[12px] text-slate-600">{nearest.distanceKm.toFixed(1)} km away</Text>
+              )}
+              {nearest.rating && nearest.rating > 0 && (
+                <Text className="text-[12px] text-slate-600">
+                  ⭐ {nearest.rating.toFixed(1)} {nearest.reviewCount ? `(${nearest.reviewCount})` : ''}
+                </Text>
               )}
             </View>
             <PrimaryButton
